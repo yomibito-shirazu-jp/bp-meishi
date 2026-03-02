@@ -289,21 +289,19 @@ def rebuild_pdf(
     dpi: int = 300,
 ) -> tuple[bytes, bytes]:
     """
-    edits: { merged_id: new_text }
-    raw_id_map: { merged_id: [raw_id, ...] }
-    page_index: 元PDFのページ番号
-    clip_rect: トリミング領域 (None=ページ全体)
+    オーバーレイ方式: 元PDFの編集箇所だけを白塗り→上書き。
+    未編集の要素は元PDFそのまま保持 → レイアウト崩壊なし。
     """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     if page_index >= len(doc):
         page_index = 0
     page = doc[page_index]
-    full_pw, full_ph = page.rect.width, page.rect.height
+    pw, ph = page.rect.width, page.rect.height
 
     if clip_rect:
         cx0, cy0, cx1, cy1 = clip_rect
     else:
-        cx0, cy0, cx1, cy1 = 0, 0, full_pw, full_ph
+        cx0, cy0, cx1, cy1 = 0, 0, pw, ph
 
     region_w = cx1 - cx0
     region_h = cy1 - cy0
@@ -321,41 +319,7 @@ def rebuild_pdf(
             for rid in raw_ids[1:]:
                 raw_edits[rid] = ""
 
-    new_doc = fitz.open()
-    new_page = new_doc.new_page(width=region_w, height=region_h)
-
-    # 装飾 (clip内)
-    for d in page.get_drawings():
-        r = d["rect"]
-        dcx = (r[0] + r[2]) / 2
-        dcy = (r[1] + r[3]) / 2
-        if cx0 <= dcx <= cx1 and cy0 <= dcy <= cy1:
-            adj_rect = fitz.Rect(r[0] - cx0, r[1] - cy0, r[2] - cx0, r[3] - cy0)
-            fill = tuple(d["fill"]) if d.get("fill") else None
-            color = tuple(d["color"]) if d.get("color") else None
-            if fill or color:
-                new_page.draw_rect(adj_rect, fill=fill, color=color, width=d.get("width", 0))
-
-    # 画像 (clip内)
-    img_list = page.get_images()
-    img_infos = page.get_image_info()
-    for i, info in enumerate(img_infos):
-        ibbox = info["bbox"]
-        icx = (ibbox[0] + ibbox[2]) / 2
-        icy = (ibbox[1] + ibbox[3]) / 2
-        if cx0 <= icx <= cx1 and cy0 <= icy <= cy1:
-            if i < len(img_list):
-                try:
-                    base_img = doc.extract_image(img_list[i][0])
-                    adj_rect = fitz.Rect(
-                        ibbox[0] - cx0, ibbox[1] - cy0,
-                        ibbox[2] - cx0, ibbox[3] - cy0,
-                    )
-                    new_page.insert_image(adj_rect, stream=base_img["image"])
-                except Exception as e:
-                    print(f"  Image warning: {e}")
-
-    # テキスト (clip内)
+    # フォントキャッシュ
     fonts_cache = {}
     def get_font(fc):
         if fc not in fonts_cache:
@@ -363,6 +327,7 @@ def rebuild_pdf(
             fonts_cache[fc] = fitz.Font(fontfile=path)
         return fonts_cache[fc]
 
+    # 元ページの上に直接上書き (編集箇所のみ)
     span_idx = 0
     for block in page.get_text("dict")["blocks"]:
         if "lines" not in block:
@@ -376,27 +341,33 @@ def rebuild_pdf(
                 else:
                     sid = f"s{span_idx}"
 
-                bbox = span["bbox"]
-                scx = (bbox[0] + bbox[2]) / 2
-                scy = (bbox[1] + bbox[3]) / 2
-
-                if cx0 <= scx <= cx1 and cy0 <= scy <= cy1:
-                    final_text = raw_edits.get(sid, span["text"])
-                    if final_text:
+                if sid in raw_edits:
+                    bbox = fitz.Rect(span["bbox"])
+                    # Step 1: 白塗りで元テキストを消す (少し広めに)
+                    page.draw_rect(
+                        bbox + (-0.5, -0.5, 0.5, 0.5),
+                        fill=(1, 1, 1), color=None, overlay=True,
+                    )
+                    # Step 2: 新テキストを描画 (空文字なら描画しない)
+                    new_text = raw_edits[sid]
+                    if new_text:
                         fc = classify_font(span["font"])
-                        tw = fitz.TextWriter(new_page.rect)
+                        tw = fitz.TextWriter(page.rect)
                         tw.append(
-                            fitz.Point(span["origin"][0] - cx0, span["origin"][1] - cy0),
-                            final_text, font=get_font(fc), fontsize=span["size"],
+                            fitz.Point(span["origin"][0], span["origin"][1]),
+                            new_text, font=get_font(fc), fontsize=span["size"],
                         )
-                        tw.write_text(new_page, color=(0, 0, 0))
+                        tw.write_text(page, color=(0, 0, 0))
+
                 span_idx += 1
 
-    # 画像ベースPDF
+    # 出力画像 (clip対応)
     mat = fitz.Matrix(dpi / 72, dpi / 72)
-    pix = new_page.get_pixmap(matrix=mat, alpha=False)
+    clip = fitz.Rect(cx0, cy0, cx1, cy1)
+    pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
     png_bytes = pix.tobytes("png")
 
+    # 画像ベースPDF
     img_doc = fitz.open()
     img_page = img_doc.new_page(width=region_w, height=region_h)
     img_page.insert_image(fitz.Rect(0, 0, region_w, region_h), pixmap=pix)

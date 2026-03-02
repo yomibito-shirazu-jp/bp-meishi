@@ -30,22 +30,24 @@ export async function correctOcrWithAI(
     `${i + 1}. id="${s.id}" 位置(左${s.x_pct.toFixed(1)}%, 上${s.y_pct.toFixed(1)}%) OCR: "${s.text}"`
   )).join('\n');
 
-  const extractPrompt = `あなたは名刺OCR補正AIです。
-名刺の画像と、サーバーOCRが検出した各テキスト領域の座標＋文字列を提供します。
-OCRのテキストは断片化・誤認識されています。画像を直接見て、各領域の正しいテキストを読み取ってください。
+  const extractPrompt = `あなたは名刺OCR検証AIです。
+名刺の画像と、サーバーOCRが検出した各テキスト領域を提供します。
+OCR結果は概ね正確ですが、CIDフォントの影響で一部に文字化けや文字欠けがあります。
 
-## OCR検出結果（座標は正確、テキストは不正確）:
+## OCR検出結果:
 ${spanList}
 
-## 指示:
-1. 画像上の各座標位置のテキストを正確に読み取る
-2. 以下のカテゴリに分類: company, company_en, department, title, name, address, phone, fax, mobile, email, url, slogan, other
-3. OCR結果にない視覚要素（ロゴテキスト等）は無視
-4. テスト用の赤い数字（123等）は除外
-5. 1文字だけの無意味なフィールドは、近い位置のフィールドに統合
+## 重要な指示:
+1. OCR結果が正しい場合はそのまま維持すること（不要な変更をしない）
+2. 画像と照合して明らかに間違っている文字だけを修正する
+3. **人名の漢字は特に慎重に** — OCRが正しく読めている漢字を別の漢字に変えないこと
+4. 電話番号・FAX・メール・URLは画像と完全一致させる
+5. 以下のカテゴリに分類: company, company_en, department, title, name, address, phone, fax, mobile, email, url, other
+6. テスト用の赤い数字（123等）は除外
+7. OCR結果にない視覚要素（ロゴ等）は無視
 
 ## 出力（JSONのみ、他のテキスト不要）:
-[{"id":"元のspan ID","text":"正確なテキスト","category":"カテゴリ名"}]
+[{"id":"元のspan ID","text":"テキスト","category":"カテゴリ名"}]
 
 複数のOCR領域が1つのテキストに統合すべき場合、最初のIDを使い、他は除外してください。`;
 
@@ -61,21 +63,21 @@ ${spanList}
   }
 
   // ── Pass 2: Verify & correct ──
-  const verifyPrompt = `名刺のOCR結果を検証してください。画像と以下の抽出結果を比較し、間違いがあれば修正してください。
+  const verifyPrompt = `名刺画像と以下の抽出結果を照合してください。
+**画像に写っている文字と一致しない箇所だけ**を修正してください。一致している箇所は絶対に変えないこと。
 
 ## 現在の抽出結果:
 ${JSON.stringify(fields, null, 2)}
 
-## 検証項目:
-- 会社名の正確な表記（株式会社の位置含む）
-- 氏名の漢字が正しいか
-- 電話番号・FAXの桁数と形式
-- メールアドレスのスペル
-- URLのドメインスペル
-- 住所の番地・ビル名
+## 検証ルール:
+- 画像の文字と完全一致しているフィールドはそのまま維持（変更禁止）
+- 人名: 画像の漢字を正確に読む。推測で別の漢字に置き換えない
+- 電話番号・FAX: 桁数と形式を画像と一致させる
+- メール・URL: スペルを画像と一致させる
+- 住所: 番地・ビル名を画像と一致させる
 
-## 出力（修正済みJSONのみ）:
-[{"id":"span ID","text":"検証済みテキスト","category":"カテゴリ名"}]`;
+## 出力（JSONのみ）:
+[{"id":"span ID","text":"テキスト","category":"カテゴリ名"}]`;
 
   const pass2 = await callGemini(imageBase64, verifyPrompt);
 
