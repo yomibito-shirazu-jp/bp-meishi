@@ -380,19 +380,25 @@ def rebuild_pdf(
 
                 span_idx += 1
 
+    # 変更をコミット (insert_pdf が in-memory 描画を拾うように save→reopen)
+    tmp_buf = io.BytesIO()
+    doc.save(tmp_buf, garbage=4, deflate=True)
+    doc2 = fitz.open(stream=tmp_buf.getvalue(), filetype="pdf")
+    page2 = doc2[page_index]
+
     # プレビューPNG (clip対応)
     mat = fitz.Matrix(dpi / 72, dpi / 72)
     clip = fitz.Rect(cx0, cy0, cx1, cy1)
-    pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
+    pix = page2.get_pixmap(matrix=mat, clip=clip, alpha=False)
     png_bytes = pix.tobytes("png")
 
     # ベクターPDF出力 (元PDFの品質を維持、画像化しない)
     if clip_rect:
-        page.set_cropbox(fitz.Rect(cx0, cy0, cx1, cy1))
+        page2.set_cropbox(fitz.Rect(cx0, cy0, cx1, cy1))
 
     # 対象ページのみ抽出
     out_doc = fitz.open()
-    out_doc.insert_pdf(doc, from_page=page_index, to_page=page_index)
+    out_doc.insert_pdf(doc2, from_page=page_index, to_page=page_index)
     pdf_buf = io.BytesIO()
     out_doc.save(pdf_buf, garbage=4, deflate=True)
 
