@@ -1,0 +1,5 @@
+{
+  "name": "BizCard Tracer & Print Gen",
+  "description": "Upload existing business card PDFs, extract data using Gemini AI, categorize by company, and generate new print-ready PDF templates.",
+  "requestFramePermissions": []
+}
