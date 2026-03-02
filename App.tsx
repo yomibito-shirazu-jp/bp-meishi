@@ -217,10 +217,32 @@ const App: React.FC = () => {
     }
   };
 
-  // ── Rebuild PDF ──
+  // ── Build project object for save ──
+  const buildProject = (rebuiltPdfB64?: string, rebuiltPngB64?: string): CardProject => {
+    const nameSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
+    return {
+      id: editingProjectId || crypto.randomUUID(),
+      name: nameSpan?.text?.slice(0, 30) || '(無名)',
+      spans,
+      original_spans: originalSpans,
+      pdf_b64: pdfB64 || '',
+      page_mm: pageMM,
+      original_png_b64: originalPng?.replace('data:image/png;base64,', '') ?? null,
+      rebuilt_pdf_b64: rebuiltPdfB64 || null,
+      rebuilt_png_b64: rebuiltPngB64 || null,
+      raw_id_map: spanMapping,
+      page_index: currentPageIndex,
+      clip_rect: currentClipRect,
+      created_at: editingProjectId
+        ? projects.find(p => p.id === editingProjectId)?.created_at || new Date().toISOString()
+        : new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  };
+
+  // ── Rebuild PDF + auto-save ──
   const handleRebuild = async () => {
     if (!pdfB64) return;
-    // edits keyed by merged span ID — backend maps to raw spans via raw_id_map
     const edits: Record<string, string> = {};
     spans.forEach((s, i) => {
       if (originalSpans[i] && s.text !== originalSpans[i].text) {
@@ -232,6 +254,14 @@ const App: React.FC = () => {
     try {
       const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect);
       if (data.png_b64) { setRebuiltPng(`data:image/png;base64,${data.png_b64}`); setPreviewTab('rebuilt'); }
+
+      // Auto-save to DB with rebuilt PDF
+      const project = buildProject(data.pdf_b64, data.png_b64);
+      await saveProject(project);
+      setEditingProjectId(project.id);
+      await loadProjects();
+
+      // Download
       if (data.pdf_b64) {
         const a = document.createElement('a');
         a.href = `data:application/pdf;base64,${data.pdf_b64}`;
@@ -239,30 +269,15 @@ const App: React.FC = () => {
         a.download = `${nameSpan?.text?.trim() || '名刺'}.pdf`;
         a.click();
       }
-      flash('PDF再構築完了 — ダウンロードを開始しました', 'ok');
+      flash('再構築 + 保存完了', 'ok');
     } catch (e: any) {
       flash(`再構築エラー: ${e.message}`, 'error');
     }
   };
 
-  // ── Save to storage ──
+  // ── Save to storage (without rebuild) ──
   const handleSave = async () => {
-    const nameSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
-    const project: CardProject = {
-      id: editingProjectId || crypto.randomUUID(),
-      name: nameSpan?.text?.slice(0, 30) || '(無名)',
-      spans,
-      original_spans: originalSpans,
-      pdf_b64: pdfB64 || '',
-      page_mm: pageMM,
-      original_png_b64: originalPng?.replace('data:image/png;base64,', '') ?? null,
-      page_index: currentPageIndex,
-      clip_rect: currentClipRect,
-      created_at: editingProjectId
-        ? projects.find(p => p.id === editingProjectId)?.created_at || new Date().toISOString()
-        : new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
+    const project = buildProject();
     try {
       await saveProject(project);
       setEditingProjectId(project.id);
@@ -524,6 +539,22 @@ const App: React.FC = () => {
 
         {/* Actions */}
         <div className="flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          {p.rebuilt_pdf_b64 && (
+            <button
+              className="p-2 rounded-lg transition-colors hover:bg-teal-50"
+              style={{ color: C.accent }}
+              title="再構築PDFをダウンロード"
+              onClick={e => {
+                e.stopPropagation();
+                const a = document.createElement('a');
+                a.href = `data:application/pdf;base64,${p.rebuilt_pdf_b64}`;
+                a.download = `${p.name || '名刺'}.pdf`;
+                a.click();
+              }}
+            >
+              <Download size={16} />
+            </button>
+          )}
           <button
             className="px-4 py-2 text-white rounded-lg text-sm font-medium transition-colors hover:opacity-90"
             style={{ background: C.accent }}

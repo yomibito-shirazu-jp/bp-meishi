@@ -61,18 +61,23 @@ export const saveProject = async (project: CardProject): Promise<CardProject> =>
     setLocal(projects);
     return updated;
   }
+  const row: Record<string, unknown> = {
+    id: project.id,
+    name: project.name,
+    spans: project.spans,
+    original_spans: project.original_spans,
+    pdf_b64: project.pdf_b64,
+    page_mm: project.page_mm,
+    original_png_b64: project.original_png_b64,
+    updated_at: new Date().toISOString(),
+  };
+  if (project.rebuilt_pdf_b64) row.rebuilt_pdf_b64 = project.rebuilt_pdf_b64;
+  if (project.rebuilt_png_b64) row.rebuilt_png_b64 = project.rebuilt_png_b64;
+  if (project.raw_id_map) row.raw_id_map = project.raw_id_map;
+
   const { data, error } = await supabase
     .from('card_projects')
-    .upsert({
-      id: project.id,
-      name: project.name,
-      spans: project.spans,
-      original_spans: project.original_spans,
-      pdf_b64: project.pdf_b64,
-      page_mm: project.page_mm,
-      original_png_b64: project.original_png_b64,
-      updated_at: new Date().toISOString(),
-    })
+    .upsert(row)
     .select()
     .single();
   if (error) throw error;

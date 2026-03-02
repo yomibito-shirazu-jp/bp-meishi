@@ -400,8 +400,8 @@ def rebuild_pdf(
     png_bytes = pix.tobytes("png")
 
     # ベクターPDF出力 (元PDFの品質を維持、画像化しない)
-    if clip_rect:
-        page2.set_cropbox(fitz.Rect(cx0, cy0, cx1, cy1))
+    # Note: cropbox は MediaBox 範囲外エラーを起こすため、
+    #       clip_rect が必要な場合は pixmap の clip で対応済み
 
     # 対象ページのみ抽出
     out_doc = fitz.open()

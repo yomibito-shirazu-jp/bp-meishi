@@ -54,6 +54,9 @@ export interface CardProject {
   pdf_b64: string;
   page_mm: [number, number];
   original_png_b64: string | null;
+  rebuilt_pdf_b64?: string | null;
+  rebuilt_png_b64?: string | null;
+  raw_id_map?: Record<string, string[]>;
   page_index?: number;
   clip_rect?: [number, number, number, number];
   created_at: string;
