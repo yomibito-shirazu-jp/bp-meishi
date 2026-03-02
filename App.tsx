@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Span, CardProject, AppState } from './types';
+import { Span, PageData, CardProject, AppState } from './types';
 import { analyzePdf, rebuildPdf } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
@@ -83,6 +83,12 @@ const App: React.FC = () => {
   const [previewTab, setPreviewTab] = useState<'edit' | 'original'>('edit');
   const [fieldCategories, setFieldCategories] = useState<Record<string, string>>({});
 
+  // ── Multi-Page ──
+  const [allPages, setAllPages] = useState<PageData[]>([]);
+  const [currentPageIdx, setCurrentPageIdx] = useState(0);
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  const [currentClipRect, setCurrentClipRect] = useState<[number, number, number, number] | undefined>();
+
   const fileRef = useRef<HTMLInputElement>(null);
 
   // ── Derived ──
@@ -128,6 +134,53 @@ const App: React.FC = () => {
 
   useEffect(() => { loadProjects(); }, []);
 
+  // ── Load a specific page into the editor ──
+  const loadPage = async (pages: PageData[], idx: number, skipAI = false) => {
+    const page = pages[idx];
+    if (!page) return;
+    setCurrentPageIdx(idx);
+    setCurrentPageIndex(page.page_index);
+    setCurrentClipRect(page.clip_rect as [number, number, number, number] | undefined);
+
+    const mergedSpans = page.spans;
+    setSpanMapping(page.raw_id_map || {});
+    setPageMM(page.page_mm);
+    setOriginalPng(page.original_png_b64 ? `data:image/png;base64,${page.original_png_b64}` : null);
+    setRebuiltPng(null);
+    setSelectedId(null);
+
+    if (!skipAI && page.original_png_b64) {
+      flash('AI補正中 (Gemini Vision)...', 'info');
+      try {
+        const corrected = await correctOcrWithAI(page.original_png_b64, mergedSpans);
+        const correctedMap = new Map(corrected.map(c => [c.id, c]));
+        const aiSpans = mergedSpans
+          .map(s => {
+            const fix = correctedMap.get(s.id);
+            return fix ? { ...s, text: fix.text } : s;
+          })
+          .filter(s => correctedMap.has(s.id) || !corrected.length);
+        const cats: Record<string, string> = {};
+        corrected.forEach(c => { cats[c.id] = c.category; });
+        setFieldCategories(cats);
+
+        const finalSpans = aiSpans.length > 0 ? aiSpans : mergedSpans;
+        setSpans(finalSpans);
+        setOriginalSpans(JSON.parse(JSON.stringify(finalSpans)));
+        flash(`${finalSpans.length}個のフィールド (AI補正済み)`, 'ok');
+      } catch (aiErr: any) {
+        console.error('AI correction failed:', aiErr);
+        setSpans(mergedSpans);
+        setOriginalSpans(JSON.parse(JSON.stringify(mergedSpans)));
+        flash(`${mergedSpans.length}個のフィールド (AI補正失敗)`, 'error');
+      }
+    } else {
+      setSpans(mergedSpans);
+      setOriginalSpans(JSON.parse(JSON.stringify(mergedSpans)));
+      flash(`${mergedSpans.length}個のフィールドを検出`, 'ok');
+    }
+  };
+
   // ── Upload PDF ──
   const handleUpload = async (file: File) => {
     if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
@@ -138,55 +191,22 @@ const App: React.FC = () => {
     flash('PDF分析中...', 'info');
     try {
       const data = await analyzePdf(file);
-      // Backend already merges fragmented spans — use directly
-      const mergedSpans = data.spans;
-      setSpanMapping(data.raw_id_map || {});
+      const pages = data.pages;
+      setAllPages(pages);
       setPdfB64(data.pdf_b64);
-      setPageMM(data.page_mm);
-      setOriginalPng(data.original_png_b64 ? `data:image/png;base64,${data.original_png_b64}` : null);
-      setRebuiltPng(null);
-      setSelectedId(null);
       setEditingProjectId(null);
 
-      // Step 2: AI correction (Gemini Vision → verify)
-      if (data.original_png_b64) {
-        flash('AI補正中 (Gemini Vision)...', 'info');
-        try {
-          const corrected = await correctOcrWithAI(data.original_png_b64, mergedSpans);
-          // Apply corrections: match by ID, update text + store category
-          const correctedMap = new Map(corrected.map(c => [c.id, c]));
-          const aiSpans = mergedSpans
-            .map(s => {
-              const fix = correctedMap.get(s.id);
-              return fix ? { ...s, text: fix.text } : s;
-            })
-            .filter(s => {
-              // Remove spans whose ID is NOT in the corrected set (AI merged them away)
-              return correctedMap.has(s.id) || !corrected.length;
-            });
-          // Store category info for display
-          const cats: Record<string, string> = {};
-          corrected.forEach(c => { cats[c.id] = c.category; });
-          setFieldCategories(cats);
+      if (pages.length === 0) {
+        flash('ページが見つかりませんでした', 'error');
+        return;
+      }
 
-          const finalSpans = aiSpans.length > 0 ? aiSpans : mergedSpans;
-          setSpans(finalSpans);
-          setOriginalSpans(JSON.parse(JSON.stringify(finalSpans)));
-          setView(AppState.EDIT);
-          flash(`${finalSpans.length}個のフィールド (AI補正済み)`, 'ok');
-        } catch (aiErr: any) {
-          console.error('AI correction failed:', aiErr);
-          // Fallback: use merged spans without AI
-          setSpans(mergedSpans);
-          setOriginalSpans(JSON.parse(JSON.stringify(mergedSpans)));
-          setView(AppState.EDIT);
-          flash(`${mergedSpans.length}個のフィールド (AI補正失敗 — OCR結果を使用)`, 'error');
-        }
-      } else {
-        setSpans(mergedSpans);
-        setOriginalSpans(JSON.parse(JSON.stringify(mergedSpans)));
-        setView(AppState.EDIT);
-        flash(`${mergedSpans.length}個のフィールドを検出`, 'ok');
+      // Load first page with AI correction
+      await loadPage(pages, 0);
+      setView(AppState.EDIT);
+
+      if (pages.length > 1) {
+        flash(`${pages.length}ページ検出 (${pages.filter(p => p.page_label).map(p => p.page_label).join('・') || 'ページ切替可'})`, 'ok');
       }
     } catch (e: any) {
       flash(`分析エラー: ${e.message}`, 'error');
@@ -208,7 +228,7 @@ const App: React.FC = () => {
     if (!Object.keys(edits).length) { flash('変更がありません', 'info'); return; }
     flash(`再構築中 (${Object.keys(edits).length}件)...`, 'info');
     try {
-      const data = await rebuildPdf(pdfB64, edits, spanMapping);
+      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect);
       if (data.png_b64) setRebuiltPng(`data:image/png;base64,${data.png_b64}`);
       if (data.pdf_b64) {
         const a = document.createElement('a');
@@ -234,6 +254,8 @@ const App: React.FC = () => {
       pdf_b64: pdfB64 || '',
       page_mm: pageMM,
       original_png_b64: originalPng?.replace('data:image/png;base64,', '') ?? null,
+      page_index: currentPageIndex,
+      clip_rect: currentClipRect,
       created_at: editingProjectId
         ? projects.find(p => p.id === editingProjectId)?.created_at || new Date().toISOString()
         : new Date().toISOString(),
@@ -260,6 +282,10 @@ const App: React.FC = () => {
     setRebuiltPng(null);
     setSelectedId(null);
     setEditingProjectId(p.id);
+    setAllPages([]);
+    setCurrentPageIdx(0);
+    setCurrentPageIndex(p.page_index ?? 0);
+    setCurrentClipRect(p.clip_rect);
     setView(AppState.EDIT);
   };
 
@@ -285,6 +311,10 @@ const App: React.FC = () => {
     setRebuiltPng(null);
     setSelectedId(null);
     setEditingProjectId(null);
+    setAllPages([]);
+    setCurrentPageIdx(0);
+    setCurrentPageIndex(0);
+    setCurrentClipRect(undefined);
     loadProjects();
   };
 
@@ -638,9 +668,47 @@ const App: React.FC = () => {
     </div>
   );
 
+  // ── Page switch handler ──
+  const handlePageSwitch = async (idx: number) => {
+    if (idx === currentPageIdx || !allPages[idx]) return;
+    setLoading(true);
+    try {
+      await loadPage(allPages, idx);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ── Editor ──
   const renderEditor = () => (
-    <div className="flex-1 flex overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Page selector bar (only when multiple pages) */}
+      {allPages.length > 1 && (
+        <div className="px-4 py-2 border-b flex items-center gap-3 shrink-0" style={{ background: C.card, borderColor: C.border }}>
+          <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: C.muted }}>ページ</span>
+          <div className="flex items-center gap-1.5">
+            {allPages.map((p, i) => (
+              <button
+                key={i}
+                onClick={() => handlePageSwitch(i)}
+                className="px-3 py-1.5 rounded-md text-xs font-bold transition-all border"
+                style={{
+                  background: currentPageIdx === i ? C.accentBg : 'transparent',
+                  color: currentPageIdx === i ? C.accent : C.muted,
+                  borderColor: currentPageIdx === i ? C.accentBorder : C.border,
+                }}
+              >
+                {p.page_label || `ページ ${i + 1}`}
+              </button>
+            ))}
+          </div>
+          <span className="text-[10px] font-mono" style={{ color: C.muted }}>
+            {allPages.length}ページ
+          </span>
+        </div>
+      )}
+
+      <div className="flex-1 flex overflow-hidden">
       {/* Left: Fields Form — directly editable */}
       <div className="w-96 flex flex-col shrink-0 border-r" style={{ background: C.bg, borderColor: C.border }}>
         <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: C.border }}>
@@ -821,6 +889,7 @@ const App: React.FC = () => {
           )}
         </div>
       </div>
+    </div>
     </div>
   );
 

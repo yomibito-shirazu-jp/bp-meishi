@@ -23,7 +23,9 @@ export interface DrawingInfo {
   color: [number, number, number] | null;
 }
 
-export interface AnalyzeResponse {
+export interface PageData {
+  page_index: number;
+  page_label?: string;
   page_pt: [number, number];
   page_mm: [number, number];
   spans: Span[];
@@ -31,6 +33,11 @@ export interface AnalyzeResponse {
   images: ImageInfo[];
   drawings: DrawingInfo[];
   original_png_b64: string;
+  clip_rect: [number, number, number, number];
+}
+
+export interface AnalyzeResponse {
+  pages: PageData[];
   pdf_b64: string;
 }
 
@@ -47,6 +54,8 @@ export interface CardProject {
   pdf_b64: string;
   page_mm: [number, number];
   original_png_b64: string | null;
+  page_index?: number;
+  clip_rect?: [number, number, number, number];
   created_at: string;
   updated_at: string;
 }

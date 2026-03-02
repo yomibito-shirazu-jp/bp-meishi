@@ -28,6 +28,8 @@ export const rebuildPdf = async (
   edits: Record<string, string>,
   rawIdMap: Record<string, string[]>,
   dpi = 300,
+  pageIndex = 0,
+  clipRect?: [number, number, number, number],
 ): Promise<RebuildResponse> => {
   const res = await fetch(`${API_URL}/rebuild`, {
     method: 'POST',
@@ -37,6 +39,8 @@ export const rebuildPdf = async (
       edits,
       raw_id_map: rawIdMap,
       dpi,
+      page_index: pageIndex,
+      clip_rect: clipRect || null,
     }),
   });
   if (!res.ok) {
