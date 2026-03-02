@@ -27,6 +27,7 @@ export interface AnalyzeResponse {
   page_pt: [number, number];
   page_mm: [number, number];
   spans: Span[];
+  raw_id_map: Record<string, string[]>;
   images: ImageInfo[];
   drawings: DrawingInfo[];
   original_png_b64: string;
@@ -53,4 +54,5 @@ export interface CardProject {
 export enum AppState {
   DASHBOARD = 'DASHBOARD',
   EDIT = 'EDIT',
+  INBOX = 'INBOX',
 }
