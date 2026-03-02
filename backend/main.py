@@ -387,27 +387,16 @@ def rebuild_pdf(
 
                 span_idx += 1
 
-    # 変更をコミット (insert_pdf が in-memory 描画を拾うように save→reopen)
-    tmp_buf = io.BytesIO()
-    doc.save(tmp_buf, garbage=4, deflate=True)
-    doc2 = fitz.open(stream=tmp_buf.getvalue(), filetype="pdf")
-    page2 = doc2[page_index]
-
-    # プレビューPNG (clip対応)
+    # プレビューPNG (修正済みページから直接レンダリング)
     mat = fitz.Matrix(dpi / 72, dpi / 72)
     clip = fitz.Rect(cx0, cy0, cx1, cy1)
-    pix = page2.get_pixmap(matrix=mat, clip=clip, alpha=False)
+    pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
     png_bytes = pix.tobytes("png")
 
-    # ベクターPDF出力 (元PDFの品質を維持、画像化しない)
-    # Note: cropbox は MediaBox 範囲外エラーを起こすため、
-    #       clip_rect が必要な場合は pixmap の clip で対応済み
-
-    # 対象ページのみ抽出
-    out_doc = fitz.open()
-    out_doc.insert_pdf(doc2, from_page=page_index, to_page=page_index)
+    # ベクターPDF出力: 対象ページのみ残してsave
+    doc.select([page_index])
     pdf_buf = io.BytesIO()
-    out_doc.save(pdf_buf, garbage=4, deflate=True)
+    doc.save(pdf_buf, garbage=4, deflate=True)
 
     return pdf_buf.getvalue(), png_bytes
 
@@ -454,6 +443,8 @@ async def rebuild(req: RebuildRequest):
             req.page_index, req.clip_rect, req.dpi,
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(500, f"再構築エラー: {e}")
     return {
         "pdf_b64": base64.b64encode(pdf_out).decode(),
