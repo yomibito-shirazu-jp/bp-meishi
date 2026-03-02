@@ -371,12 +371,19 @@ def rebuild_pdf(
                     new_text = raw_edits[sid]
                     if new_text:
                         fc = classify_font(span["font"])
+                        # 元テキストの色を保持 (PyMuPDF color = int RGB)
+                        sc = span.get("color", 0)
+                        txt_color = (
+                            ((sc >> 16) & 0xFF) / 255,
+                            ((sc >> 8) & 0xFF) / 255,
+                            (sc & 0xFF) / 255,
+                        )
                         tw = fitz.TextWriter(page.rect)
                         tw.append(
                             fitz.Point(span["origin"][0], span["origin"][1]),
                             new_text, font=get_font(fc), fontsize=span["size"],
                         )
-                        tw.write_text(page, color=(0, 0, 0))
+                        tw.write_text(page, color=txt_color)
 
                 span_idx += 1
 

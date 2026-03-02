@@ -20,18 +20,18 @@ const FONT_LABELS: Record<string, string> = {
   gothic_bold: 'ゴシック太',
 };
 
-// Warm color palette (matching meeting-notes-ai design)
+// Teal theme (FXGT-inspired)
 const C = {
-  bg: '#f8f7f4',
+  bg: '#f1f5f9',
   card: '#ffffff',
-  surface: '#f0efeb',
-  border: '#e5e3dd',
-  text: '#1a1917',
-  textSec: '#5c5a54',
-  muted: '#9c9a93',
-  accent: '#3b5998',
-  accentBg: '#eef1f8',
-  accentBorder: '#c5d3ef',
+  surface: '#f8fafc',
+  border: '#e2e8f0',
+  text: '#0f172a',
+  textSec: '#475569',
+  muted: '#94a3b8',
+  accent: '#0d9488',
+  accentBg: '#f0fdfa',
+  accentBorder: '#99f6e4',
 };
 
 /* ═══════════════════════════════════════════
@@ -80,7 +80,7 @@ const App: React.FC = () => {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
-  const [previewTab, setPreviewTab] = useState<'edit' | 'original'>('edit');
+  const [previewTab, setPreviewTab] = useState<'edit' | 'original' | 'rebuilt'>('edit');
   const [fieldCategories, setFieldCategories] = useState<Record<string, string>>({});
 
   // ── Multi-Page ──
@@ -101,8 +101,10 @@ const App: React.FC = () => {
     originalSpans[i] && s.text !== originalSpans[i].text
   ).length;
 
-  const updateSpan = (id: string, updates: Partial<Span>) =>
+  const updateSpan = (id: string, updates: Partial<Span>) => {
     setSpans(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+    if ('text' in updates) { setRebuiltPng(null); setPreviewTab('edit'); }
+  };
 
   // ── Filtered & Grouped ──
   const filteredProjects = useMemo(() => {
@@ -229,7 +231,7 @@ const App: React.FC = () => {
     flash(`再構築中 (${Object.keys(edits).length}件)...`, 'info');
     try {
       const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect);
-      if (data.png_b64) setRebuiltPng(`data:image/png;base64,${data.png_b64}`);
+      if (data.png_b64) { setRebuiltPng(`data:image/png;base64,${data.png_b64}`); setPreviewTab('rebuilt'); }
       if (data.pdf_b64) {
         const a = document.createElement('a');
         a.href = `data:application/pdf;base64,${data.pdf_b64}`;
@@ -346,11 +348,11 @@ const App: React.FC = () => {
     ];
     return (
       <div
-        className={`${sidebarCollapsed ? 'w-16' : 'w-56'} flex flex-col transition-all duration-200 shrink-0`}
-        style={{ background: '#1e293b' }}
+        className={`${sidebarCollapsed ? 'w-16' : 'w-56'} flex flex-col transition-all duration-200 shrink-0 border-r`}
+        style={{ background: C.card, borderColor: C.border }}
       >
         {/* Logo */}
-        <div className="px-4 py-5 flex items-center gap-3 border-b border-slate-700/50">
+        <div className="px-4 py-5 flex items-center gap-3 border-b" style={{ borderColor: C.border }}>
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 text-white"
             style={{ background: C.accent }}
@@ -358,10 +360,10 @@ const App: React.FC = () => {
             B
           </div>
           {!sidebarCollapsed && (
-            <span className="text-sm font-bold tracking-tight text-white leading-tight">
+            <span className="text-sm font-bold tracking-tight leading-tight" style={{ color: C.text }}>
               BizCard Tracer
               <br />
-              <span className="text-[10px] font-normal text-slate-400">& Print Gen</span>
+              <span className="text-[10px] font-normal" style={{ color: C.muted }}>& Print Gen</span>
             </span>
           )}
         </div>
@@ -374,16 +376,17 @@ const App: React.FC = () => {
               <button
                 key={item.label}
                 onClick={() => item.state === AppState.DASHBOARD ? resetAll() : setView(item.state)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
-                  ${active ? 'text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
-                style={active ? { background: 'rgba(59,89,152,0.25)', color: '#93b4f4' } : {}}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                style={active
+                  ? { background: C.accentBg, color: C.accent, borderLeft: `3px solid ${C.accent}` }
+                  : { color: C.textSec, borderLeft: '3px solid transparent' }}
               >
                 <item.icon size={18} className="shrink-0" />
                 {!sidebarCollapsed && <span className="flex-1 text-left">{item.label}</span>}
                 {!sidebarCollapsed && item.badge > 0 && (
                   <span
-                    className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                    style={{ background: C.accent, color: '#fff' }}
+                    className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-white"
+                    style={{ background: C.accent }}
                   >
                     {item.badge}
                   </span>
@@ -397,7 +400,8 @@ const App: React.FC = () => {
         <div className="px-2 pb-4">
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 text-xs transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors hover:bg-slate-50"
+            style={{ color: C.muted }}
           >
             <ChevronLeft size={16} className={`transition-transform ${sidebarCollapsed ? 'rotate-180' : ''}`} />
             {!sidebarCollapsed && '折りたたむ'}
@@ -782,27 +786,34 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* Preview — single panel with tab toggle */}
+      {/* Preview — 3-tab panel */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="px-4 py-2 border-b flex items-center justify-between" style={{ background: C.card, borderColor: C.border }}>
           <div className="flex items-center gap-1 p-0.5 rounded-lg" style={{ background: C.surface }}>
-            {(['edit', 'original'] as const).map(tab => (
+            {([
+              { key: 'edit' as const, label: 'プレビュー' },
+              { key: 'original' as const, label: 'オリジナル' },
+              ...(rebuiltPng ? [{ key: 'rebuilt' as const, label: '再構築済' }] : []),
+            ]).map(tab => (
               <button
-                key={tab}
-                onClick={() => setPreviewTab(tab)}
+                key={tab.key}
+                onClick={() => setPreviewTab(tab.key)}
                 className="px-3 py-1.5 rounded-md text-xs font-bold transition-all"
                 style={{
-                  background: previewTab === tab ? C.card : 'transparent',
-                  color: previewTab === tab ? C.accent : C.muted,
-                  boxShadow: previewTab === tab ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                  background: previewTab === tab.key ? C.card : 'transparent',
+                  color: previewTab === tab.key
+                    ? tab.key === 'rebuilt' ? '#059669' : C.accent
+                    : C.muted,
+                  boxShadow: previewTab === tab.key ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
                 }}
               >
-                {tab === 'edit' ? 'プレビュー (編集)' : 'オリジナル'}
+                {tab.label}
               </button>
             ))}
-            {rebuiltPng && (
-              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 ml-1">
-                再構築済
+            {editCount > 0 && previewTab === 'edit' && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full ml-1"
+                style={{ background: '#faf5ff', color: '#7c3aed', border: '1px solid #e9d5ff' }}>
+                {editCount}件変更中
               </span>
             )}
           </div>
@@ -824,14 +835,14 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="flex-1 flex items-center justify-center p-6 overflow-auto" style={{ background: C.surface }}>
-          {previewTab === 'edit' ? (
-            rebuiltPng ? (
-              <img
-                src={rebuiltPng}
-                alt="再構築プレビュー"
-                className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
-              />
-            ) : originalPng ? (
+          {previewTab === 'rebuilt' && rebuiltPng ? (
+            <img
+              src={rebuiltPng}
+              alt="再構築プレビュー"
+              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+            />
+          ) : previewTab === 'edit' ? (
+            originalPng ? (
               <div
                 className="relative rounded-lg shadow-2xl overflow-hidden bg-white"
                 style={{ aspectRatio: `${pageMM[0]} / ${pageMM[1]}`, maxHeight: '85vh', maxWidth: '95%' }}
@@ -856,19 +867,38 @@ const App: React.FC = () => {
                         border: isActive
                           ? `2px solid ${C.accent}`
                           : changed
-                            ? '2px solid #8b5cf6'
-                            : '1px solid rgba(59,89,152,0.25)',
+                            ? '2px solid #7c3aed'
+                            : `1px solid rgba(13,148,136,0.25)`,
                         background: isActive
-                          ? 'rgba(59,89,152,0.12)'
+                          ? 'rgba(13,148,136,0.12)'
                           : changed
-                            ? 'rgba(139,92,246,0.10)'
-                            : 'rgba(59,89,152,0.04)',
+                            ? 'rgba(124,58,237,0.08)'
+                            : 'rgba(13,148,136,0.04)',
                         borderRadius: '3px',
                         transition: 'all 0.1s',
                         zIndex: isActive ? 20 : 10,
+                        display: 'flex',
+                        alignItems: 'center',
+                        overflow: 'hidden',
                       }}
-                    />
-
+                    >
+                      {changed && (
+                        <span style={{
+                          background: 'rgba(255,255,255,0.92)',
+                          color: '#7c3aed',
+                          fontWeight: 600,
+                          fontSize: `max(9px, ${s.h_pct * 0.75}vh)`,
+                          whiteSpace: 'nowrap',
+                          padding: '0 2px',
+                          lineHeight: 1,
+                          width: '100%',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}>
+                          {s.text}
+                        </span>
+                      )}
+                    </div>
                   );
                 })}
               </div>
