@@ -68,13 +68,25 @@ def init_fonts():
 
 def classify_font(name: str) -> str:
     n = name.lower()
-    if any(k in n for k in ["mincho", "明朝", "serif", "song", "ming"]):
+    if any(k in n for k in ["mincho", "明朝", "serif", "song", "ming",
+                             "garamond", "times", "palatino", "cambria",
+                             "georgia", "bodoni", "didot", "caslon"]):
         return "mincho"
-    if any(k in n for k in ["garamond", "times", "palatino", "light", "thin"]):
+    if any(k in n for k in ["light", "thin", "extralight", "ultralight"]):
         return "light"
     if any(k in n for k in ["bold", "heavy", "black"]):
         return "gothic_bold"
     return "gothic"
+
+
+def _safe_color_int(span_color) -> int:
+    """span["color"] がNoneや非intの場合に0を返す安全なヘルパー"""
+    if span_color is None:
+        return 0
+    try:
+        return int(span_color)
+    except (TypeError, ValueError):
+        return 0
 
 # ── CID Text Cleaning ──
 
@@ -211,8 +223,6 @@ def analyze_page_region(doc, page_idx: int, clip_rect: list, label: str | None) 
             continue
         if len(text) == 1 and not any('\u4e00' <= c <= '\u9fff' for c in text):
             continue
-        if re.match(r'^\d{1,3}$', text):
-            continue
 
         mid = f"m{len(spans_out)}"
         bbox = m["bbox"]
@@ -302,6 +312,7 @@ def analyze_pdf(pdf_bytes: bytes) -> dict:
 def rebuild_pdf(
     pdf_bytes: bytes,
     edits: dict,
+    overrides: dict,
     raw_id_map: dict,
     page_index: int = 0,
     clip_rect: list | None = None,
@@ -310,6 +321,7 @@ def rebuild_pdf(
     """
     オーバーレイ方式: 元PDFの編集箇所だけを白塗り→上書き。
     未編集の要素は元PDFそのまま保持 → レイアウト崩壊なし。
+    overrides: { mid: { text?, font_class?, size_pt?, origin? } }
     """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     if page_index >= len(doc):
@@ -329,14 +341,40 @@ def rebuild_pdf(
     all_raw_ids = [rid for ids in raw_id_map.values() for rid in ids]
     use_page_prefix = any(rid.startswith("p") for rid in all_raw_ids)
 
-    # raw_id → 編集テキスト のマッピング
-    raw_edits = {}
+    # Merge edits + overrides into a unified map: mid → { text, font_class, size_pt, origin }
+    merged_overrides = {}
     for mid, new_text in edits.items():
+        merged_overrides[mid] = {"text": new_text}
+    for mid, ov in overrides.items():
+        if mid not in merged_overrides:
+            merged_overrides[mid] = {}
+        if isinstance(ov, dict):
+            merged_overrides[mid].update(ov)
+        else:
+            # Pydantic model
+            if ov.text is not None:
+                merged_overrides[mid]["text"] = ov.text
+            if ov.font_class is not None:
+                merged_overrides[mid]["font_class"] = ov.font_class
+            if ov.size_pt is not None:
+                merged_overrides[mid]["size_pt"] = ov.size_pt
+            if ov.origin is not None:
+                merged_overrides[mid]["origin"] = ov.origin
+
+    # raw_id → override のマッピング (テキスト編集: first raw gets text, rest get "")
+    raw_edits = {}       # raw_id → new_text | ""
+    raw_overrides = {}   # raw_id → { font_class?, size_pt?, origin? }
+    for mid, ov_data in merged_overrides.items():
         raw_ids = raw_id_map.get(mid, [mid])
+        new_text = ov_data.get("text")
+        extra = {k: v for k, v in ov_data.items() if k != "text"}
         if raw_ids:
-            raw_edits[raw_ids[0]] = new_text
-            for rid in raw_ids[1:]:
-                raw_edits[rid] = ""
+            if new_text is not None:
+                raw_edits[raw_ids[0]] = new_text
+                for rid in raw_ids[1:]:
+                    raw_edits[rid] = ""
+            if extra:
+                raw_overrides[raw_ids[0]] = extra
 
     # フォントキャッシュ
     fonts_cache = {}
@@ -346,8 +384,11 @@ def rebuild_pdf(
             fonts_cache[fc] = fitz.Font(fontfile=path)
         return fonts_cache[fc]
 
+    # Collect all affected raw_ids (text edits OR overrides)
+    affected_ids = set(raw_edits.keys()) | set(raw_overrides.keys())
+
     # === Pass 1: Redaction — 編集箇所の元テキストを除去 (画像は保持) ===
-    draw_tasks = []  # (origin, new_text, font_class, size, color) for pass 2
+    draw_tasks = []
     span_idx = 0
     for block in page.get_text("dict")["blocks"]:
         if "lines" not in block:
@@ -361,24 +402,29 @@ def rebuild_pdf(
                 else:
                     sid = f"s{span_idx}"
 
-                if sid in raw_edits:
+                if sid in affected_ids:
                     bbox = fitz.Rect(span["bbox"])
-                    # Redaction annotation (白塗り、テキストのみ除去)
                     page.add_redact_annot(bbox, fill=(1, 1, 1))
-                    # 描画タスクを記録
-                    new_text = raw_edits[sid]
+
+                    # Determine text: edited or original
+                    if sid in raw_edits:
+                        new_text = raw_edits[sid]
+                    else:
+                        new_text = span["text"]
+
                     if new_text:
-                        sc = span.get("color", 0)
+                        sc = _safe_color_int(span.get("color", 0))
                         txt_color = (
                             ((sc >> 16) & 0xFF) / 255,
                             ((sc >> 8) & 0xFF) / 255,
                             (sc & 0xFF) / 255,
                         )
+                        ov = raw_overrides.get(sid, {})
                         draw_tasks.append({
-                            "origin": span["origin"],
+                            "origin": ov.get("origin", span["origin"]),
                             "text": new_text,
-                            "font_class": classify_font(span["font"]),
-                            "size": span["size"],
+                            "font_class": ov.get("font_class", classify_font(span["font"])),
+                            "size": ov.get("size_pt", span["size"]),
                             "color": txt_color,
                         })
 
@@ -413,11 +459,18 @@ def rebuild_pdf(
 
 # ── Endpoints ──
 
+class SpanOverride(BaseModel):
+    text: Optional[str] = None
+    font_class: Optional[str] = None
+    size_pt: Optional[float] = None
+    origin: Optional[list[float]] = None
+
 class RebuildRequest(BaseModel):
     pdf_b64: str
     page_index: int = 0
     clip_rect: Optional[list[float]] = None
     edits: dict = {}
+    overrides: dict[str, SpanOverride] = {}
     raw_id_map: dict = {}
     dpi: int = 300
 
@@ -449,8 +502,8 @@ async def rebuild(req: RebuildRequest):
         raise HTTPException(400, f"入力エラー: {e}")
     try:
         pdf_out, png_out = rebuild_pdf(
-            pdf_bytes, req.edits, req.raw_id_map,
-            req.page_index, req.clip_rect, req.dpi,
+            pdf_bytes, req.edits, req.overrides,
+            req.raw_id_map, req.page_index, req.clip_rect, req.dpi,
         )
     except Exception as e:
         import traceback

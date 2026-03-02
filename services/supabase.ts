@@ -74,6 +74,8 @@ export const saveProject = async (project: CardProject): Promise<CardProject> =>
   if (project.rebuilt_pdf_b64) row.rebuilt_pdf_b64 = project.rebuilt_pdf_b64;
   if (project.rebuilt_png_b64) row.rebuilt_png_b64 = project.rebuilt_png_b64;
   if (project.raw_id_map) row.raw_id_map = project.raw_id_map;
+  if (project.page_index !== undefined) row.page_index = project.page_index;
+  if (project.clip_rect) row.clip_rect = project.clip_rect;
 
   const { data, error } = await supabase
     .from('card_projects')

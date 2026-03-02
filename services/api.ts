@@ -23,6 +23,13 @@ export const analyzePdf = async (file: File): Promise<AnalyzeResponse> => {
   return res.json();
 };
 
+export interface SpanOverride {
+  text?: string;
+  font_class?: string;
+  size_pt?: number;
+  origin?: [number, number];
+}
+
 export const rebuildPdf = async (
   pdfB64: string,
   edits: Record<string, string>,
@@ -30,6 +37,7 @@ export const rebuildPdf = async (
   dpi = 300,
   pageIndex = 0,
   clipRect?: [number, number, number, number],
+  overrides?: Record<string, SpanOverride>,
 ): Promise<RebuildResponse> => {
   const res = await fetch(`${API_URL}/rebuild`, {
     method: 'POST',
@@ -37,6 +45,7 @@ export const rebuildPdf = async (
     body: JSON.stringify({
       pdf_b64: pdfB64,
       edits,
+      overrides: overrides || {},
       raw_id_map: rawIdMap,
       dpi,
       page_index: pageIndex,

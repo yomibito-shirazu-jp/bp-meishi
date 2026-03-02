@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Span, PageData, CardProject, AppState } from './types';
-import { analyzePdf, rebuildPdf } from './services/api';
+import { analyzePdf, rebuildPdf, SpanOverride } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
-  Search, Building2, Inbox,
+  Search, Building2, Inbox, ZoomIn, ZoomOut, Maximize, Move,
 } from 'lucide-react';
 
 /* ═══════════════════════════════════════════
@@ -89,6 +89,13 @@ const App: React.FC = () => {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [currentClipRect, setCurrentClipRect] = useState<[number, number, number, number] | undefined>();
 
+  // ── Zoom & Drag ──
+  const [zoom, setZoom] = useState(1);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number; origX: number; origY: number } | null>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+  const previewImgRef = useRef<HTMLDivElement>(null);
+
   const fileRef = useRef<HTMLInputElement>(null);
 
   // ── Derived ──
@@ -97,14 +104,68 @@ const App: React.FC = () => {
     if (type !== 'info') setTimeout(() => setToast(null), type === 'error' ? 6000 : 3000);
   };
 
-  const editCount = spans.filter((s, i) =>
-    originalSpans[i] && s.text !== originalSpans[i].text
-  ).length;
+  const editCount = spans.filter((s, i) => {
+    if (!originalSpans[i]) return false;
+    const o = originalSpans[i];
+    return s.text !== o.text || s.font_class !== o.font_class || s.size_pt !== o.size_pt
+      || s.x_pct !== o.x_pct || s.y_pct !== o.y_pct;
+  }).length;
 
   const updateSpan = (id: string, updates: Partial<Span>) => {
     setSpans(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
-    if ('text' in updates) { setRebuiltPng(null); setPreviewTab('edit'); }
+    if ('text' in updates || 'origin' in updates || 'font_class' in updates || 'size_pt' in updates) {
+      setRebuiltPng(null);
+      setPreviewTab('edit');
+    }
   };
+
+  // ── Zoom ──
+  const zoomIn = () => setZoom(z => Math.min(z + 0.25, 4));
+  const zoomOut = () => setZoom(z => Math.max(z - 0.25, 0.25));
+  const zoomReset = () => setZoom(1);
+
+  // ── Drag-to-move ──
+  const handleOverlayMouseDown = useCallback((e: React.MouseEvent, spanId: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const span = spans.find(s => s.id === spanId);
+    if (!span) return;
+    setSelectedId(spanId);
+    setDraggingId(spanId);
+    setDragStart({ x: e.clientX, y: e.clientY, origX: span.x_pct, origY: span.y_pct });
+  }, [spans]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!draggingId || !dragStart || !previewImgRef.current) return;
+    const rect = previewImgRef.current.getBoundingClientRect();
+    const dx = ((e.clientX - dragStart.x) / rect.width) * 100;
+    const dy = ((e.clientY - dragStart.y) / rect.height) * 100;
+    const span = spans.find(s => s.id === draggingId);
+    if (!span) return;
+    const newX = Math.max(0, Math.min(100 - span.w_pct, dragStart.origX + dx));
+    const newY = Math.max(0, Math.min(100 - span.h_pct, dragStart.origY + dy));
+    setSpans(prev => prev.map(s =>
+      s.id === draggingId ? { ...s, x_pct: newX, y_pct: newY } : s
+    ));
+  }, [draggingId, dragStart, spans]);
+
+  const handleMouseUp = useCallback(() => {
+    if (draggingId) {
+      // Recalculate origin from pct for backend
+      const span = spans.find(s => s.id === draggingId);
+      if (span) {
+        const pageW = pageMM[0] / 25.4 * 72;
+        const pageH = pageMM[1] / 25.4 * 72;
+        const newOriginX = (span.x_pct / 100) * pageW;
+        const newOriginY = ((span.y_pct + span.h_pct) / 100) * pageH;
+        updateSpan(draggingId, {
+          origin: [Math.round(newOriginX * 100) / 100, Math.round(newOriginY * 100) / 100] as [number, number],
+        });
+      }
+    }
+    setDraggingId(null);
+    setDragStart(null);
+  }, [draggingId, spans, pageMM]);
 
   // ── Filtered & Grouped ──
   const filteredProjects = useMemo(() => {
@@ -150,6 +211,7 @@ const App: React.FC = () => {
     setOriginalPng(page.original_png_b64 ? `data:image/png;base64,${page.original_png_b64}` : null);
     setRebuiltPng(null);
     setSelectedId(null);
+    setZoom(1);
 
     if (!skipAI && page.original_png_b64) {
       flash('AI補正中 (Gemini Vision)...', 'info');
@@ -244,15 +306,28 @@ const App: React.FC = () => {
   const handleRebuild = async () => {
     if (!pdfB64) return;
     const edits: Record<string, string> = {};
+    const ovMap: Record<string, SpanOverride> = {};
     spans.forEach((s, i) => {
-      if (originalSpans[i] && s.text !== originalSpans[i].text) {
-        edits[s.id] = s.text;
+      if (!originalSpans[i]) return;
+      const orig = originalSpans[i];
+      const textChanged = s.text !== orig.text;
+      const fontChanged = s.font_class !== orig.font_class;
+      const sizeChanged = s.size_pt !== orig.size_pt;
+      const posChanged = s.x_pct !== orig.x_pct || s.y_pct !== orig.y_pct;
+      if (textChanged) edits[s.id] = s.text;
+      if (fontChanged || sizeChanged || posChanged) {
+        const ov: SpanOverride = {};
+        if (fontChanged) ov.font_class = s.font_class;
+        if (sizeChanged) ov.size_pt = s.size_pt;
+        if (posChanged) ov.origin = s.origin;
+        ovMap[s.id] = ov;
       }
     });
-    if (!Object.keys(edits).length) { flash('変更がありません', 'info'); return; }
-    flash(`再構築中 (${Object.keys(edits).length}件)...`, 'info');
+    const totalChanges = Object.keys(edits).length + Object.keys(ovMap).length;
+    if (!totalChanges) { flash('変更がありません', 'info'); return; }
+    flash(`再構築中 (${totalChanges}件)...`, 'info');
     try {
-      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect);
+      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect, ovMap);
       if (data.png_b64) { setRebuiltPng(`data:image/png;base64,${data.png_b64}`); setPreviewTab('rebuilt'); }
 
       // Auto-save to DB with rebuilt PDF
@@ -744,7 +819,7 @@ const App: React.FC = () => {
       )}
 
       <div className="flex-1 flex overflow-hidden">
-      {/* Left: Fields Form — directly editable */}
+      {/* Left: Fields Form + Property Panel */}
       <div className="w-96 flex flex-col shrink-0 border-r" style={{ background: C.bg, borderColor: C.border }}>
         <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: C.border }}>
           <div className="flex items-center gap-2">
@@ -773,6 +848,8 @@ const App: React.FC = () => {
                 return (
                   <tr
                     key={s.id}
+                    onClick={() => setSelectedId(isActive ? null : s.id)}
+                    className="cursor-pointer"
                     style={{
                       background: isActive ? C.accentBg : i % 2 === 0 ? C.card : C.bg,
                       borderBottom: `1px solid ${C.border}`,
@@ -795,8 +872,7 @@ const App: React.FC = () => {
                         value={s.text}
                         onChange={e => updateSpan(s.id, { text: e.target.value })}
                         onFocus={() => setSelectedId(s.id)}
-                        onBlur={() => setSelectedId(null)}
-                        className="w-full px-2 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
+                        className="w-full px-2 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 bg-white"
                         style={{
                           borderColor: changed ? '#8b5cf6' : C.border,
                           color: changed ? '#7c3aed' : C.text,
@@ -815,9 +891,87 @@ const App: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* Property Panel — shown when a span is selected */}
+        {selectedId && (() => {
+          const sel = spans.find(s => s.id === selectedId);
+          if (!sel) return null;
+          return (
+            <div className="border-t px-4 py-3 space-y-3 shrink-0" style={{ borderColor: C.border, background: C.card }}>
+              <div className="flex items-center justify-between">
+                <h4 className="text-[11px] font-bold uppercase tracking-wider" style={{ color: C.accent }}>
+                  プロパティ
+                </h4>
+                <span className="text-[10px] font-mono" style={{ color: C.muted }}>{sel.id}</span>
+              </div>
+              {/* Font family */}
+              <div>
+                <label className="text-[10px] font-semibold block mb-1" style={{ color: C.textSec }}>フォント</label>
+                <select
+                  value={sel.font_class}
+                  onChange={e => updateSpan(sel.id, { font_class: e.target.value as Span['font_class'] })}
+                  className="w-full px-2 py-1.5 border rounded text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-300"
+                  style={{ borderColor: C.border }}
+                >
+                  <option value="gothic">ゴシック (Noto Sans JP)</option>
+                  <option value="mincho">明朝 (Noto Serif JP)</option>
+                  <option value="light">ライト</option>
+                  <option value="gothic_bold">ゴシック太</option>
+                </select>
+              </div>
+              {/* Font size */}
+              <div>
+                <label className="text-[10px] font-semibold block mb-1" style={{ color: C.textSec }}>サイズ (pt)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={sel.size_pt}
+                    onChange={e => updateSpan(sel.id, { size_pt: parseFloat(e.target.value) || sel.size_pt })}
+                    step={0.5}
+                    min={1}
+                    max={120}
+                    className="w-20 px-2 py-1.5 border rounded text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-300"
+                    style={{ borderColor: C.border }}
+                  />
+                  <div className="flex gap-1">
+                    {[6, 8, 9, 10, 12, 14, 18, 24].map(sz => (
+                      <button
+                        key={sz}
+                        onClick={() => updateSpan(sel.id, { size_pt: sz })}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-mono border transition-colors"
+                        style={{
+                          borderColor: sel.size_pt === sz ? C.accent : C.border,
+                          background: sel.size_pt === sz ? C.accentBg : 'transparent',
+                          color: sel.size_pt === sz ? C.accent : C.muted,
+                        }}
+                      >
+                        {sz}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {/* Position */}
+              <div>
+                <label className="text-[10px] font-semibold block mb-1" style={{ color: C.textSec }}>
+                  位置 <Move size={10} className="inline ml-0.5" style={{ color: C.muted }} />
+                </label>
+                <div className="flex gap-2 text-[10px]" style={{ color: C.muted }}>
+                  <span>X: {sel.x_pct.toFixed(1)}%</span>
+                  <span>Y: {sel.y_pct.toFixed(1)}%</span>
+                  <span>W: {sel.w_pct.toFixed(1)}%</span>
+                  <span>H: {sel.h_pct.toFixed(1)}%</span>
+                </div>
+                <p className="text-[9px] mt-1" style={{ color: C.muted }}>
+                  プレビュー上でドラッグして移動可能
+                </p>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
-      {/* Preview — 3-tab panel */}
+      {/* Preview — 3-tab panel with zoom */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="px-4 py-2 border-b flex items-center justify-between" style={{ background: C.card, borderColor: C.border }}>
           <div className="flex items-center gap-1 p-0.5 rounded-lg" style={{ background: C.surface }}>
@@ -849,6 +1003,25 @@ const App: React.FC = () => {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {/* Zoom controls */}
+            <div className="flex items-center gap-1 border rounded-lg px-1" style={{ borderColor: C.border }}>
+              <button onClick={zoomOut} className="p-1 rounded hover:bg-slate-50 transition-colors" style={{ color: C.muted }}>
+                <ZoomOut size={14} />
+              </button>
+              <button
+                onClick={zoomReset}
+                className="px-1.5 py-0.5 text-[10px] font-mono font-bold rounded hover:bg-slate-50 transition-colors"
+                style={{ color: C.textSec }}
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button onClick={zoomIn} className="p-1 rounded hover:bg-slate-50 transition-colors" style={{ color: C.muted }}>
+                <ZoomIn size={14} />
+              </button>
+              <button onClick={zoomReset} className="p-1 rounded hover:bg-slate-50 transition-colors" title="リセット" style={{ color: C.muted }}>
+                <Maximize size={14} />
+              </button>
+            </div>
             {previewTab === 'edit' && (
               <button
                 onClick={() => setShowOverlay(!showOverlay)}
@@ -865,55 +1038,79 @@ const App: React.FC = () => {
             )}
           </div>
         </div>
-        <div className="flex-1 flex items-center justify-center p-6 overflow-auto" style={{ background: C.surface }}>
+        <div
+          ref={previewContainerRef}
+          className="flex-1 overflow-auto"
+          style={{ background: C.surface }}
+          onMouseMove={draggingId ? handleMouseMove : undefined}
+          onMouseUp={draggingId ? handleMouseUp : undefined}
+          onMouseLeave={draggingId ? handleMouseUp : undefined}
+        >
+          <div className="min-h-full flex items-center justify-center p-6">
           {previewTab === 'rebuilt' && rebuiltPng ? (
             <img
               src={rebuiltPng}
               alt="再構築プレビュー"
-              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+              className="object-contain rounded-lg shadow-2xl"
+              style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', transition: draggingId ? 'none' : 'transform 0.2s' }}
             />
           ) : previewTab === 'edit' ? (
             originalPng ? (
               <div
-                className="relative rounded-lg shadow-2xl overflow-hidden bg-white"
-                style={{ aspectRatio: `${pageMM[0]} / ${pageMM[1]}`, maxHeight: '85vh', maxWidth: '95%' }}
-                onClick={() => setSelectedId(null)}
+                ref={previewImgRef}
+                className="relative rounded-lg shadow-2xl overflow-visible bg-white"
+                style={{
+                  aspectRatio: `${pageMM[0]} / ${pageMM[1]}`,
+                  maxHeight: `${85 * zoom}vh`,
+                  maxWidth: `${95 * zoom}%`,
+                  transform: `scale(${zoom})`,
+                  transformOrigin: 'center center',
+                  transition: draggingId ? 'none' : 'transform 0.2s',
+                }}
+                onClick={() => { if (!draggingId) setSelectedId(null); }}
               >
                 <img src={originalPng} alt="プレビュー" className="w-full h-full object-contain" draggable={false} />
                 {showOverlay && spans.map((s, i) => {
                   const isActive = selectedId === s.id;
+                  const isDragging = draggingId === s.id;
                   const changed = originalSpans[i] && s.text !== originalSpans[i].text;
+                  const posChanged = originalSpans[i] && (s.x_pct !== originalSpans[i].x_pct || s.y_pct !== originalSpans[i].y_pct);
+                  const isModified = changed || posChanged;
                   return (
                     <div
                       key={s.id}
-                      onClick={e => { e.stopPropagation(); setSelectedId(isActive ? null : s.id); }}
-                      title={`${s.text} (${FONT_LABELS[s.font_class] || s.font_class} ${s.size_pt}pt)`}
+                      onMouseDown={e => handleOverlayMouseDown(e, s.id)}
+                      onClick={e => { e.stopPropagation(); if (!draggingId) setSelectedId(isActive ? null : s.id); }}
+                      title={`${s.text} (${FONT_LABELS[s.font_class] || s.font_class} ${s.size_pt}pt)\nドラッグで移動`}
                       style={{
                         position: 'absolute',
                         left: `${s.x_pct}%`,
                         top: `${s.y_pct}%`,
                         width: `${s.w_pct}%`,
                         height: `${s.h_pct}%`,
-                        cursor: 'pointer',
+                        cursor: isDragging ? 'grabbing' : 'grab',
                         border: isActive
                           ? `2px solid ${C.accent}`
-                          : changed
+                          : isModified
                             ? '2px solid #7c3aed'
                             : `1px solid rgba(13,148,136,0.25)`,
-                        background: isActive
-                          ? 'rgba(13,148,136,0.12)'
-                          : changed
-                            ? 'rgba(124,58,237,0.08)'
-                            : 'rgba(13,148,136,0.04)',
+                        background: isDragging
+                          ? 'rgba(13,148,136,0.2)'
+                          : isActive
+                            ? 'rgba(13,148,136,0.12)'
+                            : isModified
+                              ? 'rgba(124,58,237,0.08)'
+                              : 'rgba(13,148,136,0.04)',
                         borderRadius: '3px',
-                        transition: 'all 0.1s',
-                        zIndex: isActive ? 20 : 10,
+                        transition: isDragging ? 'none' : 'all 0.1s',
+                        zIndex: isDragging ? 30 : isActive ? 20 : 10,
                         display: 'flex',
                         alignItems: 'center',
                         overflow: 'hidden',
+                        userSelect: 'none',
                       }}
                     >
-                      {changed && (
+                      {isModified && (
                         <span style={{
                           background: 'rgba(255,255,255,0.92)',
                           color: '#7c3aed',
@@ -942,12 +1139,14 @@ const App: React.FC = () => {
               <img
                 src={originalPng}
                 alt="オリジナル"
-                className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+                className="object-contain rounded-lg shadow-2xl"
+                style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', transition: 'transform 0.2s' }}
               />
             ) : (
               <div className="text-sm" style={{ color: C.muted }}>オリジナル画像なし</div>
             )
           )}
+          </div>
         </div>
       </div>
     </div>
