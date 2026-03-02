@@ -1,42 +1,56 @@
-export interface ElementStyle {
-  x: number;
-  y: number;
-  fontSize: number;
-  fontFamily: 'Noto Sans JP' | 'Noto Serif JP';
-  fontWeight: 'normal' | 'bold';
-  color: string;
-  textAlign: 'left' | 'center' | 'right';
-}
-
-export type CardField = 'fullName' | 'title' | 'companyName' | 'email' | 'phone' | 'mobile' | 'address' | 'website';
-
-export interface CardData {
+export interface Span {
   id: string;
-  fullName: string;
-  title: string;
-  companyName: string;
-  email: string;
-  phone: string;
-  mobile: string;
-  address: string;
-  website: string;
-  logoUrl?: string;
-  layout: Record<string, ElementStyle>; // Map field name to style
+  text: string;
+  font_original: string;
+  font_class: 'gothic' | 'mincho' | 'light' | 'gothic_bold';
+  size_pt: number;
+  origin: [number, number];
+  bbox: [number, number, number, number];
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
 }
 
-export interface CompanyGroup {
+export interface ImageInfo {
+  id: string;
+  bbox: [number, number, number, number];
+}
+
+export interface DrawingInfo {
+  bbox: [number, number, number, number];
+  fill: [number, number, number] | null;
+  color: [number, number, number] | null;
+}
+
+export interface AnalyzeResponse {
+  page_pt: [number, number];
+  page_mm: [number, number];
+  spans: Span[];
+  images: ImageInfo[];
+  drawings: DrawingInfo[];
+  original_png_b64: string;
+  pdf_b64: string;
+}
+
+export interface RebuildResponse {
+  pdf_b64: string;
+  png_b64: string;
+}
+
+export interface CardProject {
+  id: string;
   name: string;
-  cards: CardData[];
+  spans: Span[];
+  original_spans: Span[];
+  pdf_b64: string;
+  page_mm: [number, number];
+  original_png_b64: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export enum AppState {
   DASHBOARD = 'DASHBOARD',
-  UPLOAD = 'UPLOAD',
   EDIT = 'EDIT',
-}
-
-export interface UploadStatus {
-  isUploading: boolean;
-  message: string;
-  error?: string;
 }

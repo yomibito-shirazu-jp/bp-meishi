@@ -1,7 +1,7 @@
 {
-  "name": "bizcard-tracer-&-print-gen",
+  "name": "meishi-manager",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,12 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.49.0",
     "lucide-react": "^0.563.0",
     "react": "^19.2.4",
-    "@google/genai": "^1.39.0",
-    "react-dom": "^19.2.4",
-    "html2canvas": "^1.4.1",
-    "jspdf": "^4.1.0"
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
