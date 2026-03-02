@@ -2,11 +2,11 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Span, CardProject, AppState } from './types';
 import { analyzePdf, rebuildPdf } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
-import { correctOcrWithAI, CorrectedSpan } from './services/ai';
+import { correctOcrWithAI } from './services/ai';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
-  Search, Building2, Inbox, Sparkles, Loader,
+  Search, Building2, Inbox,
 } from 'lucide-react';
 
 /* ═══════════════════════════════════════════
@@ -18,23 +18,6 @@ const FONT_LABELS: Record<string, string> = {
   mincho: '明朝',
   light: 'ライト',
   gothic_bold: 'ゴシック太',
-};
-
-const CATEGORY_LABELS: Record<string, { label: string; color: string }> = {
-  company:    { label: '会社名', color: '#2563eb' },
-  company_en: { label: '会社名(英)', color: '#3b82f6' },
-  department: { label: '部署', color: '#7c3aed' },
-  title:      { label: '役職', color: '#9333ea' },
-  name:       { label: '氏名', color: '#dc2626' },
-  name_reading: { label: 'ふりがな', color: '#ef4444' },
-  address:    { label: '住所', color: '#059669' },
-  phone:      { label: '電話', color: '#0891b2' },
-  fax:        { label: 'FAX', color: '#0e7490' },
-  mobile:     { label: '携帯', color: '#06b6d4' },
-  email:      { label: 'メール', color: '#d97706' },
-  url:        { label: 'URL', color: '#ea580c' },
-  slogan:     { label: 'スローガン', color: '#64748b' },
-  other:      { label: 'その他', color: '#94a3b8' },
 };
 
 // Warm color palette (matching meeting-notes-ai design)
@@ -107,8 +90,6 @@ const App: React.FC = () => {
     setToast({ text, type });
     if (type !== 'info') setTimeout(() => setToast(null), type === 'error' ? 6000 : 3000);
   };
-
-  const selectedSpan = spans.find(s => s.id === selectedId) ?? null;
 
   const editCount = spans.filter((s, i) =>
     originalSpans[i] && s.text !== originalSpans[i].text
@@ -660,8 +641,8 @@ const App: React.FC = () => {
   // ── Editor ──
   const renderEditor = () => (
     <div className="flex-1 flex overflow-hidden">
-      {/* Left: Detected Fields Panel (warm design) */}
-      <div className="w-72 flex flex-col shrink-0 border-r" style={{ background: C.bg, borderColor: C.border }}>
+      {/* Left: Fields Form — directly editable */}
+      <div className="w-96 flex flex-col shrink-0 border-r" style={{ background: C.bg, borderColor: C.border }}>
         <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: C.border }}>
           <div className="flex items-center gap-2">
             <FileText size={14} style={{ color: C.accent }} />
@@ -674,79 +655,63 @@ const App: React.FC = () => {
           </span>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          {spans.map((s, i) => {
-            const isActive = selectedId === s.id;
-            const changed = originalSpans[i] && s.text !== originalSpans[i].text;
-            return (
-              <div
-                key={s.id}
-                onClick={() => setSelectedId(isActive ? null : s.id)}
-                className="rounded-xl cursor-pointer transition-all border"
-                style={{
-                  background: isActive ? C.accentBg : C.card,
-                  borderColor: isActive ? C.accent : changed ? '#8b5cf6' : C.border,
-                  padding: '10px 12px',
-                  boxShadow: isActive ? `0 2px 8px rgba(59,89,152,0.12)` : 'none',
-                }}
-              >
-                <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                  {fieldCategories[s.id] && CATEGORY_LABELS[fieldCategories[s.id]] && (
-                    <span
-                      className="text-[10px] font-bold px-1.5 py-0.5 rounded text-white"
-                      style={{ background: CATEGORY_LABELS[fieldCategories[s.id]].color }}
-                    >
-                      {CATEGORY_LABELS[fieldCategories[s.id]].label}
-                    </span>
-                  )}
-                  <span
-                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-                    style={{ background: C.surface, color: C.textSec }}
+        <div className="flex-1 overflow-y-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr style={{ background: C.surface }}>
+                <th className="text-left text-[10px] font-bold uppercase px-3 py-2 tracking-wider" style={{ color: C.muted, width: '80px' }}>フォント</th>
+                <th className="text-left text-[10px] font-bold uppercase px-3 py-2 tracking-wider" style={{ color: C.muted }}>テキスト</th>
+              </tr>
+            </thead>
+            <tbody>
+              {spans.map((s, i) => {
+                const isActive = selectedId === s.id;
+                const changed = originalSpans[i] && s.text !== originalSpans[i].text;
+                return (
+                  <tr
+                    key={s.id}
+                    style={{
+                      background: isActive ? C.accentBg : i % 2 === 0 ? C.card : C.bg,
+                      borderBottom: `1px solid ${C.border}`,
+                    }}
                   >
-                    {FONT_LABELS[s.font_class] || s.font_class}
-                  </span>
-                  <span className="text-[10px]" style={{ color: C.muted }}>{s.size_pt}pt</span>
-                  {changed && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-purple-50 text-purple-600 ml-auto">
-                      変更
-                    </span>
-                  )}
-                </div>
-                <div
-                  className={`text-sm truncate ${changed ? 'font-bold text-purple-700' : ''}`}
-                  style={{ color: changed ? undefined : C.text }}
-                >
-                  {s.text}
-                </div>
-              </div>
-            );
-          })}
+                    <td className="px-3 py-2 align-top" style={{ width: '80px' }}>
+                      <div className="flex flex-col gap-0.5">
+                        <span
+                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded inline-block text-center"
+                          style={{ background: C.surface, color: C.textSec }}
+                        >
+                          {FONT_LABELS[s.font_class] || s.font_class}
+                        </span>
+                        <span className="text-[9px] text-center" style={{ color: C.muted }}>{s.size_pt}pt</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <input
+                        type="text"
+                        value={s.text}
+                        onChange={e => updateSpan(s.id, { text: e.target.value })}
+                        onFocus={() => setSelectedId(s.id)}
+                        onBlur={() => setSelectedId(null)}
+                        className="w-full px-2 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
+                        style={{
+                          borderColor: changed ? '#8b5cf6' : C.border,
+                          color: changed ? '#7c3aed' : C.text,
+                          fontWeight: changed ? 600 : 400,
+                        }}
+                      />
+                      {changed && originalSpans[i] && (
+                        <div className="text-[10px] mt-0.5 truncate" style={{ color: C.muted }}>
+                          <span className="line-through">{originalSpans[i].text}</span>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-
-        {/* Selected span editor */}
-        {selectedSpan && (
-          <div className="border-t p-4 space-y-3" style={{ borderColor: C.border, background: C.accentBg }}>
-            <div className="text-xs font-bold" style={{ color: C.accent }}>テキスト編集</div>
-            <textarea
-              rows={3}
-              value={selectedSpan.text}
-              onChange={e => updateSpan(selectedSpan.id, { text: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 resize-vertical bg-white"
-              style={{ borderColor: C.border }}
-            />
-            {(() => {
-              const orig = originalSpans.find(o => o.id === selectedSpan.id);
-              return orig && orig.text !== selectedSpan.text ? (
-                <div className="text-xs" style={{ color: C.muted }}>
-                  元: <span className="line-through">{orig.text}</span>
-                </div>
-              ) : null;
-            })()}
-            <div className="text-[10px] rounded-lg p-2.5 font-mono" style={{ background: C.surface, color: C.textSec }}>
-              {selectedSpan.font_original} → {FONT_LABELS[selectedSpan.font_class] || selectedSpan.font_class} / {selectedSpan.size_pt}pt
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Preview — single panel with tab toggle */}
@@ -834,29 +799,8 @@ const App: React.FC = () => {
                         transition: 'all 0.1s',
                         zIndex: isActive ? 20 : 10,
                       }}
-                    >
-                      {changed && (
-                        <span
-                          style={{
-                            position: 'absolute',
-                            inset: '-1px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            background: 'rgba(255,255,255,0.88)',
-                            color: '#7c3aed',
-                            fontSize: `${Math.max(8, Math.min(14, s.size_pt * 0.8))}px`,
-                            fontWeight: 600,
-                            padding: '0 2px',
-                            overflow: 'hidden',
-                            whiteSpace: 'nowrap',
-                            textOverflow: 'ellipsis',
-                            borderRadius: '3px',
-                          }}
-                        >
-                          {s.text}
-                        </span>
-                      )}
-                    </div>
+                    />
+
                   );
                 })}
               </div>
