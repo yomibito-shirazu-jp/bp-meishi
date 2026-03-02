@@ -2,18 +2,20 @@
 名刺PDF前処理・再構築 API (Cloud Run)
 
 POST /analyze  - PDF → テキスト座標・フォント抽出 + プレビュー画像
-POST /rebuild  - テキスト修正 → 再構築PDF
+POST /rebuild  - テキスト修正 → 再構築PDF (JSON)
 GET  /health   - ヘルスチェック
 """
 
 import fitz  # PyMuPDF
 import os
+import re
 import io
 import json
 import base64
 import subprocess
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 app = FastAPI(title="名刺マネージャー API")
 
@@ -54,6 +56,19 @@ def classify_font(name: str) -> str:
         return "gothic_bold"
     return "gothic"
 
+# ── CID Text Cleaning ──
+
+def _clean_cid_text(text: str) -> str:
+    """CIDフォント由来の文字間スペースを除去"""
+    if not text or ' ' not in text:
+        return text
+    # スペース比率が高い → CIDフォントの1文字ずつ分割の痕跡
+    space_ratio = text.count(' ') / max(len(text), 1)
+    if space_ratio > 0.25:
+        # 全スペースを除去 (CIDフォントでは意味のあるスペースは大きなgapで分離済み)
+        text = text.replace(' ', '')
+    return text.strip()
+
 # ── Span Merging ──
 
 def merge_line_spans(raw_spans: list) -> list:
@@ -74,8 +89,8 @@ def merge_line_spans(raw_spans: list) -> list:
         prev_mid_y = (prev["bbox"][1] + prev["bbox"][3]) / 2
         prev_h = prev["bbox"][3] - prev["bbox"][1]
         cur_mid_y = (s["bbox"][1] + s["bbox"][3]) / 2
-        # 同一行判定: Y中心の差がline高さの50%以内
-        if abs(cur_mid_y - prev_mid_y) < max(prev_h * 0.5, 2.0):
+        # 同一行判定: Y中心の差がline高さの60%以内 (余裕を持たせる)
+        if abs(cur_mid_y - prev_mid_y) < max(prev_h * 0.6, 2.5):
             cur_line.append(s)
         else:
             lines.append(cur_line)
@@ -91,9 +106,9 @@ def merge_line_spans(raw_spans: list) -> list:
         for s in line_sorted[1:]:
             prev = group[-1]
             gap = s["bbox"][0] - prev["bbox"][2]  # 右端→次の左端
-            prev_char_w = (prev["bbox"][2] - prev["bbox"][0]) / max(len(prev["text"]), 1)
-            # 結合条件: gap < 文字幅の3倍 or 2pt以内
-            threshold = max(prev_char_w * 3, 2.0)
+            prev_char_w = (prev["bbox"][2] - prev["bbox"][0]) / max(len(prev["text"].strip()), 1)
+            # 結合条件: 文字幅の4倍 or 3pt以内 (CIDフォント対応で緩めに)
+            threshold = max(prev_char_w * 4, 3.0)
             if gap < threshold:
                 group.append(s)
             else:
@@ -107,9 +122,23 @@ def merge_line_spans(raw_spans: list) -> list:
 def _combine_group(group: list) -> dict:
     """複数のraw spanを1つに結合"""
     if len(group) == 1:
-        return group[0]
+        g = group[0]
+        # 単一spanでもCIDテキスト清掃
+        g["text"] = g["text"].strip()
+        return g
 
-    text = "".join(s["text"] for s in group)
+    # CIDフォント判定: 単一文字spanが40%以上なら文字間スペース除去
+    single_char = sum(1 for s in group if len(s["text"].strip()) <= 1)
+    is_cid = single_char > len(group) * 0.4
+
+    if is_cid:
+        text = "".join(s["text"].strip() for s in group)
+    else:
+        text = "".join(s["text"] for s in group)
+
+    # CIDテキスト後処理
+    text = _clean_cid_text(text)
+
     # bbox = 全体の外接矩形
     x0 = min(s["bbox"][0] for s in group)
     y0 = min(s["bbox"][1] for s in group)
@@ -159,18 +188,27 @@ def analyze_pdf(pdf_bytes: bytes) -> dict:
     # Step 2: 結合
     merged = merge_line_spans(raw_spans)
 
-    # Step 3: 出力用に整形
+    # Step 3: 出力用に整形 (ノイズ除去含む)
     spans_out = []
     raw_id_map = {}  # merged_id → [raw_id, ...]
     for i, m in enumerate(merged):
-        mid = f"m{i}"
+        text = m["text"].strip()
+        # ノイズ除去: 1文字以下の無意味テキスト、数字のみ(テスト番号)
+        if len(text) == 0:
+            continue
+        if len(text) == 1 and not any('\u4e00' <= c <= '\u9fff' for c in text):
+            continue  # 1文字の非漢字はスキップ ("]", "1" 等)
+        if re.match(r'^\d{1,3}$', text):
+            continue  # 3桁以下の数字のみはテスト番号としてスキップ
+
+        mid = f"m{len(spans_out)}"
         bbox = m["bbox"]
         raw_ids = m.get("_raw_ids", [m.get("_raw_id", mid)])
         raw_id_map[mid] = raw_ids
         fc = classify_font(m["font"])
         spans_out.append({
             "id": mid,
-            "text": m["text"].strip(),
+            "text": text,
             "font_original": m["font"],
             "font_class": fc,
             "size_pt": round(m["size"], 2),
@@ -301,6 +339,12 @@ def rebuild_pdf(pdf_bytes: bytes, edits: dict, raw_id_map: dict, dpi: int = 300)
 
 # ── Endpoints ──
 
+class RebuildRequest(BaseModel):
+    pdf_b64: str
+    edits: dict = {}
+    raw_id_map: dict = {}
+    dpi: int = 300
+
 @app.on_event("startup")
 def startup():
     init_fonts()
@@ -322,20 +366,13 @@ async def analyze(file: UploadFile = File(...)):
     return result
 
 @app.post("/rebuild")
-async def rebuild(
-    pdf_b64: str = Form(...),
-    edits_json: str = Form(default="{}"),
-    raw_id_map_json: str = Form(default="{}"),
-    dpi: int = Form(default=300),
-):
+async def rebuild(req: RebuildRequest):
     try:
-        pdf_bytes = base64.b64decode(pdf_b64)
-        edits = json.loads(edits_json)
-        raw_id_map = json.loads(raw_id_map_json)
+        pdf_bytes = base64.b64decode(req.pdf_b64)
     except Exception as e:
         raise HTTPException(400, f"入力エラー: {e}")
     try:
-        pdf_out, png_out = rebuild_pdf(pdf_bytes, edits, raw_id_map, dpi)
+        pdf_out, png_out = rebuild_pdf(pdf_bytes, req.edits, req.raw_id_map, req.dpi)
     except Exception as e:
         raise HTTPException(500, f"再構築エラー: {e}")
     return {

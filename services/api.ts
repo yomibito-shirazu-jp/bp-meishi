@@ -29,12 +29,16 @@ export const rebuildPdf = async (
   rawIdMap: Record<string, string[]>,
   dpi = 300,
 ): Promise<RebuildResponse> => {
-  const form = new FormData();
-  form.append('pdf_b64', pdfB64);
-  form.append('edits_json', JSON.stringify(edits));
-  form.append('raw_id_map_json', JSON.stringify(rawIdMap));
-  form.append('dpi', String(dpi));
-  const res = await fetch(`${API_URL}/rebuild`, { method: 'POST', body: form });
+  const res = await fetch(`${API_URL}/rebuild`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      pdf_b64: pdfB64,
+      edits,
+      raw_id_map: rawIdMap,
+      dpi,
+    }),
+  });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throw new Error(e.detail || `HTTP ${res.status}`);

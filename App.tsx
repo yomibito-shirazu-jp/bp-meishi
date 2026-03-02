@@ -97,6 +97,7 @@ const App: React.FC = () => {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
+  const [previewTab, setPreviewTab] = useState<'edit' | 'original'>('edit');
   const [fieldCategories, setFieldCategories] = useState<Record<string, string>>({});
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -748,121 +749,131 @@ const App: React.FC = () => {
         )}
       </div>
 
-      {/* Center: Preview (edited version) */}
-      <div className="flex-1 flex flex-col overflow-hidden border-r" style={{ borderColor: C.border }}>
+      {/* Preview — single panel with tab toggle */}
+      <div className="flex-1 flex flex-col overflow-hidden">
         <div className="px-4 py-2 border-b flex items-center justify-between" style={{ background: C.card, borderColor: C.border }}>
-          <div className="flex items-center gap-2">
-            <Eye size={14} style={{ color: C.accent }} />
-            <span className="text-xs font-bold" style={{ color: C.accent }}>プレビュー</span>
+          <div className="flex items-center gap-1 p-0.5 rounded-lg" style={{ background: C.surface }}>
+            {(['edit', 'original'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setPreviewTab(tab)}
+                className="px-3 py-1.5 rounded-md text-xs font-bold transition-all"
+                style={{
+                  background: previewTab === tab ? C.card : 'transparent',
+                  color: previewTab === tab ? C.accent : C.muted,
+                  boxShadow: previewTab === tab ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                }}
+              >
+                {tab === 'edit' ? 'プレビュー (編集)' : 'オリジナル'}
+              </button>
+            ))}
             {rebuiltPng && (
-              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 ml-1">
                 再構築済
               </span>
             )}
           </div>
-          <button
-            onClick={() => setShowOverlay(!showOverlay)}
-            className="px-2 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-colors border"
-            style={{
-              background: showOverlay ? C.accentBg : 'transparent',
-              color: showOverlay ? C.accent : C.muted,
-              borderColor: showOverlay ? C.accentBorder : C.border,
-            }}
-          >
-            {showOverlay ? <Eye size={12} /> : <EyeOff size={12} />}
-            オーバーレイ
-          </button>
+          <div className="flex items-center gap-2">
+            {previewTab === 'edit' && (
+              <button
+                onClick={() => setShowOverlay(!showOverlay)}
+                className="px-2 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-colors border"
+                style={{
+                  background: showOverlay ? C.accentBg : 'transparent',
+                  color: showOverlay ? C.accent : C.muted,
+                  borderColor: showOverlay ? C.accentBorder : C.border,
+                }}
+              >
+                {showOverlay ? <Eye size={12} /> : <EyeOff size={12} />}
+                オーバーレイ
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex-1 flex items-center justify-center p-6 overflow-auto" style={{ background: C.surface }}>
-          {rebuiltPng ? (
-            <img
-              src={rebuiltPng}
-              alt="再構築プレビュー"
-              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
-            />
-          ) : originalPng ? (
-            <div
-              className="relative rounded-lg shadow-2xl overflow-hidden bg-white"
-              style={{ aspectRatio: `${pageMM[0]} / ${pageMM[1]}`, maxHeight: '80vh', maxWidth: '95%' }}
-              onClick={() => setSelectedId(null)}
-            >
-              <img src={originalPng} alt="プレビュー" className="w-full h-full object-contain" draggable={false} />
-              {showOverlay && spans.map((s, i) => {
-                const isActive = selectedId === s.id;
-                const changed = originalSpans[i] && s.text !== originalSpans[i].text;
-                return (
-                  <div
-                    key={s.id}
-                    onClick={e => { e.stopPropagation(); setSelectedId(isActive ? null : s.id); }}
-                    title={`${s.text} (${FONT_LABELS[s.font_class] || s.font_class} ${s.size_pt}pt)`}
-                    style={{
-                      position: 'absolute',
-                      left: `${s.x_pct}%`,
-                      top: `${s.y_pct}%`,
-                      width: `${s.w_pct}%`,
-                      height: `${s.h_pct}%`,
-                      cursor: 'pointer',
-                      border: isActive
-                        ? `2px solid ${C.accent}`
-                        : changed
-                          ? '2px solid #8b5cf6'
-                          : '1px solid transparent',
-                      background: isActive
-                        ? 'rgba(59,89,152,0.12)'
-                        : changed
-                          ? 'rgba(139,92,246,0.10)'
-                          : 'transparent',
-                      borderRadius: '3px',
-                      transition: 'all 0.1s',
-                      zIndex: isActive ? 20 : 10,
-                    }}
-                  >
-                    {changed && (
-                      <span
-                        style={{
-                          position: 'absolute',
-                          inset: '-1px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          background: 'rgba(255,255,255,0.88)',
-                          color: '#7c3aed',
-                          fontSize: `${Math.max(8, Math.min(14, s.size_pt * 0.8))}px`,
-                          fontWeight: 600,
-                          padding: '0 2px',
-                          overflow: 'hidden',
-                          whiteSpace: 'nowrap',
-                          textOverflow: 'ellipsis',
-                          borderRadius: '3px',
-                        }}
-                      >
-                        {s.text}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+          {previewTab === 'edit' ? (
+            rebuiltPng ? (
+              <img
+                src={rebuiltPng}
+                alt="再構築プレビュー"
+                className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+              />
+            ) : originalPng ? (
+              <div
+                className="relative rounded-lg shadow-2xl overflow-hidden bg-white"
+                style={{ aspectRatio: `${pageMM[0]} / ${pageMM[1]}`, maxHeight: '85vh', maxWidth: '95%' }}
+                onClick={() => setSelectedId(null)}
+              >
+                <img src={originalPng} alt="プレビュー" className="w-full h-full object-contain" draggable={false} />
+                {showOverlay && spans.map((s, i) => {
+                  const isActive = selectedId === s.id;
+                  const changed = originalSpans[i] && s.text !== originalSpans[i].text;
+                  return (
+                    <div
+                      key={s.id}
+                      onClick={e => { e.stopPropagation(); setSelectedId(isActive ? null : s.id); }}
+                      title={`${s.text} (${FONT_LABELS[s.font_class] || s.font_class} ${s.size_pt}pt)`}
+                      style={{
+                        position: 'absolute',
+                        left: `${s.x_pct}%`,
+                        top: `${s.y_pct}%`,
+                        width: `${s.w_pct}%`,
+                        height: `${s.h_pct}%`,
+                        cursor: 'pointer',
+                        border: isActive
+                          ? `2px solid ${C.accent}`
+                          : changed
+                            ? '2px solid #8b5cf6'
+                            : '1px solid rgba(59,89,152,0.25)',
+                        background: isActive
+                          ? 'rgba(59,89,152,0.12)'
+                          : changed
+                            ? 'rgba(139,92,246,0.10)'
+                            : 'rgba(59,89,152,0.04)',
+                        borderRadius: '3px',
+                        transition: 'all 0.1s',
+                        zIndex: isActive ? 20 : 10,
+                      }}
+                    >
+                      {changed && (
+                        <span
+                          style={{
+                            position: 'absolute',
+                            inset: '-1px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            background: 'rgba(255,255,255,0.88)',
+                            color: '#7c3aed',
+                            fontSize: `${Math.max(8, Math.min(14, s.size_pt * 0.8))}px`,
+                            fontWeight: 600,
+                            padding: '0 2px',
+                            overflow: 'hidden',
+                            whiteSpace: 'nowrap',
+                            textOverflow: 'ellipsis',
+                            borderRadius: '3px',
+                          }}
+                        >
+                          {s.text}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-sm" style={{ color: C.muted }}>プレビューなし</div>
+            )
           ) : (
-            <div className="text-sm" style={{ color: C.muted }}>プレビューなし</div>
-          )}
-        </div>
-      </div>
-
-      {/* Right: Original (untouched) */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="px-4 py-2 border-b flex items-center gap-2" style={{ background: C.card, borderColor: C.border }}>
-          <FileText size={14} style={{ color: C.muted }} />
-          <span className="text-xs font-bold" style={{ color: C.textSec }}>オリジナル</span>
-        </div>
-        <div className="flex-1 flex items-center justify-center p-6 overflow-auto" style={{ background: '#f5f4f0' }}>
-          {originalPng ? (
-            <img
-              src={originalPng}
-              alt="オリジナル"
-              className="max-w-full max-h-full object-contain rounded-lg shadow-lg"
-            />
-          ) : (
-            <div className="text-sm" style={{ color: C.muted }}>オリジナル画像なし</div>
+            /* Original tab */
+            originalPng ? (
+              <img
+                src={originalPng}
+                alt="オリジナル"
+                className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+              />
+            ) : (
+              <div className="text-sm" style={{ color: C.muted }}>オリジナル画像なし</div>
+            )
           )}
         </div>
       </div>
