@@ -29,21 +29,40 @@ app.add_middleware(
 
 # ── Fonts ──
 
+GOOGLE_FONT_DIR = "/usr/share/fonts/google"
 FONT_PATHS = {}
 
 def init_fonts():
     global FONT_PATHS
-    def find(pattern):
-        r = subprocess.run(["fc-match", "-f", "%{file}", pattern], capture_output=True, text=True)
-        p = r.stdout.strip()
-        return p if os.path.exists(p) else None
-    FONT_PATHS = {
-        "gothic":      find("Noto Sans CJK JP:weight=regular"),
-        "gothic_bold": find("Noto Sans CJK JP:weight=bold"),
-        "mincho":      find("Noto Serif CJK JP:weight=regular"),
-        "mincho_bold": find("Noto Serif CJK JP:weight=bold"),
-        "light":       find("Noto Sans CJK JP:weight=light"),
-    }
+
+    # Prefer Google Fonts (Noto Sans JP / Noto Serif JP) downloaded in Dockerfile
+    gf_sans = os.path.join(GOOGLE_FONT_DIR, "NotoSansJP.ttf")
+    gf_serif = os.path.join(GOOGLE_FONT_DIR, "NotoSerifJP.ttf")
+
+    if os.path.exists(gf_sans) and os.path.exists(gf_serif):
+        FONT_PATHS = {
+            "gothic":      gf_sans,
+            "gothic_bold": gf_sans,
+            "mincho":      gf_serif,
+            "mincho_bold": gf_serif,
+            "light":       gf_sans,
+        }
+        print("  Using Google Fonts (Noto Sans JP / Noto Serif JP)")
+    else:
+        # Fallback: system fonts-noto-cjk
+        def find(pattern):
+            r = subprocess.run(["fc-match", "-f", "%{file}", pattern], capture_output=True, text=True)
+            p = r.stdout.strip()
+            return p if os.path.exists(p) else None
+        FONT_PATHS = {
+            "gothic":      find("Noto Sans CJK JP:weight=regular"),
+            "gothic_bold": find("Noto Sans CJK JP:weight=bold"),
+            "mincho":      find("Noto Serif CJK JP:weight=regular"),
+            "mincho_bold": find("Noto Serif CJK JP:weight=bold"),
+            "light":       find("Noto Sans CJK JP:weight=light"),
+        }
+        print("  Fallback: system Noto CJK fonts")
+
     for k, v in FONT_PATHS.items():
         print(f"  Font [{k}]: {v}")
 
@@ -361,18 +380,21 @@ def rebuild_pdf(
 
                 span_idx += 1
 
-    # 出力画像 (clip対応)
+    # プレビューPNG (clip対応)
     mat = fitz.Matrix(dpi / 72, dpi / 72)
     clip = fitz.Rect(cx0, cy0, cx1, cy1)
     pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
     png_bytes = pix.tobytes("png")
 
-    # 画像ベースPDF
-    img_doc = fitz.open()
-    img_page = img_doc.new_page(width=region_w, height=region_h)
-    img_page.insert_image(fitz.Rect(0, 0, region_w, region_h), pixmap=pix)
+    # ベクターPDF出力 (元PDFの品質を維持、画像化しない)
+    if clip_rect:
+        page.set_cropbox(fitz.Rect(cx0, cy0, cx1, cy1))
+
+    # 対象ページのみ抽出
+    out_doc = fitz.open()
+    out_doc.insert_pdf(doc, from_page=page_index, to_page=page_index)
     pdf_buf = io.BytesIO()
-    img_doc.save(pdf_buf, garbage=4, deflate=True)
+    out_doc.save(pdf_buf, garbage=4, deflate=True)
 
     return pdf_buf.getvalue(), png_bytes
 
