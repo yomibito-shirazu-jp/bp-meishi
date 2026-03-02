@@ -346,7 +346,8 @@ def rebuild_pdf(
             fonts_cache[fc] = fitz.Font(fontfile=path)
         return fonts_cache[fc]
 
-    # 元ページの上に直接上書き (編集箇所のみ)
+    # === Pass 1: Redaction — 編集箇所の元テキストを除去 (画像は保持) ===
+    draw_tasks = []  # (origin, new_text, font_class, size, color) for pass 2
     span_idx = 0
     for block in page.get_text("dict")["blocks"]:
         if "lines" not in block:
@@ -362,30 +363,39 @@ def rebuild_pdf(
 
                 if sid in raw_edits:
                     bbox = fitz.Rect(span["bbox"])
-                    # Step 1: 白塗りで元テキストを消す (少し広めに)
-                    page.draw_rect(
-                        bbox + (-0.5, -0.5, 0.5, 0.5),
-                        fill=(1, 1, 1), color=None, overlay=True,
-                    )
-                    # Step 2: 新テキストを描画 (空文字なら描画しない)
+                    # Redaction annotation (白塗り、テキストのみ除去)
+                    page.add_redact_annot(bbox, fill=(1, 1, 1))
+                    # 描画タスクを記録
                     new_text = raw_edits[sid]
                     if new_text:
-                        fc = classify_font(span["font"])
-                        # 元テキストの色を保持 (PyMuPDF color = int RGB)
                         sc = span.get("color", 0)
                         txt_color = (
                             ((sc >> 16) & 0xFF) / 255,
                             ((sc >> 8) & 0xFF) / 255,
                             (sc & 0xFF) / 255,
                         )
-                        tw = fitz.TextWriter(page.rect)
-                        tw.append(
-                            fitz.Point(span["origin"][0], span["origin"][1]),
-                            new_text, font=get_font(fc), fontsize=span["size"],
-                        )
-                        tw.write_text(page, color=txt_color)
+                        draw_tasks.append({
+                            "origin": span["origin"],
+                            "text": new_text,
+                            "font_class": classify_font(span["font"]),
+                            "size": span["size"],
+                            "color": txt_color,
+                        })
 
                 span_idx += 1
+
+    # Redaction を適用 (テキストのみ除去、画像は保持)
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+
+    # === Pass 2: 新テキストを描画 ===
+    for task in draw_tasks:
+        tw = fitz.TextWriter(page.rect)
+        tw.append(
+            fitz.Point(task["origin"][0], task["origin"][1]),
+            task["text"], font=get_font(task["font_class"]),
+            fontsize=task["size"],
+        )
+        tw.write_text(page, color=task["color"])
 
     # プレビューPNG (修正済みページから直接レンダリング)
     mat = fitz.Matrix(dpi / 72, dpi / 72)
