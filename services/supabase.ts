@@ -74,8 +74,14 @@ export const saveProject = async (project: CardProject): Promise<CardProject> =>
   if (project.rebuilt_pdf_b64) row.rebuilt_pdf_b64 = project.rebuilt_pdf_b64;
   if (project.rebuilt_png_b64) row.rebuilt_png_b64 = project.rebuilt_png_b64;
   if (project.raw_id_map) row.raw_id_map = project.raw_id_map;
-  if (project.page_index !== undefined) row.page_index = project.page_index;
-  if (project.clip_rect) row.clip_rect = project.clip_rect;
+  // page_index / clip_rect は raw_id_map の中にJSONとして含める
+  // (Supabaseスキーマにカラムが未追加のため、別途保存)
+  if (project.page_index !== undefined || project.clip_rect) {
+    row.raw_id_map = {
+      ...(project.raw_id_map || {}),
+      _meta: { page_index: project.page_index ?? 0, clip_rect: project.clip_rect ?? null },
+    };
+  }
 
   const { data, error } = await supabase
     .from('card_projects')

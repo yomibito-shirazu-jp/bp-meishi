@@ -1,5 +1,5 @@
 {
-  "name": "BizCard Tracer & Print Gen",
-  "description": "Upload existing business card PDFs, extract data using Gemini AI, categorize by company, and generate new print-ready PDF templates.",
+  "name": "名刺作成し太郎",
+  "description": "名刺PDFをアップロードし、テキスト・フォント・座標を自動抽出。AI補正・編集・再構築してPDF出力。",
   "requestFramePermissions": []
 }

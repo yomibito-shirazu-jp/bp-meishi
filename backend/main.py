@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 
-app = FastAPI(title="名刺マネージャー API")
+app = FastAPI(title="名刺作成し太郎 API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,12 +30,117 @@ app.add_middleware(
 # ── Fonts ──
 
 GOOGLE_FONT_DIR = "/usr/share/fonts/google"
-FONT_PATHS = {}
+LOCAL_FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
+if not os.path.isdir(LOCAL_FONT_DIR):
+    LOCAL_FONT_DIR = "/app/fonts"  # Docker環境
+
+FONT_PATHS = {}          # gothic/mincho/light フォールバック用
+FONT_INDEX = {}           # { family_key: { weight_key: filepath, ... }, ... }
+FONT_FILE_INDEX = {}      # { normalized_filename: filepath }  完全一致用
+
+# Weight keywords in priority order
+_WEIGHT_REGULAR = ["roman", "regular", "book", "medium", "std", "55"]
+_WEIGHT_BOLD = ["bold", "demi", "heavy", "semibold", "black", "65", "75"]
+_WEIGHT_LIGHT = ["light", "thin", "extralight", "ultralight", "35", "45"]
+
+
+def _normalize(name: str) -> str:
+    """フォント名を正規化: 小文字化, 記号除去"""
+    return re.sub(r'[-_\s.]+', '', name.lower())
+
+
+def _detect_weight(filename_lower: str) -> str:
+    """ファイル名からweight分類を推定"""
+    for w in _WEIGHT_BOLD:
+        if w in filename_lower:
+            return "bold"
+    for w in _WEIGHT_LIGHT:
+        if w in filename_lower:
+            return "light"
+    return "regular"
+
+
+def _build_font_index():
+    """LOCAL_FONT_DIR を再帰スキャンしてフォントインデックスを構築"""
+    global FONT_INDEX, FONT_FILE_INDEX
+    FONT_INDEX = {}
+    FONT_FILE_INDEX = {}
+
+    if not os.path.isdir(LOCAL_FONT_DIR):
+        print(f"  Local font dir not found: {LOCAL_FONT_DIR}")
+        return
+
+    for dirpath, _dirnames, filenames in os.walk(LOCAL_FONT_DIR):
+        family_dir = os.path.basename(dirpath)
+        family_key = _normalize(family_dir)
+
+        for fn in filenames:
+            if not fn.lower().endswith(('.ttf', '.otf')):
+                continue
+            full_path = os.path.join(dirpath, fn)
+            stem = os.path.splitext(fn)[0]
+            fn_norm = _normalize(stem)
+
+            # ファイル名完全一致インデックス
+            FONT_FILE_INDEX[fn_norm] = full_path
+
+            # ファミリ + weight インデックス
+            if family_key not in FONT_INDEX:
+                FONT_INDEX[family_key] = {}
+            weight = _detect_weight(fn.lower())
+            # 同weightが既にあれば上書きしない (最初のものを優先)
+            if weight not in FONT_INDEX[family_key]:
+                FONT_INDEX[family_key][weight] = full_path
+
+    print(f"  Font index: {len(FONT_INDEX)} families, {len(FONT_FILE_INDEX)} files")
+
+
+def match_font(pdf_font_name: str, is_bold: bool = False) -> str | None:
+    """PDFのフォント名からローカルフォントファイルをマッチング"""
+    if not pdf_font_name or not FONT_INDEX:
+        return None
+
+    norm = _normalize(pdf_font_name)
+
+    # 1. ファイル名完全一致 (正規化後)
+    if norm in FONT_FILE_INDEX:
+        return FONT_FILE_INDEX[norm]
+
+    # 2. ファミリ名部分一致 — 長いキーを優先 (より具体的なマッチ)
+    best_family = None
+    best_len = 0
+    for fkey, weights in FONT_INDEX.items():
+        if fkey in norm and len(fkey) > best_len:
+            best_family = weights
+            best_len = len(fkey)
+
+    if best_family:
+        # weight選択
+        if is_bold:
+            for w in ["bold", "heavy", "demi", "black", "regular"]:
+                if w in best_family:
+                    return best_family[w]
+        else:
+            # PDF名自体にweightヒントがあればそれを使う
+            detected = _detect_weight(norm)
+            if detected in best_family:
+                return best_family[detected]
+            for w in ["regular", "light", "bold"]:
+                if w in best_family:
+                    return best_family[w]
+        # 何かあれば返す
+        return next(iter(best_family.values()))
+
+    return None
+
 
 def init_fonts():
     global FONT_PATHS
 
-    # Prefer Google Fonts (Noto Sans JP / Noto Serif JP) downloaded in Dockerfile
+    # ローカルフォントインデックスを構築
+    _build_font_index()
+
+    # Noto フォント (日本語フォールバック)
     gf_sans = os.path.join(GOOGLE_FONT_DIR, "NotoSansJP.ttf")
     gf_serif = os.path.join(GOOGLE_FONT_DIR, "NotoSerifJP.ttf")
 
@@ -47,9 +152,8 @@ def init_fonts():
             "mincho_bold": gf_serif,
             "light":       gf_sans,
         }
-        print("  Using Google Fonts (Noto Sans JP / Noto Serif JP)")
+        print("  Noto fallback: Google Fonts (Noto Sans JP / Noto Serif JP)")
     else:
-        # Fallback: system fonts-noto-cjk
         def find(pattern):
             r = subprocess.run(["fc-match", "-f", "%{file}", pattern], capture_output=True, text=True)
             p = r.stdout.strip()
@@ -61,7 +165,7 @@ def init_fonts():
             "mincho_bold": find("Noto Serif CJK JP:weight=bold"),
             "light":       find("Noto Sans CJK JP:weight=light"),
         }
-        print("  Fallback: system Noto CJK fonts")
+        print("  Noto fallback: system Noto CJK fonts")
 
     for k, v in FONT_PATHS.items():
         print(f"  Font [{k}]: {v}")
@@ -378,11 +482,30 @@ def rebuild_pdf(
 
     # フォントキャッシュ
     fonts_cache = {}
-    def get_font(fc):
-        if fc not in fonts_cache:
+    def get_font(fc, is_bold=False, original_font_name=None):
+        # 1. ローカルフォントマッチング (元のフォント名から直接検索)
+        if original_font_name:
+            cache_key = f"local:{_normalize(original_font_name)}:{is_bold}"
+            if cache_key not in fonts_cache:
+                matched = match_font(original_font_name, is_bold)
+                if matched:
+                    try:
+                        fonts_cache[cache_key] = fitz.Font(fontfile=matched)
+                    except Exception:
+                        fonts_cache[cache_key] = None
+                else:
+                    fonts_cache[cache_key] = None
+            if fonts_cache[cache_key] is not None:
+                return fonts_cache[cache_key]
+
+        # 2. フォールバック: Noto フォント (日本語対応)
+        if is_bold and fc in ("gothic", "light"):
+            fc = "gothic_bold"
+        key = f"noto:{fc}"
+        if key not in fonts_cache:
             path = FONT_PATHS.get(fc) or FONT_PATHS.get("gothic")
-            fonts_cache[fc] = fitz.Font(fontfile=path)
-        return fonts_cache[fc]
+            fonts_cache[key] = fitz.Font(fontfile=path)
+        return fonts_cache[key]
 
     # Collect all affected raw_ids (text edits OR overrides)
     affected_ids = set(raw_edits.keys()) | set(raw_overrides.keys())
@@ -404,7 +527,8 @@ def rebuild_pdf(
 
                 if sid in affected_ids:
                     bbox = fitz.Rect(span["bbox"])
-                    page.add_redact_annot(bbox, fill=(1, 1, 1))
+                    # fill=False → 背景を塗りつぶさず、テキストだけ除去
+                    page.add_redact_annot(bbox, fill=False)
 
                     # Determine text: edited or original
                     if sid in raw_edits:
@@ -419,6 +543,9 @@ def rebuild_pdf(
                             ((sc >> 8) & 0xFF) / 255,
                             (sc & 0xFF) / 255,
                         )
+                        # flags: bit 4 (16) = bold, bit 1 (2) = italic
+                        span_flags = span.get("flags", 0) or 0
+                        is_bold = bool(span_flags & 16)
                         ov = raw_overrides.get(sid, {})
                         draw_tasks.append({
                             "origin": ov.get("origin", span["origin"]),
@@ -426,6 +553,8 @@ def rebuild_pdf(
                             "font_class": ov.get("font_class", classify_font(span["font"])),
                             "size": ov.get("size_pt", span["size"]),
                             "color": txt_color,
+                            "is_bold": is_bold,
+                            "original_font": span["font"],
                         })
 
                 span_idx += 1
@@ -438,7 +567,8 @@ def rebuild_pdf(
         tw = fitz.TextWriter(page.rect)
         tw.append(
             fitz.Point(task["origin"][0], task["origin"][1]),
-            task["text"], font=get_font(task["font_class"]),
+            task["text"],
+            font=get_font(task["font_class"], task.get("is_bold", False), task.get("original_font")),
             fontsize=task["size"],
         )
         tw.write_text(page, color=task["color"])
@@ -480,7 +610,12 @@ def startup():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "fonts": {k: bool(v) for k, v in FONT_PATHS.items()}}
+    return {
+        "status": "ok",
+        "fonts": {k: bool(v) for k, v in FONT_PATHS.items()},
+        "local_font_families": len(FONT_INDEX),
+        "local_font_files": len(FONT_FILE_INDEX),
+    }
 
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):

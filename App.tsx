@@ -447,13 +447,11 @@ const App: React.FC = () => {
             className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 text-white"
             style={{ background: C.accent }}
           >
-            B
+            名
           </div>
           {!sidebarCollapsed && (
             <span className="text-sm font-bold tracking-tight leading-tight" style={{ color: C.text }}>
-              BizCard Tracer
-              <br />
-              <span className="text-[10px] font-normal" style={{ color: C.muted }}>& Print Gen</span>
+              名刺作成し太郎
             </span>
           )}
         </div>
@@ -874,8 +872,8 @@ const App: React.FC = () => {
                         onFocus={() => setSelectedId(s.id)}
                         className="w-full px-2 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 bg-white"
                         style={{
-                          borderColor: changed ? '#8b5cf6' : C.border,
-                          color: changed ? '#7c3aed' : C.text,
+                          borderColor: changed ? C.accent : C.border,
+                          color: changed ? C.accent : C.text,
                           fontWeight: changed ? 600 : 400,
                         }}
                       />
@@ -997,7 +995,7 @@ const App: React.FC = () => {
             ))}
             {editCount > 0 && previewTab === 'edit' && (
               <span className="text-[10px] font-medium px-2 py-0.5 rounded-full ml-1"
-                style={{ background: '#faf5ff', color: '#7c3aed', border: '1px solid #e9d5ff' }}>
+                style={{ background: C.accentBg, color: C.accent, border: `1px solid ${C.accentBorder}` }}>
                 {editCount}件変更中
               </span>
             )}
@@ -1092,14 +1090,14 @@ const App: React.FC = () => {
                         border: isActive
                           ? `2px solid ${C.accent}`
                           : isModified
-                            ? '2px solid #7c3aed'
+                            ? `2px solid ${C.accent}`
                             : `1px solid rgba(13,148,136,0.25)`,
                         background: isDragging
                           ? 'rgba(13,148,136,0.2)'
                           : isActive
                             ? 'rgba(13,148,136,0.12)'
                             : isModified
-                              ? 'rgba(124,58,237,0.08)'
+                              ? 'rgba(13,148,136,0.08)'
                               : 'rgba(13,148,136,0.04)',
                         borderRadius: '3px',
                         transition: isDragging ? 'none' : 'all 0.1s',
@@ -1113,7 +1111,7 @@ const App: React.FC = () => {
                       {isModified && (
                         <span style={{
                           background: 'rgba(255,255,255,0.92)',
-                          color: '#7c3aed',
+                          color: C.accent,
                           fontWeight: 600,
                           fontSize: `max(9px, ${s.h_pct * 0.75}vh)`,
                           whiteSpace: 'nowrap',

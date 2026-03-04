@@ -13,9 +13,10 @@ RUN mkdir -p /usr/share/fonts/google \
     && fc-cache -fv
 
 WORKDIR /app
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY main.py .
+COPY fonts/ /app/fonts/
+COPY backend/main.py .
 
 ENV PORT=8080
 EXPOSE 8080
