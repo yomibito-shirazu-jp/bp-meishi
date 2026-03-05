@@ -1,0 +1,12 @@
+# 巨大な和文フォントディレクトリ (1.4GB) — 主要書体は fonts/Morisawa/ にコピー済み
+fonts/和文書体*
+# スペース入りディレクトリ (Docker COPY 互換性問題)
+fonts/Rockwell*
+# フロントエンド / 不要ファイル
+node_modules
+dist
+.git
+.claude
+*.md
+.env*
+ERROR
