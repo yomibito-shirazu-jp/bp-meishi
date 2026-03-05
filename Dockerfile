@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    fonts-noto-cjk fonts-noto-cjk-extra fontconfig wget \
+    fontconfig wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Download Google Fonts (Noto Sans JP / Noto Serif JP) — variable weight TTF
@@ -17,7 +17,6 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ローカルフォント (欧文34ファミリ + 和文モリサワPro主要19書体)
-# .dockerignore で巨大ディレクトリ/スペース入りパスを除外済み
 COPY fonts/ /app/fonts/
 
 COPY backend/main.py .
