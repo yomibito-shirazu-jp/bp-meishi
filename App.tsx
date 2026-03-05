@@ -3,10 +3,12 @@ import { Span, PageData, CardProject, AppState } from './types';
 import { analyzePdf, rebuildPdf, SpanOverride } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
+import { runAgentInstruction, AgentMessage } from './services/agent';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
   Search, Building2, Inbox, ZoomIn, ZoomOut, Maximize, Move,
+  MessageSquare, Send, Bot, Sparkles, Wand2,
 } from 'lucide-react';
 
 /* ═══════════════════════════════════════════
@@ -97,6 +99,14 @@ const App: React.FC = () => {
   const previewImgRef = useRef<HTMLDivElement>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // ── AI Chat ──
+  const [chatMessages, setChatMessages] = useState<AgentMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [showChatInEditor, setShowChatInEditor] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
   // ── Derived ──
   const flash = (text: string, type: 'info' | 'ok' | 'error' = 'info') => {
@@ -410,6 +420,126 @@ const App: React.FC = () => {
     loadProjects();
   };
 
+  // ── AI Agent ──
+  const handleAgentSend = async (message?: string) => {
+    const text = message || chatInput.trim();
+    if (!text || chatLoading) return;
+    setChatInput('');
+
+    const userMsg: AgentMessage = {
+      role: 'user',
+      content: text,
+      timestamp: new Date().toISOString(),
+    };
+    setChatMessages(prev => [...prev, userMsg]);
+    setChatLoading(true);
+
+    try {
+      const imageB64 = originalPng?.replace('data:image/png;base64,', '') || null;
+      const response = await runAgentInstruction(
+        text,
+        spans,
+        pageMM,
+        imageB64,
+        chatMessages,
+      );
+
+      // Apply actions
+      if (response.actions && response.actions.length > 0) {
+        let updatedSpans = [...spans];
+        for (const action of response.actions) {
+          if (action.type === 'update_span' && action.spanId && action.updates) {
+            updatedSpans = updatedSpans.map(s =>
+              s.id === action.spanId ? { ...s, ...action.updates } : s
+            );
+          }
+          if (action.type === 'update_style' && action.spanId && action.updates) {
+            updatedSpans = updatedSpans.map(s =>
+              s.id === action.spanId ? { ...s, ...action.updates } : s
+            );
+          }
+          if (action.type === 'move_span' && action.spanId && action.updates) {
+            updatedSpans = updatedSpans.map(s => {
+              if (s.id !== action.spanId) return s;
+              const newS = { ...s, ...action.updates };
+              // Recalculate origin from pct for backend
+              const pageW = pageMM[0] / 25.4 * 72;
+              const pageH = pageMM[1] / 25.4 * 72;
+              newS.origin = [
+                Math.round(((newS.x_pct / 100) * pageW) * 100) / 100,
+                Math.round((((newS.y_pct + newS.h_pct) / 100) * pageH) * 100) / 100,
+              ] as [number, number];
+              return newS;
+            });
+          }
+          if (action.type === 'delete_span' && action.spanId) {
+            updatedSpans = updatedSpans.filter(s => s.id !== action.spanId);
+          }
+          if (action.type === 'add_span' && action.updates) {
+            const newSpan: Span = {
+              id: `span_${Math.random().toString(36).substring(2, 9)}`,
+              text: action.updates.text || 'テキスト',
+              font_original: 'AI Generated',
+              font_class: action.updates.font_class || 'gothic',
+              size_pt: action.updates.size_pt || 12,
+              bbox: [0, 0, 0, 0], // AI created, no bbox
+              origin: [0, 0] as [number, number],
+              x_pct: action.updates.x_pct || 10,
+              y_pct: action.updates.y_pct || 10,
+              w_pct: action.updates.w_pct || 20,
+              h_pct: action.updates.h_pct || 5,
+              ...action.updates,
+            };
+            
+            // Recalculate origin if missing but pct is available
+            const pageW = pageMM[0] / 25.4 * 72;
+            const pageH = pageMM[1] / 25.4 * 72;
+            newSpan.origin = [
+              Math.round(((newSpan.x_pct / 100) * pageW) * 100) / 100,
+              Math.round((((newSpan.y_pct + newSpan.h_pct) / 100) * pageH) * 100) / 100,
+            ];
+            
+            updatedSpans.push(newSpan);
+          }
+        }
+        setSpans(updatedSpans);
+        setRebuiltPng(null);
+        setPreviewTab('edit');
+      }
+
+      const assistantMsg: AgentMessage = {
+        role: 'assistant',
+        content: response.message,
+        timestamp: new Date().toISOString(),
+        actions: response.actions,
+      };
+      setChatMessages(prev => [...prev, assistantMsg]);
+
+      // If we're in AI_CHAT mode and spans are loaded, switch to editor
+      if (view === AppState.AI_CHAT && response.actions.length > 0) {
+        setView(AppState.EDIT);
+        setShowChatInEditor(true);
+      }
+    } catch (err: any) {
+      const errorMsg: AgentMessage = {
+        role: 'assistant',
+        content: `エラーが発生しました: ${err.message}`,
+        timestamp: new Date().toISOString(),
+      };
+      setChatMessages(prev => [...prev, errorMsg]);
+    } finally {
+      setChatLoading(false);
+      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+    }
+  };
+
+  const handleChatKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleAgentSend();
+    }
+  };
+
   /* ═══════════════════════════════════════════
      Render Functions
      ═══════════════════════════════════════════ */
@@ -435,6 +565,7 @@ const App: React.FC = () => {
     const items = [
       { icon: LayoutDashboard, label: '名刺一覧', badge: 0, state: AppState.DASHBOARD },
       { icon: Inbox, label: '受信トレイ', badge: inboxProjects.length, state: AppState.INBOX },
+      { icon: Wand2, label: 'AI作成モード', badge: 0, state: AppState.AI_CHAT },
     ];
     return (
       <div
@@ -459,11 +590,15 @@ const App: React.FC = () => {
         {/* Nav */}
         <nav className="flex-1 py-3 px-2 space-y-1">
           {items.map(item => {
-            const active = view === item.state || (item.state === AppState.DASHBOARD && view === AppState.EDIT);
+            const active = view === item.state || (item.state === AppState.DASHBOARD && view === AppState.EDIT) || (item.state === AppState.AI_CHAT && view === AppState.EDIT && showChatInEditor);
             return (
               <button
                 key={item.label}
-                onClick={() => item.state === AppState.DASHBOARD ? resetAll() : setView(item.state)}
+                onClick={() => {
+                  if (item.state === AppState.DASHBOARD) { resetAll(); setShowChatInEditor(false); }
+                  else if (item.state === AppState.AI_CHAT) { setView(AppState.AI_CHAT); setShowChatInEditor(false); }
+                  else setView(item.state);
+                }}
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors"
                 style={active
                   ? { background: C.accentBg, color: C.accent, borderLeft: `3px solid ${C.accent}` }
@@ -513,6 +648,12 @@ const App: React.FC = () => {
         )}
         {view === AppState.DASHBOARD && <h2 className="text-base font-bold text-slate-800">名刺一覧</h2>}
         {view === AppState.INBOX && <h2 className="text-base font-bold text-slate-800">受信トレイ</h2>}
+        {view === AppState.AI_CHAT && (
+          <div className="flex items-center gap-2">
+            <Sparkles size={16} style={{ color: C.accent }} />
+            <h2 className="text-base font-bold text-slate-800">AI作成モード</h2>
+          </div>
+        )}
         {view === AppState.EDIT && (
           <div className="flex items-center gap-2">
             <CreditCard size={16} className="text-slate-400" />
@@ -532,16 +673,36 @@ const App: React.FC = () => {
       </div>
       <div className="flex items-center gap-2">
         {(view === AppState.DASHBOARD || view === AppState.INBOX) && (
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90"
-            style={{ background: C.accent }}
-          >
-            <Plus size={16} /> 名刺PDFをアップロード
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setView(AppState.AI_CHAT); setShowChatInEditor(false); }}
+              className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90 border"
+              style={{ background: 'linear-gradient(135deg, #0d9488, #06b6d4)', color: 'white' }}
+            >
+              <Wand2 size={16} /> AIで作成
+            </button>
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90"
+              style={{ background: C.accent }}
+            >
+              <Plus size={16} /> PDFアップロード
+            </button>
+          </div>
         )}
         {view === AppState.EDIT && (
           <>
+            <button
+              onClick={() => setShowChatInEditor(!showChatInEditor)}
+              className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-lg border transition-colors"
+              style={{
+                borderColor: showChatInEditor ? C.accentBorder : C.border,
+                background: showChatInEditor ? C.accentBg : 'transparent',
+                color: showChatInEditor ? C.accent : C.textSec,
+              }}
+            >
+              <MessageSquare size={15} /> AI指示
+            </button>
             <button
               onClick={handleSave}
               className="flex items-center gap-1.5 text-slate-600 hover:text-slate-800 text-sm font-medium px-3 py-2 rounded-lg hover:bg-slate-50 border transition-colors"
@@ -1151,6 +1312,185 @@ const App: React.FC = () => {
     </div>
   );
 
+  // ── Chat Panel Component (reusable) ──
+  const renderChatPanel = (isStandalone = false) => (
+    <div
+      className={`flex flex-col ${isStandalone ? 'flex-1' : 'w-[380px] shrink-0 border-l'}`}
+      style={{ background: C.card, borderColor: C.border }}
+    >
+      {/* Chat Header */}
+      <div className="px-4 py-3 border-b flex items-center justify-between shrink-0" style={{ borderColor: C.border }}>
+        <div className="flex items-center gap-2">
+          <div
+            className="w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: 'linear-gradient(135deg, #0d9488, #06b6d4)' }}
+          >
+            <Bot size={14} className="text-white" />
+          </div>
+          <div>
+            <h3 className="text-xs font-bold" style={{ color: C.text }}>AI エージェント</h3>
+            <p className="text-[10px]" style={{ color: C.muted }}>
+              {chatLoading ? '考え中...' : '自然言語で名刺を編集'}
+            </p>
+          </div>
+        </div>
+        {chatMessages.length > 0 && (
+          <button
+            onClick={() => setChatMessages([])}
+            className="text-[10px] px-2 py-1 rounded-md hover:bg-slate-50 transition-colors"
+            style={{ color: C.muted }}
+          >
+            クリア
+          </button>
+        )}
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+        {chatMessages.length === 0 && (
+          <div className="text-center py-8">
+            <div
+              className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4"
+              style={{ background: 'linear-gradient(135deg, rgba(13,148,136,0.1), rgba(6,182,212,0.1))' }}
+            >
+              <Sparkles size={24} style={{ color: C.accent }} />
+            </div>
+            <p className="text-sm font-bold mb-2" style={{ color: C.text }}>何をしましょうか？</p>
+            <p className="text-xs leading-relaxed mb-4" style={{ color: C.muted }}>
+              自然言語で名刺の編集を指示できます
+            </p>
+            <div className="space-y-2">
+              {[
+                '電話番号を 03-1234-5678 に変更して',
+                '名前のフォントを明朝体にして',
+                '会社名のサイズを大きくして',
+                'メールアドレスを更新して',
+              ].map((hint, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleAgentSend(hint)}
+                  className="block w-full text-left px-3 py-2 rounded-lg text-xs transition-all hover:scale-[1.01] border"
+                  style={{
+                    background: C.surface,
+                    color: C.textSec,
+                    borderColor: C.border,
+                  }}
+                >
+                  <span style={{ color: C.accent }}>→</span> {hint}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {chatMessages.map((msg, i) => (
+          <div
+            key={i}
+            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            <div
+              className={`max-w-[85%] px-3 py-2 rounded-xl text-sm leading-relaxed ${
+                msg.role === 'user'
+                  ? 'rounded-br-md'
+                  : 'rounded-bl-md'
+              }`}
+              style={{
+                background: msg.role === 'user'
+                  ? 'linear-gradient(135deg, #0d9488, #0f766e)'
+                  : C.surface,
+                color: msg.role === 'user' ? 'white' : C.text,
+                border: msg.role === 'user' ? 'none' : `1px solid ${C.border}`,
+              }}
+            >
+              {msg.role === 'assistant' && (
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Bot size={12} style={{ color: C.accent }} />
+                  <span className="text-[10px] font-bold" style={{ color: C.accent }}>AI</span>
+                </div>
+              )}
+              <p className="whitespace-pre-wrap">{msg.content}</p>
+              {msg.actions && msg.actions.length > 0 && (
+                <div className="mt-2 pt-2 space-y-1" style={{ borderTop: `1px solid ${C.border}` }}>
+                  {msg.actions.map((action, j) => (
+                    <div
+                      key={j}
+                      className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-md"
+                      style={{ background: C.accentBg, color: C.accent }}
+                    >
+                      <Sparkles size={10} />
+                      <span>{action.description}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {chatLoading && (
+          <div className="flex justify-start">
+            <div
+              className="px-4 py-3 rounded-xl rounded-bl-md"
+              style={{ background: C.surface, border: `1px solid ${C.border}` }}
+            >
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 rounded-full animate-bounce" style={{ background: C.accent, animationDelay: '0ms' }} />
+                  <div className="w-2 h-2 rounded-full animate-bounce" style={{ background: C.accent, animationDelay: '150ms' }} />
+                  <div className="w-2 h-2 rounded-full animate-bounce" style={{ background: C.accent, animationDelay: '300ms' }} />
+                </div>
+                <span className="text-[11px]" style={{ color: C.muted }}>解析中...</span>
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* Input */}
+      <div className="px-3 py-3 border-t shrink-0" style={{ borderColor: C.border }}>
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={chatInputRef}
+            value={chatInput}
+            onChange={e => setChatInput(e.target.value)}
+            onKeyDown={handleChatKeyDown}
+            placeholder="名刺の編集指示を入力..."
+            rows={1}
+            className="flex-1 px-3 py-2 border rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-teal-300 bg-white"
+            style={{
+              borderColor: C.border,
+              minHeight: '38px',
+              maxHeight: '100px',
+            }}
+          />
+          <button
+            onClick={() => handleAgentSend()}
+            disabled={!chatInput.trim() || chatLoading}
+            className="p-2.5 rounded-xl text-white transition-all shrink-0"
+            style={{
+              background: chatInput.trim() && !chatLoading
+                ? 'linear-gradient(135deg, #0d9488, #06b6d4)'
+                : '#cbd5e1',
+              opacity: chatInput.trim() && !chatLoading ? 1 : 0.5,
+            }}
+          >
+            <Send size={16} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── AI Chat Standalone View ──
+  const renderAIChat = () => (
+    <div className="flex-1 flex overflow-hidden" style={{ background: C.bg }}>
+      <div className="max-w-2xl mx-auto flex flex-col w-full">
+        {renderChatPanel(true)}
+      </div>
+    </div>
+  );
+
   /* ═══════════════════════════════════════════
      Main Render
      ═══════════════════════════════════════════ */
@@ -1163,7 +1503,15 @@ const App: React.FC = () => {
         {renderHeader()}
         {view === AppState.DASHBOARD && renderDashboard()}
         {view === AppState.INBOX && renderInbox()}
-        {view === AppState.EDIT && renderEditor()}
+        {view === AppState.AI_CHAT && renderAIChat()}
+        {view === AppState.EDIT && (
+          <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex flex-col min-w-0">
+              {renderEditor()}
+            </div>
+            {showChatInEditor && renderChatPanel()}
+          </div>
+        )}
       </div>
 
       {/* Global loading overlay */}

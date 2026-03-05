@@ -32,23 +32,33 @@ const setLocal = (projects: CardProject[]) => {
 
 export const listProjects = async (): Promise<CardProject[]> => {
   if (!supabase) return getLocal();
-  const { data, error } = await supabase
-    .from('card_projects')
-    .select('*')
-    .order('created_at', { ascending: false });
-  if (error) throw error;
-  return data ?? [];
+  try {
+    const { data, error } = await supabase
+      .from('card_projects')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
+  } catch (err) {
+    console.warn('Supabase listProjects failed, falling back to localStorage:', err);
+    return getLocal();
+  }
 };
 
 export const getProject = async (id: string): Promise<CardProject | null> => {
   if (!supabase) return getLocal().find(p => p.id === id) || null;
-  const { data, error } = await supabase
-    .from('card_projects')
-    .select('*')
-    .eq('id', id)
-    .single();
-  if (error) throw error;
-  return data;
+  try {
+    const { data, error } = await supabase
+      .from('card_projects')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    console.warn('Supabase getProject failed, falling back to localStorage:', err);
+    return getLocal().find(p => p.id === id) || null;
+  }
 };
 
 export const saveProject = async (project: CardProject): Promise<CardProject> => {
@@ -61,6 +71,8 @@ export const saveProject = async (project: CardProject): Promise<CardProject> =>
     setLocal(projects);
     return updated;
   }
+
+  // Build row with only columns known to exist in Supabase schema
   const row: Record<string, unknown> = {
     id: project.id,
     name: project.name,
@@ -73,23 +85,34 @@ export const saveProject = async (project: CardProject): Promise<CardProject> =>
   };
   if (project.rebuilt_pdf_b64) row.rebuilt_pdf_b64 = project.rebuilt_pdf_b64;
   if (project.rebuilt_png_b64) row.rebuilt_png_b64 = project.rebuilt_png_b64;
-  if (project.raw_id_map) row.raw_id_map = project.raw_id_map;
-  // page_index / clip_rect は raw_id_map の中にJSONとして含める
-  // (Supabaseスキーマにカラムが未追加のため、別途保存)
-  if (project.page_index !== undefined || project.clip_rect) {
+
+  // Store page_index / clip_rect inside raw_id_map as _meta
+  // (avoids 400 errors when these columns don't exist in DB)
+  if (project.raw_id_map || project.page_index !== undefined || project.clip_rect) {
     row.raw_id_map = {
       ...(project.raw_id_map || {}),
       _meta: { page_index: project.page_index ?? 0, clip_rect: project.clip_rect ?? null },
     };
   }
 
-  const { data, error } = await supabase
-    .from('card_projects')
-    .upsert(row)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
+  try {
+    const { data, error } = await supabase
+      .from('card_projects')
+      .upsert(row)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    console.warn('Supabase save failed, falling back to localStorage:', err);
+    const projects = getLocal();
+    const idx = projects.findIndex(p => p.id === project.id);
+    const updated = { ...project, updated_at: new Date().toISOString() };
+    if (idx >= 0) projects[idx] = updated;
+    else projects.unshift(updated);
+    setLocal(projects);
+    return updated;
+  }
 };
 
 export const deleteProject = async (id: string): Promise<void> => {

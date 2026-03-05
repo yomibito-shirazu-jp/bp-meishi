@@ -67,4 +67,5 @@ export enum AppState {
   DASHBOARD = 'DASHBOARD',
   EDIT = 'EDIT',
   INBOX = 'INBOX',
+  AI_CHAT = 'AI_CHAT',
 }

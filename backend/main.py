@@ -512,6 +512,8 @@ def rebuild_pdf(
 
     # === Pass 1: Redaction — 編集箇所の元テキストを除去 (画像は保持) ===
     draw_tasks = []
+    
+    # Process existing spans for redaction
     span_idx = 0
     for block in page.get_text("dict")["blocks"]:
         if "lines" not in block:
@@ -527,6 +529,13 @@ def rebuild_pdf(
 
                 if sid in affected_ids:
                     bbox = fitz.Rect(span["bbox"])
+                    # Shrink the bbox slightly to prevent redaction from accidentally deleting neighboring lines.
+                    # PyMuPDF removes any text intersecting the redact rect. A slightly smaller box is safer.
+                    h = bbox.height
+                    w = bbox.width
+                    if h > 0 and w > 0:
+                        bbox = bbox + (w * 0.05, h * 0.15, -w * 0.05, -h * 0.15)
+                    
                     # fill=False → 背景を塗りつぶさず、テキストだけ除去
                     page.add_redact_annot(bbox, fill=False)
 
@@ -559,8 +568,28 @@ def rebuild_pdf(
 
                 span_idx += 1
 
-    # Redaction を適用 (テキストのみ除去、画像は保持)
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+    # Add completely new spans (added via AI chat) that don't map to existing raw_ids
+    for mid, ov_data in merged_overrides.items():
+        # New spans often don't have a mapping in raw_id_map, or they map to their own new ID
+        is_new = mid not in raw_id_map or not any(rid.startswith("p") or rid.startswith("s") for rid in raw_id_map[mid])
+        if is_new and ov_data.get("text"):
+            draw_tasks.append({
+                "origin": ov_data.get("origin", [0, 0]),
+                "text": ov_data.get("text"),
+                "font_class": ov_data.get("font_class", "gothic"),
+                "size": ov_data.get("size_pt", 12.0),
+                "color": (0, 0, 0),  # Default black for new text
+                "is_bold": "bold" in ov_data.get("font_class", ""),
+                "original_font": None,
+            })
+
+    # Redaction を適用 (テキストのみ除去、画像等は極力保持)
+    try:
+        # Prevent wiping out background vector graphics if the PyMuPDF version supports it
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_GRAPHICS_NONE)
+    except TypeError:
+        # Fallback for older PyMuPDF versions
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
     # === Pass 2: 新テキストを描画 ===
     for task in draw_tasks:

@@ -2,7 +2,7 @@ import { Span } from '../types';
 
 const GOOGLE_AI_KEY = import.meta.env.VITE_GOOGLE_AI_KEY as string;
 
-const geminiUrl = (model = 'gemini-2.0-flash') =>
+const geminiUrl = (model = 'gemini-2.5-flash') =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GOOGLE_AI_KEY}`;
 
 export interface CorrectedSpan {
