@@ -1495,6 +1495,74 @@ const App: React.FC = () => {
      Main Render
      ═══════════════════════════════════════════ */
 
+  // ── Global drag & drop ──
+  const [globalDrag, setGlobalDrag] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  useEffect(() => {
+    const onDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current++;
+      if (e.dataTransfer?.types.includes('Files')) setGlobalDrag(true);
+    };
+    const onDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current--;
+      if (dragCounterRef.current <= 0) { setGlobalDrag(false); dragCounterRef.current = 0; }
+    };
+    const onDragOver = (e: DragEvent) => e.preventDefault();
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      setGlobalDrag(false);
+      dragCounterRef.current = 0;
+      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+      if (files.length === 1) {
+        handleUpload(files[0]);
+      } else if (files.length >= 2) {
+        handleMultiUpload(files);
+      }
+    };
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
+
+  // ── Multiple PDF upload (front + back) ──
+  const handleMultiUpload = async (files: File[]) => {
+    setLoading(true);
+    flash(`${files.length}枚のPDFを分析中...`, 'info');
+    try {
+      const allPagesCollected: PageData[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const data = await analyzePdf(files[i]);
+        const pages = data.pages.map((p: PageData, pi: number) => ({
+          ...p,
+          page_label: files.length === 2
+            ? (i === 0 ? `表${pi > 0 ? ` (${pi + 1})` : ''}` : `裏${pi > 0 ? ` (${pi + 1})` : ''}`)
+            : `${files[i].name.replace('.pdf', '')}${pi > 0 ? ` (${pi + 1})` : ''}`,
+        }));
+        allPagesCollected.push(...pages);
+        if (i === 0) setPdfB64(data.pdf_b64);
+      }
+      setAllPages(allPagesCollected);
+      setEditingProjectId(null);
+      await loadPage(allPagesCollected, 0);
+      setView(AppState.EDIT);
+      flash(`${allPagesCollected.length}ページ検出 (${allPagesCollected.map(p => p.page_label || `P${allPagesCollected.indexOf(p)+1}`).join('・')})`, 'ok');
+    } catch (e: any) {
+      flash(`分析エラー: ${e.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="h-screen flex text-slate-900 font-sans overflow-hidden" style={{ background: C.bg }}>
       {renderToast()}
@@ -1513,6 +1581,18 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Global drag & drop overlay */}
+      {globalDrag && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center pointer-events-none">
+          <div className="absolute inset-0 bg-teal-600/20 backdrop-blur-sm border-4 border-dashed border-teal-400 rounded-none" />
+          <div className="relative bg-white rounded-2xl p-10 shadow-2xl text-center">
+            <Upload size={48} style={{ color: C.accent }} className="mx-auto mb-4" />
+            <p className="text-xl font-bold text-slate-800">PDFをドロップ</p>
+            <p className="text-sm mt-2" style={{ color: C.muted }}>1枚 = 表裏一体 / 2枚 = 表と裏を統合</p>
+          </div>
+        </div>
+      )}
 
       {/* Global loading overlay */}
       {loading && (
