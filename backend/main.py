@@ -194,157 +194,111 @@ def _safe_color_int(span_color) -> int:
 
 # ── CID Text Cleaning ──
 
-def _clean_cid_text(text: str) -> str:
-    """CIDフォント由来の文字間スペースを除去"""
-    if not text or ' ' not in text:
-        return text
-    space_ratio = text.count(' ') / max(len(text), 1)
-    if space_ratio > 0.25:
-        text = text.replace(' ', '')
-    return text.strip()
-
-# ── Span Merging ──
-
-def merge_line_spans(raw_spans: list) -> list:
-    """
-    PyMuPDF の get_text("dict") はCIDフォントで1文字ずつ別spanになる。
-    同一行内の隣接spanを結合して、意味のある単位にする。
-    """
-    if not raw_spans:
-        return []
-
-    sorted_spans = sorted(raw_spans, key=lambda s: (s["bbox"][1], s["bbox"][0]))
-    lines = []
-    cur_line = [sorted_spans[0]]
-
-    for s in sorted_spans[1:]:
-        prev = cur_line[-1]
-        prev_mid_y = (prev["bbox"][1] + prev["bbox"][3]) / 2
-        prev_h = prev["bbox"][3] - prev["bbox"][1]
-        cur_mid_y = (s["bbox"][1] + s["bbox"][3]) / 2
-        if abs(cur_mid_y - prev_mid_y) < max(prev_h * 0.6, 2.5):
-            cur_line.append(s)
-        else:
-            lines.append(cur_line)
-            cur_line = [s]
-    lines.append(cur_line)
-
-    merged = []
-    for line in lines:
-        line_sorted = sorted(line, key=lambda s: s["bbox"][0])
-        group = [line_sorted[0]]
-
-        for s in line_sorted[1:]:
-            prev = group[-1]
-            gap = s["bbox"][0] - prev["bbox"][2]
-            prev_char_w = (prev["bbox"][2] - prev["bbox"][0]) / max(len(prev["text"].strip()), 1)
-            threshold = max(prev_char_w * 4, 3.0)
-            if gap < threshold:
-                group.append(s)
-            else:
-                merged.append(_combine_group(group))
-                group = [s]
-        merged.append(_combine_group(group))
-
-    return merged
-
-
-def _combine_group(group: list) -> dict:
-    """複数のraw spanを1つに結合"""
-    if len(group) == 1:
-        g = group[0]
-        g["text"] = g["text"].strip()
-        return g
-
-    single_char = sum(1 for s in group if len(s["text"].strip()) <= 1)
-    is_cid = single_char > len(group) * 0.4
-
-    if is_cid:
-        text = "".join(s["text"].strip() for s in group)
-    else:
-        text = "".join(s["text"] for s in group)
-
-    text = _clean_cid_text(text)
-
-    x0 = min(s["bbox"][0] for s in group)
-    y0 = min(s["bbox"][1] for s in group)
-    x1 = max(s["bbox"][2] for s in group)
-    y1 = max(s["bbox"][3] for s in group)
-    main = max(group, key=lambda s: s["size"])
-    return {
-        "text": text,
-        "font": main["font"],
-        "size": main["size"],
-        "origin": group[0]["origin"],
-        "bbox": [x0, y0, x1, y1],
-        "_raw_ids": [s.get("_raw_id", s.get("id")) for s in group],
-    }
+# (マージロジック削除 — get_text("words") で PyMuPDF に任せる)
 
 
 # ── PDF Analysis (Multi-Page) ──
 
 def analyze_page_region(doc, page_idx: int, clip_rect: list, label: str | None) -> dict:
-    """1ページまたはクリップ領域を分析"""
+    """1ページまたはクリップ領域を分析 — PyMuPDF の words + dict で抽出"""
     page = doc[page_idx]
     cx0, cy0, cx1, cy1 = clip_rect
     region_w = cx1 - cx0
     region_h = cy1 - cy0
+    clip = fitz.Rect(cx0, cy0, cx1, cy1)
 
-    # raw span抽出 (ページ全体をイテレート、clip内のみ収集)
-    raw_spans = []
+    # ── 1. get_text("words") — CID処理済みのクリーンなワード ──
+    words = page.get_text("words", clip=clip)
+    # words: list of (x0, y0, x1, y1, "word", block_no, line_no, word_no)
+
+    # ── 2. get_text("dict") — フォント / サイズ / 色 + raw span ID (rebuild互換) ──
+    raw_font_spans = []
     raw_idx = 0
     for block in page.get_text("dict")["blocks"]:
         if "lines" not in block:
             continue
         for line in block["lines"]:
             for span in line["spans"]:
-                txt = span["text"]
-                if not txt.strip():
+                if not span["text"].strip():
                     continue
-                bbox = list(span["bbox"])
+                bbox = span["bbox"]
                 center_x = (bbox[0] + bbox[2]) / 2
                 center_y = (bbox[1] + bbox[3]) / 2
                 if cx0 <= center_x <= cx1 and cy0 <= center_y <= cy1:
-                    raw_spans.append({
-                        "_raw_id": f"p{page_idx}s{raw_idx}",
-                        "text": txt,
+                    raw_font_spans.append({
+                        "id": f"p{page_idx}s{raw_idx}",
+                        "bbox": bbox,
                         "font": span["font"],
                         "size": span["size"],
-                        "origin": [span["origin"][0] - cx0, span["origin"][1] - cy0],
-                        "bbox": [bbox[0] - cx0, bbox[1] - cy0, bbox[2] - cx0, bbox[3] - cy0],
+                        "color": span.get("color", 0),
+                        "flags": span.get("flags", 0),
+                        "origin": span["origin"],
                     })
                 raw_idx += 1
 
-    # 結合
-    merged = merge_line_spans(raw_spans) if raw_spans else []
+    def _find_font_info(wx0, wy0, wx1, wy1):
+        """ワードのbboxに最も近いraw spanからフォント情報を取得"""
+        wmx, wmy = (wx0 + wx1) / 2, (wy0 + wy1) / 2
+        best, best_d = None, float('inf')
+        for rs in raw_font_spans:
+            rb = rs["bbox"]
+            rmx, rmy = (rb[0] + rb[2]) / 2, (rb[1] + rb[3]) / 2
+            d = abs(rmx - wmx) + abs(rmy - wmy)
+            if d < best_d:
+                best_d, best = d, rs
+        return best or {"id": "?", "font": "unknown", "size": 10, "color": 0, "flags": 0, "origin": [wx0, wy1]}
 
-    # 出力整形 (ノイズ除去)
+    def _find_overlapping_raw_ids(lx0, ly0, lx1, ly1):
+        """行bboxとオーバーラップする全raw span IDを返す"""
+        ids = []
+        for rs in raw_font_spans:
+            rb = rs["bbox"]
+            if rb[0] < lx1 and rb[2] > lx0 and rb[1] < ly1 and rb[3] > ly0:
+                ids.append(rs["id"])
+        return ids
+
+    # ── 3. ワードを行ごとにグループ化 ──
+    line_groups = {}
+    for w in words:
+        x0, y0, x1, y1, text, blk, ln, _ = w
+        key = (blk, ln)
+        if key not in line_groups:
+            line_groups[key] = []
+        line_groups[key].append((x0, y0, x1, y1, text))
+
+    # ── 4. 各行をスパンとして出力 ──
     spans_out = []
     raw_id_map = {}
-    for m in merged:
-        text = m["text"].strip()
-        if len(text) == 0:
-            continue
-        if len(text) == 1 and not any('\u4e00' <= c <= '\u9fff' for c in text):
+    for key in sorted(line_groups.keys()):
+        line_words = sorted(line_groups[key], key=lambda w: w[0])
+        text = " ".join(w[4] for w in line_words)
+        if not text.strip():
             continue
 
+        lx0 = min(w[0] for w in line_words)
+        ly0 = min(w[1] for w in line_words)
+        lx1 = max(w[2] for w in line_words)
+        ly1 = max(w[3] for w in line_words)
+
+        fi = _find_font_info(lx0, ly0, lx1, ly1)
+        adj_bbox = [lx0 - cx0, ly0 - cy0, lx1 - cx0, ly1 - cy0]
         mid = f"m{len(spans_out)}"
-        bbox = m["bbox"]
-        raw_ids = m.get("_raw_ids", [m.get("_raw_id", mid)])
-        raw_id_map[mid] = raw_ids
-        fc = classify_font(m["font"])
+        raw_ids = _find_overlapping_raw_ids(lx0, ly0, lx1, ly1)
+        raw_id_map[mid] = raw_ids if raw_ids else [mid]
+        fc = classify_font(fi["font"])
+
         spans_out.append({
             "id": mid,
-            "text": text,
-            "font_original": m["font"],
+            "text": text.strip(),
+            "font_original": fi["font"],
             "font_class": fc,
-            "size_pt": round(m["size"], 2),
-            "origin": [round(m["origin"][0], 2), round(m["origin"][1], 2)],
-            "bbox": [round(x, 2) for x in bbox],
-            "x_pct": round(bbox[0] / region_w * 100, 2) if region_w > 0 else 0,
-            "y_pct": round(bbox[1] / region_h * 100, 2) if region_h > 0 else 0,
-            "w_pct": round((bbox[2] - bbox[0]) / region_w * 100, 2) if region_w > 0 else 0,
-            "h_pct": round((bbox[3] - bbox[1]) / region_h * 100, 2) if region_h > 0 else 0,
+            "size_pt": round(fi["size"], 2),
+            "origin": [round(fi["origin"][0] - cx0, 2), round(fi["origin"][1] - cy0, 2)],
+            "bbox": [round(x, 2) for x in adj_bbox],
+            "x_pct": round(adj_bbox[0] / region_w * 100, 2) if region_w > 0 else 0,
+            "y_pct": round(adj_bbox[1] / region_h * 100, 2) if region_h > 0 else 0,
+            "w_pct": round((adj_bbox[2] - adj_bbox[0]) / region_w * 100, 2) if region_w > 0 else 0,
+            "h_pct": round((adj_bbox[3] - adj_bbox[1]) / region_h * 100, 2) if region_h > 0 else 0,
         })
 
     # 画像 (clip内)
