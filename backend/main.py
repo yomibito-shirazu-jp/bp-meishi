@@ -650,12 +650,10 @@ def rebuild_pdf(
                 "original_font": None,
             })
 
-    # Redaction を適用 (テキストのみ除去、画像等は極力保持)
+    # Redaction を適用 (テキストのみ除去、画像は保持)
     try:
-        # Prevent wiping out background vector graphics if the PyMuPDF version supports it
         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_GRAPHICS_NONE)
-    except TypeError:
-        # Fallback for older PyMuPDF versions
+    except (TypeError, AttributeError):
         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
     # === Pass 2: 新テキストを描画 ===
