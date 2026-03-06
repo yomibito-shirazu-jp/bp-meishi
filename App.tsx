@@ -953,25 +953,25 @@ const App: React.FC = () => {
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Page selector bar (only when multiple pages) */}
       {allPages.length > 1 && (
-        <div className="px-4 py-2 border-b flex items-center gap-3 shrink-0" style={{ background: C.card, borderColor: C.border }}>
-          <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: C.muted }}>ページ</span>
+        <div className="px-4 py-2 border-b flex items-center justify-end gap-3 shrink-0" style={{ background: C.card, borderColor: C.border }}>
           <div className="flex items-center gap-1.5">
             {allPages.map((p, i) => (
               <button
                 key={i}
                 onClick={() => handlePageSwitch(i)}
-                className="px-3 py-1.5 rounded-md text-xs font-bold transition-all border"
+                className="px-4 py-2 rounded-lg text-sm font-bold transition-all border-2"
                 style={{
-                  background: currentPageIdx === i ? C.accentBg : 'transparent',
-                  color: currentPageIdx === i ? C.accent : C.muted,
-                  borderColor: currentPageIdx === i ? C.accentBorder : C.border,
+                  background: currentPageIdx === i ? C.accent : 'transparent',
+                  color: currentPageIdx === i ? '#fff' : C.textSec,
+                  borderColor: currentPageIdx === i ? C.accent : C.border,
+                  boxShadow: currentPageIdx === i ? '0 2px 8px rgba(13,148,136,0.3)' : 'none',
                 }}
               >
                 {p.page_label || `ページ ${i + 1}`}
               </button>
             ))}
           </div>
-          <span className="text-[10px] font-mono" style={{ color: C.muted }}>
+          <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: C.accentBg, color: C.accent }}>
             {allPages.length}ページ
           </span>
         </div>
