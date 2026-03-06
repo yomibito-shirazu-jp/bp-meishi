@@ -13,10 +13,16 @@ import io
 import json
 import base64
 import subprocess
+import httpx
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+
+# ── Gemini Vision OCR ──
+GOOGLE_AI_KEY = os.environ.get("GOOGLE_AI_KEY", "")
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 app = FastAPI(title="名刺作成し太郎 API")
 
@@ -194,22 +200,72 @@ def _safe_color_int(span_color) -> int:
 
 # ── CID Text Cleaning ──
 
-# (マージロジック削除 — get_text("words") で PyMuPDF に任せる)
+# ── Gemini Vision OCR ──
+
+async def gemini_ocr(png_b64: str, region_w: float, region_h: float) -> list[dict] | None:
+    """Gemini Vision API で名刺画像からテキストを読み取る"""
+    if not GOOGLE_AI_KEY:
+        print("  GOOGLE_AI_KEY not set — skipping Gemini OCR")
+        return None
+
+    prompt = """この名刺画像のすべてのテキストを読み取ってください。
+
+各テキスト行について以下のJSON配列で返してください:
+[
+  {"text": "テキスト内容", "y_pct": 上からの位置(%), "x_pct": 左からの位置(%), "size_hint": "large|medium|small"}
+]
+
+ルール:
+- 全てのテキストを正確に読む（文字間にスペースを入れない）
+- 電話番号・FAX・メール・URLは正確にそのまま
+- 人名の漢字は慎重に
+- ロゴや装飾は無視
+- テスト用の赤い数字は無視
+- JSON配列のみ出力（他のテキスト不要）"""
+
+    body = {
+        "contents": [{
+            "parts": [
+                {"inlineData": {"mimeType": "image/png", "data": png_b64}},
+                {"text": prompt},
+            ],
+        }],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 4000},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(
+                f"{GEMINI_URL}?key={GOOGLE_AI_KEY}",
+                json=body,
+                headers={"Content-Type": "application/json"},
+            )
+        if res.status_code != 200:
+            print(f"  Gemini OCR error {res.status_code}: {res.text[:200]}")
+            return None
+        data = res.json()
+        text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        clean = re.sub(r'```json|```', '', text).strip()
+        return json.loads(clean)
+    except Exception as e:
+        print(f"  Gemini OCR failed: {e}")
+        return None
 
 
 # ── PDF Analysis (Multi-Page) ──
 
-def analyze_page_region(doc, page_idx: int, clip_rect: list, label: str | None) -> dict:
-    """1ページまたはクリップ領域を分析 — PyMuPDF の words + dict で抽出"""
+async def analyze_page_region(doc, page_idx: int, clip_rect: list, label: str | None) -> dict:
+    """1ページまたはクリップ領域を分析 — Gemini OCR + PyMuPDF dict"""
     page = doc[page_idx]
     cx0, cy0, cx1, cy1 = clip_rect
     region_w = cx1 - cx0
     region_h = cy1 - cy0
     clip = fitz.Rect(cx0, cy0, cx1, cy1)
 
-    # ── 1. get_text("words") — CID処理済みのクリーンなワード ──
-    words = page.get_text("words", clip=clip)
-    # words: list of (x0, y0, x1, y1, "word", block_no, line_no, word_no)
+    # ── 1. プレビュー画像 (Gemini OCR入力 + フロントエンド表示用) ──
+    mat = fitz.Matrix(300 / 72, 300 / 72)
+    pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
+    png_b64 = base64.b64encode(pix.tobytes("png")).decode()
 
     # ── 2. get_text("dict") — フォント / サイズ / 色 + raw span ID (rebuild互換) ──
     raw_font_spans = []
@@ -236,70 +292,131 @@ def analyze_page_region(doc, page_idx: int, clip_rect: list, label: str | None) 
                     })
                 raw_idx += 1
 
-    def _find_font_info(wx0, wy0, wx1, wy1):
-        """ワードのbboxに最も近いraw spanからフォント情報を取得"""
-        wmx, wmy = (wx0 + wx1) / 2, (wy0 + wy1) / 2
+    def _find_nearest_raw(y_pct: float, x_pct: float):
+        """Geminiの位置(%)に最も近いraw spanを返す"""
+        target_y = cy0 + region_h * y_pct / 100
+        target_x = cx0 + region_w * x_pct / 100
         best, best_d = None, float('inf')
         for rs in raw_font_spans:
             rb = rs["bbox"]
-            rmx, rmy = (rb[0] + rb[2]) / 2, (rb[1] + rb[3]) / 2
-            d = abs(rmx - wmx) + abs(rmy - wmy)
+            ry = (rb[1] + rb[3]) / 2
+            rx = (rb[0] + rb[2]) / 2
+            d = abs(ry - target_y) * 2 + abs(rx - target_x)
             if d < best_d:
                 best_d, best = d, rs
-        return best or {"id": "?", "font": "unknown", "size": 10, "color": 0, "flags": 0, "origin": [wx0, wy1]}
+        return best
 
-    def _find_overlapping_raw_ids(lx0, ly0, lx1, ly1):
-        """行bboxとオーバーラップする全raw span IDを返す"""
+    def _find_overlapping_raw_ids(y_pct: float, size_hint: str):
+        """Y位置付近の全raw span IDを返す"""
+        target_y = cy0 + region_h * y_pct / 100
+        tolerance = region_h * 0.03  # 3%の許容範囲
         ids = []
         for rs in raw_font_spans:
             rb = rs["bbox"]
-            if rb[0] < lx1 and rb[2] > lx0 and rb[1] < ly1 and rb[3] > ly0:
+            ry = (rb[1] + rb[3]) / 2
+            if abs(ry - target_y) < max(tolerance, (rb[3] - rb[1]) * 0.8):
                 ids.append(rs["id"])
         return ids
 
-    # ── 3. ワードを行ごとにグループ化 ──
-    line_groups = {}
-    for w in words:
-        x0, y0, x1, y1, text, blk, ln, _ = w
-        key = (blk, ln)
-        if key not in line_groups:
-            line_groups[key] = []
-        line_groups[key].append((x0, y0, x1, y1, text))
+    # ── 3. Gemini OCR でテキスト読み取り ──
+    gemini_results = await gemini_ocr(png_b64, region_w, region_h)
 
-    # ── 4. 各行をスパンとして出力 ──
     spans_out = []
     raw_id_map = {}
-    for key in sorted(line_groups.keys()):
-        line_words = sorted(line_groups[key], key=lambda w: w[0])
-        text = " ".join(w[4] for w in line_words)
-        if not text.strip():
-            continue
 
-        lx0 = min(w[0] for w in line_words)
-        ly0 = min(w[1] for w in line_words)
-        lx1 = max(w[2] for w in line_words)
-        ly1 = max(w[3] for w in line_words)
+    if gemini_results:
+        # Gemini OCR 成功 — AIの読み取り結果を使用
+        for i, item in enumerate(gemini_results):
+            text = item.get("text", "").strip()
+            if not text:
+                continue
+            y_pct = float(item.get("y_pct", 0))
+            x_pct = float(item.get("x_pct", 0))
+            size_hint = item.get("size_hint", "medium")
 
-        fi = _find_font_info(lx0, ly0, lx1, ly1)
-        adj_bbox = [lx0 - cx0, ly0 - cy0, lx1 - cx0, ly1 - cy0]
-        mid = f"m{len(spans_out)}"
-        raw_ids = _find_overlapping_raw_ids(lx0, ly0, lx1, ly1)
-        raw_id_map[mid] = raw_ids if raw_ids else [mid]
-        fc = classify_font(fi["font"])
+            nearest = _find_nearest_raw(y_pct, x_pct)
+            raw_ids = _find_overlapping_raw_ids(y_pct, size_hint)
 
-        spans_out.append({
-            "id": mid,
-            "text": text.strip(),
-            "font_original": fi["font"],
-            "font_class": fc,
-            "size_pt": round(fi["size"], 2),
-            "origin": [round(fi["origin"][0] - cx0, 2), round(fi["origin"][1] - cy0, 2)],
-            "bbox": [round(x, 2) for x in adj_bbox],
-            "x_pct": round(adj_bbox[0] / region_w * 100, 2) if region_w > 0 else 0,
-            "y_pct": round(adj_bbox[1] / region_h * 100, 2) if region_h > 0 else 0,
-            "w_pct": round((adj_bbox[2] - adj_bbox[0]) / region_w * 100, 2) if region_w > 0 else 0,
-            "h_pct": round((adj_bbox[3] - adj_bbox[1]) / region_h * 100, 2) if region_h > 0 else 0,
-        })
+            mid = f"m{len(spans_out)}"
+            raw_id_map[mid] = raw_ids if raw_ids else [mid]
+
+            if nearest:
+                fi = nearest
+                adj_bbox = [fi["bbox"][0] - cx0, fi["bbox"][1] - cy0, fi["bbox"][2] - cx0, fi["bbox"][3] - cy0]
+                # 同じY行の全raw spanでbboxを拡張
+                for rs in raw_font_spans:
+                    if rs["id"] in raw_ids:
+                        adj_bbox[0] = min(adj_bbox[0], rs["bbox"][0] - cx0)
+                        adj_bbox[1] = min(adj_bbox[1], rs["bbox"][1] - cy0)
+                        adj_bbox[2] = max(adj_bbox[2], rs["bbox"][2] - cx0)
+                        adj_bbox[3] = max(adj_bbox[3], rs["bbox"][3] - cy0)
+            else:
+                fi = {"font": "unknown", "size": 10, "color": 0, "flags": 0, "origin": [cx0 + region_w * x_pct / 100, cy0 + region_h * y_pct / 100]}
+                adj_bbox = [region_w * x_pct / 100, region_h * y_pct / 100, region_w * 0.9, region_h * y_pct / 100 + 12]
+
+            fc = classify_font(fi.get("font", "unknown"))
+            spans_out.append({
+                "id": mid,
+                "text": text,
+                "font_original": fi.get("font", "unknown"),
+                "font_class": fc,
+                "size_pt": round(fi.get("size", 10), 2),
+                "origin": [round(fi.get("origin", [0, 0])[0] - cx0, 2), round(fi.get("origin", [0, 0])[1] - cy0, 2)],
+                "bbox": [round(x, 2) for x in adj_bbox],
+                "x_pct": round(adj_bbox[0] / region_w * 100, 2) if region_w > 0 else 0,
+                "y_pct": round(adj_bbox[1] / region_h * 100, 2) if region_h > 0 else 0,
+                "w_pct": round((adj_bbox[2] - adj_bbox[0]) / region_w * 100, 2) if region_w > 0 else 0,
+                "h_pct": round((adj_bbox[3] - adj_bbox[1]) / region_h * 100, 2) if region_h > 0 else 0,
+            })
+    else:
+        # フォールバック: PyMuPDF get_text("words")
+        words = page.get_text("words", clip=clip)
+        line_groups = {}
+        for w in words:
+            x0, y0, x1, y1, text, blk, ln, _ = w
+            key = (blk, ln)
+            if key not in line_groups:
+                line_groups[key] = []
+            line_groups[key].append((x0, y0, x1, y1, text))
+
+        for key in sorted(line_groups.keys()):
+            line_words = sorted(line_groups[key], key=lambda w: w[0])
+            text = " ".join(w[4] for w in line_words)
+            if not text.strip():
+                continue
+            lx0 = min(w[0] for w in line_words)
+            ly0 = min(w[1] for w in line_words)
+            lx1 = max(w[2] for w in line_words)
+            ly1 = max(w[3] for w in line_words)
+
+            wmx, wmy = (lx0 + lx1) / 2, (ly0 + ly1) / 2
+            fi_best, fi_d = None, float('inf')
+            for rs in raw_font_spans:
+                rb = rs["bbox"]
+                d = abs((rb[0]+rb[2])/2 - wmx) + abs((rb[1]+rb[3])/2 - wmy)
+                if d < fi_d:
+                    fi_d, fi_best = d, rs
+            fi = fi_best or {"font": "unknown", "size": 10, "color": 0, "flags": 0, "origin": [lx0, ly1]}
+
+            adj_bbox = [lx0 - cx0, ly0 - cy0, lx1 - cx0, ly1 - cy0]
+            mid = f"m{len(spans_out)}"
+            ol_ids = [rs["id"] for rs in raw_font_spans if rs["bbox"][0] < lx1 and rs["bbox"][2] > lx0 and rs["bbox"][1] < ly1 and rs["bbox"][3] > ly0]
+            raw_id_map[mid] = ol_ids if ol_ids else [mid]
+            fc = classify_font(fi["font"])
+
+            spans_out.append({
+                "id": mid,
+                "text": text.strip(),
+                "font_original": fi["font"],
+                "font_class": fc,
+                "size_pt": round(fi["size"], 2),
+                "origin": [round(fi["origin"][0] - cx0, 2), round(fi["origin"][1] - cy0, 2)],
+                "bbox": [round(x, 2) for x in adj_bbox],
+                "x_pct": round(adj_bbox[0] / region_w * 100, 2) if region_w > 0 else 0,
+                "y_pct": round(adj_bbox[1] / region_h * 100, 2) if region_h > 0 else 0,
+                "w_pct": round((adj_bbox[2] - adj_bbox[0]) / region_w * 100, 2) if region_w > 0 else 0,
+                "h_pct": round((adj_bbox[3] - adj_bbox[1]) / region_h * 100, 2) if region_h > 0 else 0,
+            })
 
     # 画像 (clip内)
     images = []
@@ -328,12 +445,7 @@ def analyze_page_region(doc, page_idx: int, clip_rect: list, label: str | None) 
                 "color": [round(c, 3) for c in d["color"]] if d.get("color") else None,
             })
 
-    # プレビュー画像 (clip region)
-    mat = fitz.Matrix(300 / 72, 300 / 72)
-    clip = fitz.Rect(cx0, cy0, cx1, cy1)
-    pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
-    preview_b64 = base64.b64encode(pix.tobytes("png")).decode()
-
+    # プレビュー画像 — Gemini OCR用に既に生成済みの png_b64 を再利用
     result = {
         "page_index": page_idx,
         "page_pt": [round(region_w, 1), round(region_h, 1)],
@@ -342,7 +454,8 @@ def analyze_page_region(doc, page_idx: int, clip_rect: list, label: str | None) 
         "raw_id_map": raw_id_map,
         "images": images,
         "drawings": drawings,
-        "original_png_b64": preview_b64,
+        "original_png_b64": png_b64,
+        "ocr_source": "gemini" if gemini_results else "pymupdf",
         "clip_rect": [round(x, 1) for x in clip_rect],
     }
     if label:
@@ -350,7 +463,7 @@ def analyze_page_region(doc, page_idx: int, clip_rect: list, label: str | None) 
     return result
 
 
-def analyze_pdf(pdf_bytes: bytes) -> dict:
+async def analyze_pdf(pdf_bytes: bytes) -> dict:
     """PDF全ページを分析"""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages = []
@@ -359,7 +472,7 @@ def analyze_pdf(pdf_bytes: bytes) -> dict:
         page = doc[page_idx]
         pw, ph = page.rect.width, page.rect.height
         clip_rect = [0, 0, pw, ph]
-        page_data = analyze_page_region(doc, page_idx, clip_rect, None)
+        page_data = await analyze_page_region(doc, page_idx, clip_rect, None)
         pages.append(page_data)
 
     return {"pages": pages}
@@ -598,6 +711,7 @@ def health():
         "fonts": {k: bool(v) for k, v in FONT_PATHS.items()},
         "local_font_families": len(FONT_INDEX),
         "local_font_files": len(FONT_FILE_INDEX),
+        "gemini_ocr": bool(GOOGLE_AI_KEY),
     }
 
 @app.post("/analyze")
@@ -606,7 +720,7 @@ async def analyze(file: UploadFile = File(...)):
         raise HTTPException(400, "PDFファイルのみ対応")
     pdf_bytes = await file.read()
     try:
-        result = analyze_pdf(pdf_bytes)
+        result = await analyze_pdf(pdf_bytes)
     except Exception as e:
         raise HTTPException(500, f"PDF分析エラー: {e}")
     result["pdf_b64"] = base64.b64encode(pdf_bytes).decode()
