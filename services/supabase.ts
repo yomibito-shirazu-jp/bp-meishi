@@ -16,16 +16,43 @@ if (supabaseUrl && supabaseKey) {
 }
 
 // ── localStorage fallback ──
+// NOTE: base64 binary fields are stripped before writing to localStorage to
+// avoid the ~5MB quota limit. Only metadata and spans are kept locally.
 
 const STORAGE_KEY = 'bp_meishi_projects';
+
+/** Remove large binary blobs before persisting to localStorage. */
+const stripBinaries = (project: CardProject): CardProject => ({
+  ...project,
+  pdf_b64: '',
+  original_png_b64: null,
+  rebuilt_pdf_b64: null,
+  rebuilt_png_b64: null,
+});
 
 const getLocal = (): CardProject[] => {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
   catch { return []; }
 };
 
-const setLocal = (projects: CardProject[]) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+const setLocal = (projects: CardProject[]): void => {
+  try {
+    const slim = projects.map(stripBinaries);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
+  } catch (err: any) {
+    // Quota exceeded — remove the oldest entries and retry once
+    if (err?.name === 'QuotaExceededError' || err?.code === 22) {
+      console.warn('localStorage quota exceeded — pruning oldest entries.');
+      try {
+        const pruned = projects.map(stripBinaries).slice(0, 10); // keep newest 10
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(pruned));
+      } catch {
+        console.error('localStorage still full after pruning. Data not persisted locally.');
+      }
+    } else {
+      throw err;
+    }
+  }
 };
 
 // ── CRUD ──
@@ -63,9 +90,9 @@ export const getProject = async (id: string): Promise<CardProject | null> => {
 
 export const saveProject = async (project: CardProject): Promise<CardProject> => {
   if (!supabase) {
+    const updated = { ...project, updated_at: new Date().toISOString() };
     const projects = getLocal();
     const idx = projects.findIndex(p => p.id === project.id);
-    const updated = { ...project, updated_at: new Date().toISOString() };
     if (idx >= 0) projects[idx] = updated;
     else projects.unshift(updated);
     setLocal(projects);
@@ -104,13 +131,14 @@ export const saveProject = async (project: CardProject): Promise<CardProject> =>
     if (error) throw error;
     return data;
   } catch (err) {
+    // Supabase failed — fall back to localStorage (binaries are stripped to stay within quota)
     console.warn('Supabase save failed, falling back to localStorage:', err);
     const projects = getLocal();
     const idx = projects.findIndex(p => p.id === project.id);
     const updated = { ...project, updated_at: new Date().toISOString() };
     if (idx >= 0) projects[idx] = updated;
     else projects.unshift(updated);
-    setLocal(projects);
+    setLocal(projects); // stripBinaries applied inside setLocal
     return updated;
   }
 };

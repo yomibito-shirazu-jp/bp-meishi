@@ -4,11 +4,12 @@ import { analyzePdf, rebuildPdf, SpanOverride } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
+import { pickPdfFromDrive, isDriveConfigured } from './services/gdrive';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
   Search, Building2, Inbox, ZoomIn, ZoomOut, Maximize, Move,
-  MessageSquare, Send, Bot, Sparkles, Wand2,
+  MessageSquare, Send, Bot, Sparkles, Wand2, HardDrive,
 } from 'lucide-react';
 
 /* ═══════════════════════════════════════════
@@ -688,6 +689,22 @@ const App: React.FC = () => {
             >
               <Plus size={16} /> PDFアップロード
             </button>
+            {isDriveConfigured() && (
+              <button
+                onClick={async () => {
+                  try {
+                    const file = await pickPdfFromDrive();
+                    if (file) handleUpload(file);
+                  } catch (e: any) {
+                    flash(e.message || 'Google Drive接続エラー', 'error');
+                  }
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90 border"
+                style={{ borderColor: C.accentBorder, color: C.accent, background: C.accentBg }}
+              >
+                <HardDrive size={16} /> Google Drive
+              </button>
+            )}
           </div>
         )}
         {view === AppState.EDIT && (
@@ -866,6 +883,23 @@ const App: React.FC = () => {
                 <span className="text-[11px] px-2.5 py-1 rounded-full font-medium" style={{ background: C.surface, color: C.muted }}>Cloud Run</span>
                 <span className="text-[11px] px-2.5 py-1 rounded-full font-medium" style={{ background: C.surface, color: C.muted }}>Supabase</span>
               </div>
+              {isDriveConfigured() && (
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const file = await pickPdfFromDrive();
+                      if (file) handleUpload(file);
+                    } catch (err: any) {
+                      flash(err.message || 'Google Drive接続エラー', 'error');
+                    }
+                  }}
+                  className="mt-4 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 mx-auto transition-colors hover:opacity-90 border"
+                  style={{ borderColor: C.accentBorder, color: C.accent, background: C.accentBg }}
+                >
+                  <HardDrive size={16} /> Google Driveから選択
+                </button>
+              )}
             </div>
           </div>
         )}
