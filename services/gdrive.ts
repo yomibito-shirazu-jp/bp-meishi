@@ -13,6 +13,17 @@ const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 let pickerLoaded = false;
 let gisLoaded = false;
 let accessToken: string | null = null;
+let tokenExpiry = 0;
+
+// Restore token from sessionStorage on load
+try {
+  const saved = sessionStorage.getItem('gdrive_token');
+  const exp = Number(sessionStorage.getItem('gdrive_token_exp') || 0);
+  if (saved && exp > Date.now()) {
+    accessToken = saved;
+    tokenExpiry = exp;
+  }
+} catch { /* ignore */ }
 
 /** Load Google Picker API script */
 function loadPickerApi(): Promise<void> {
@@ -45,7 +56,9 @@ function loadGis(): Promise<void> {
 
 /** Get OAuth access token via Google Identity Services */
 function getAccessToken(): Promise<string> {
-  if (accessToken) return Promise.resolve(accessToken);
+  if (accessToken && tokenExpiry > Date.now()) return Promise.resolve(accessToken);
+  // Clear stale token
+  accessToken = null;
   return new Promise((resolve, reject) => {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
@@ -56,6 +69,13 @@ function getAccessToken(): Promise<string> {
           return;
         }
         accessToken = resp.access_token;
+        // GIS tokens typically last 3600s; store with 5min buffer
+        const expiresIn = (resp.expires_in || 3600) * 1000 - 300_000;
+        tokenExpiry = Date.now() + expiresIn;
+        try {
+          sessionStorage.setItem('gdrive_token', resp.access_token);
+          sessionStorage.setItem('gdrive_token_exp', String(tokenExpiry));
+        } catch { /* ignore */ }
         resolve(resp.access_token);
       },
     });
