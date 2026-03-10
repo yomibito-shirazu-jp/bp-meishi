@@ -5,11 +5,13 @@ import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
 import { pickPdfFromDrive, isDriveConfigured } from './services/gdrive';
+import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
   Search, Building2, Inbox, ZoomIn, ZoomOut, Maximize, Move,
   MessageSquare, Send, Bot, Sparkles, Wand2, HardDrive,
+  Settings, CheckCircle2, XCircle, Key, RefreshCw,
 } from 'lucide-react';
 
 /* ═══════════════════════════════════════════
@@ -108,6 +110,11 @@ const App: React.FC = () => {
   const [showChatInEditor, setShowChatInEditor] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // ── Settings ──
+  const [settingsDraft, setSettingsDraft] = useState<Partial<Record<ConfigKey, string>>>({});
+  const [settingsTestStatus, setSettingsTestStatus] = useState<Partial<Record<ConfigKey, { ok: boolean; msg: string } | null>>>({});
+  const [settingsTesting, setSettingsTesting] = useState<Partial<Record<ConfigKey, boolean>>>({});
 
   // ── Derived ──
   const flash = (text: string, type: 'info' | 'ok' | 'error' = 'info') => {
@@ -579,11 +586,11 @@ const App: React.FC = () => {
             className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 text-white"
             style={{ background: C.accent }}
           >
-            名
+            ア
           </div>
           {!sidebarCollapsed && (
             <span className="text-sm font-bold tracking-tight leading-tight" style={{ color: C.text }}>
-              名刺作成し太郎
+              アプリ作成し太郎
             </span>
           )}
         </div>
@@ -620,6 +627,20 @@ const App: React.FC = () => {
           })}
         </nav>
 
+        {/* Settings */}
+        <div className="px-2 border-t pt-2" style={{ borderColor: C.border }}>
+          <button
+            onClick={() => setView(AppState.SETTINGS)}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors"
+            style={view === AppState.SETTINGS
+              ? { background: C.accentBg, color: C.accent, borderLeft: `3px solid ${C.accent}` }
+              : { color: C.textSec, borderLeft: '3px solid transparent' }}
+          >
+            <Settings size={18} className="shrink-0" />
+            {!sidebarCollapsed && <span className="flex-1 text-left">設定</span>}
+          </button>
+        </div>
+
         {/* Collapse toggle */}
         <div className="px-2 pb-4">
           <button
@@ -653,6 +674,12 @@ const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <Sparkles size={16} style={{ color: C.accent }} />
             <h2 className="text-base font-bold text-slate-800">AI作成モード</h2>
+          </div>
+        )}
+        {view === AppState.SETTINGS && (
+          <div className="flex items-center gap-2">
+            <Settings size={16} className="text-slate-400" />
+            <h2 className="text-base font-bold text-slate-800">設定</h2>
           </div>
         )}
         {view === AppState.EDIT && (
@@ -1525,6 +1552,248 @@ const App: React.FC = () => {
     </div>
   );
 
+  // ── Settings ──
+  const renderSettings = () => {
+    type FieldDef = {
+      key: ConfigKey;
+      label: string;
+      description: string;
+      placeholder: string;
+      sensitive: boolean;
+      testFn?: () => Promise<string>;
+    };
+
+    const fields: FieldDef[] = [
+      {
+        key: 'VITE_API_URL',
+        label: 'バックエンド API URL',
+        description: 'Cloud Run などにデプロイされた Python バックエンドの URL',
+        placeholder: 'https://example.run.app',
+        sensitive: false,
+        testFn: async () => {
+          const url = (settingsDraft['VITE_API_URL'] ?? getConfig('VITE_API_URL')).replace(/\/$/, '');
+          if (!url) throw new Error('URL を入力してください');
+          const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(6000) });
+          if (!res.ok) throw new Error(`HTTP ${res.status} — サーバーが応答しましたが /health が失敗しました`);
+          return 'APIサーバー接続成功 ✓';
+        },
+      },
+      {
+        key: 'VITE_SUPABASE_URL',
+        label: 'Supabase URL',
+        description: 'Supabase プロジェクトの Project URL（https://xxxx.supabase.co）',
+        placeholder: 'https://xxxx.supabase.co',
+        sensitive: false,
+      },
+      {
+        key: 'VITE_SUPABASE_ANON_KEY',
+        label: 'Supabase Anon Key',
+        description: 'Supabase の anon/public API キー（URL と合わせてテストします）',
+        placeholder: 'eyJhbGci...',
+        sensitive: true,
+        testFn: async () => {
+          const url = settingsDraft['VITE_SUPABASE_URL'] ?? getConfig('VITE_SUPABASE_URL');
+          const key = settingsDraft['VITE_SUPABASE_ANON_KEY'] ?? getConfig('VITE_SUPABASE_ANON_KEY');
+          if (!url || !key) throw new Error('Supabase URL と Anon Key の両方を入力してください');
+          const res = await fetch(`${url}/rest/v1/card_projects?select=id&limit=1`, {
+            headers: { apikey: key, Authorization: `Bearer ${key}` },
+            signal: AbortSignal.timeout(6000),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.message || `HTTP ${res.status}`);
+          }
+          return 'Supabase 接続成功 ✓';
+        },
+      },
+      {
+        key: 'VITE_GOOGLE_AI_KEY',
+        label: 'Google AI API Key (Gemini)',
+        description: 'Google AI Studio で発行した API キー',
+        placeholder: 'AIzaSy...',
+        sensitive: true,
+        testFn: async () => {
+          const apiKey = settingsDraft['VITE_GOOGLE_AI_KEY'] ?? getConfig('VITE_GOOGLE_AI_KEY');
+          if (!apiKey) throw new Error('API キーを入力してください');
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: 'Hi' }] }],
+                generationConfig: { maxOutputTokens: 5 },
+              }),
+              signal: AbortSignal.timeout(10000),
+            },
+          );
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error?.message || `HTTP ${res.status}`);
+          }
+          return 'Gemini API 接続成功 ✓';
+        },
+      },
+    ];
+
+    const handleTest = async (key: ConfigKey, testFn: () => Promise<string>) => {
+      setSettingsTesting(prev => ({ ...prev, [key]: true }));
+      setSettingsTestStatus(prev => ({ ...prev, [key]: null }));
+      try {
+        const msg = await testFn();
+        setSettingsTestStatus(prev => ({ ...prev, [key]: { ok: true, msg } }));
+      } catch (err: any) {
+        setSettingsTestStatus(prev => ({ ...prev, [key]: { ok: false, msg: err.message } }));
+      } finally {
+        setSettingsTesting(prev => ({ ...prev, [key]: false }));
+      }
+    };
+
+    const hasDraft = Object.keys(settingsDraft).some(k => settingsDraft[k as ConfigKey] !== '');
+
+    const handleSaveAll = () => {
+      Object.entries(settingsDraft).forEach(([k, v]) => {
+        if (v !== undefined) saveConfig(k as ConfigKey, v);
+      });
+      setSettingsDraft({});
+      setSettingsTestStatus({});
+      flash('設定を保存しました', 'ok');
+    };
+
+    return (
+      <div className="flex-1 overflow-auto" style={{ background: C.bg }}>
+        <div className="max-w-2xl mx-auto p-8">
+          {/* Header */}
+          <div className="flex items-start justify-between mb-8">
+            <div>
+              <h2 className="text-xl font-bold text-slate-800">設定</h2>
+              <p className="text-sm mt-1" style={{ color: C.muted }}>
+                APIキーを設定します。入力値は localStorage に保存され .env より優先されます。
+              </p>
+            </div>
+            {hasDraft && (
+              <button
+                onClick={handleSaveAll}
+                className="shrink-0 px-5 py-2.5 rounded-xl text-white text-sm font-bold flex items-center gap-2 shadow-sm hover:opacity-90 transition-all"
+                style={{ background: C.accent }}
+              >
+                <Save size={15} /> すべて保存
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            {fields.map(({ key, label, description, placeholder, sensitive, testFn }) => {
+              const draftVal = settingsDraft[key] ?? '';
+              const savedVal = getConfig(key);
+              const isOverridden = getAllOverrides()[key] !== undefined;
+              const testStatus = settingsTestStatus[key];
+              const isTesting = settingsTesting[key] || false;
+              const hasValue = draftVal !== '' || savedVal !== '';
+
+              return (
+                <div
+                  key={key}
+                  className="bg-white rounded-2xl border p-5 space-y-3 transition-shadow hover:shadow-sm"
+                  style={{ borderColor: draftVal ? C.accentBorder : C.border }}
+                >
+                  {/* Label row */}
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Key size={12} style={{ color: C.accent }} />
+                        <span className="text-sm font-bold text-slate-800">{label}</span>
+                        {isOverridden && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                            style={{ background: C.accentBg, color: C.accent }}>
+                            上書き中
+                          </span>
+                        )}
+                        {savedVal && !isOverridden && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">
+                            .env から読込済
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs mt-0.5" style={{ color: C.muted }}>{description}</p>
+                    </div>
+                    {testFn && (
+                      <button
+                        onClick={() => handleTest(key, testFn)}
+                        disabled={isTesting || !hasValue}
+                        className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all flex items-center gap-1.5"
+                        style={{
+                          borderColor: isTesting || !hasValue ? C.border : C.accentBorder,
+                          background: isTesting || !hasValue ? 'transparent' : C.accentBg,
+                          color: isTesting || !hasValue ? C.muted : C.accent,
+                          cursor: isTesting || !hasValue ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {isTesting
+                          ? <><RefreshCw size={11} className="animate-spin" /> テスト中...</>
+                          : 'テスト接続'
+                        }
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Input */}
+                  <input
+                    type={sensitive ? 'password' : 'text'}
+                    value={draftVal}
+                    onChange={e => setSettingsDraft(prev => ({ ...prev, [key]: e.target.value }))}
+                    placeholder={
+                      savedVal
+                        ? (sensitive ? '••••••••（設定済み — 変更する場合のみ入力）' : savedVal)
+                        : placeholder
+                    }
+                    className="w-full px-3 py-2.5 rounded-xl border text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-300 bg-white transition-colors"
+                    style={{ borderColor: draftVal ? C.accent : C.border }}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+
+                  {/* Test result */}
+                  {testStatus && (
+                    <div
+                      className="flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg"
+                      style={{
+                        background: testStatus.ok ? '#f0fdf4' : '#fef2f2',
+                        color: testStatus.ok ? '#16a34a' : '#dc2626',
+                      }}
+                    >
+                      {testStatus.ok ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                      {testStatus.msg}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Danger zone */}
+          <div className="mt-8 p-5 rounded-2xl border border-dashed" style={{ borderColor: '#fca5a5' }}>
+            <p className="text-xs font-bold text-red-500 mb-1">設定のリセット</p>
+            <p className="text-xs mb-3" style={{ color: C.muted }}>
+              localStorage の上書き値をすべて削除し、.env の値に戻します。
+            </p>
+            <button
+              onClick={() => {
+                localStorage.removeItem('bp_meishi_settings');
+                setSettingsDraft({});
+                setSettingsTestStatus({});
+                flash('.env の値にリセットしました', 'ok');
+              }}
+              className="text-xs font-semibold text-red-400 hover:text-red-600 transition-colors border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50"
+            >
+              すべてリセット
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   /* ═══════════════════════════════════════════
      Main Render
      ═══════════════════════════════════════════ */
@@ -1606,6 +1875,7 @@ const App: React.FC = () => {
         {view === AppState.DASHBOARD && renderDashboard()}
         {view === AppState.INBOX && renderInbox()}
         {view === AppState.AI_CHAT && renderAIChat()}
+        {view === AppState.SETTINGS && renderSettings()}
         {view === AppState.EDIT && (
           <div className="flex-1 flex overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0">
