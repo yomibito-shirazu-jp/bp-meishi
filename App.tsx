@@ -4,7 +4,7 @@ import { analyzePdf, rebuildPdf, SpanOverride } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
-import { pickPdfFromDrive, isDriveConfigured } from './services/gdrive';
+import { pickPdfFromDrive, pickFileFromDrive, isDriveConfigured } from './services/gdrive';
 import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
@@ -1984,7 +1984,7 @@ const App: React.FC = () => {
 
   const handleTranscribeFromDrive = async () => {
     try {
-      const file = await pickPdfFromDrive();
+      const file = await pickFileFromDrive();
       if (file) handleTranscribeUpload(file);
     } catch (e: any) {
       flash(e.message || 'Google Drive接続エラー', 'error');

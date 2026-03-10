@@ -1,5 +1,5 @@
 /**
- * Google Drive Picker — PDFファイルをGdriveから選択してダウンロード
+ * Google Drive Picker — ファイルをGdriveから選択してダウンロード
  *
  * 必要な環境変数:
  *   VITE_GOOGLE_CLIENT_ID  — OAuth 2.0 クライアントID
@@ -83,8 +83,12 @@ function getAccessToken(): Promise<string> {
   });
 }
 
-/** Open Google Drive Picker and return selected file as File object */
-export async function pickPdfFromDrive(): Promise<File | null> {
+/** MIME types */
+const MIME_PDF = 'application/pdf';
+const MIME_ALL = 'application/pdf,image/png,image/jpeg,image/gif,image/webp,image/tiff,audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/webm,audio/flac';
+
+/** Generic picker — mimeTypes でフィルタ */
+async function pickFromDrive(mimeTypes: string, title: string): Promise<File | null> {
   if (!CLIENT_ID || !API_KEY) {
     throw new Error('Google Drive連携に必要な環境変数が未設定です (VITE_GOOGLE_CLIENT_ID, VITE_GOOGLE_API_KEY)');
   }
@@ -94,19 +98,19 @@ export async function pickPdfFromDrive(): Promise<File | null> {
 
   return new Promise((resolve) => {
     const view = new window.google.picker.DocsView(window.google.picker.ViewId.DOCS)
-      .setMimeTypes('application/pdf')
+      .setMimeTypes(mimeTypes)
       .setMode(window.google.picker.DocsViewMode.LIST);
 
     const picker = new window.google.picker.PickerBuilder()
       .addView(view)
       .setOAuthToken(token)
       .setDeveloperKey(API_KEY)
-      .setTitle('名刺PDFを選択')
+      .setTitle(title)
       .setCallback(async (data: any) => {
         if (data.action === window.google.picker.Action.PICKED) {
           const doc = data.docs[0];
           try {
-            const file = await downloadDriveFile(doc.id, doc.name, token);
+            const file = await downloadDriveFile(doc.id, doc.name, doc.mimeType, token);
             resolve(file);
           } catch (e) {
             console.error('Drive download failed:', e);
@@ -122,15 +126,25 @@ export async function pickPdfFromDrive(): Promise<File | null> {
   });
 }
 
+/** 名刺PDF用 Picker */
+export async function pickPdfFromDrive(): Promise<File | null> {
+  return pickFromDrive(MIME_PDF, '名刺PDFを選択');
+}
+
+/** 文字起こし用 Picker（音声・画像・PDF全対応）*/
+export async function pickFileFromDrive(): Promise<File | null> {
+  return pickFromDrive(MIME_ALL, 'ファイルを選択（音声・画像・PDF）');
+}
+
 /** Download a file from Google Drive by ID */
-async function downloadDriveFile(fileId: string, fileName: string, token: string): Promise<File> {
+async function downloadDriveFile(fileId: string, fileName: string, mimeType: string, token: string): Promise<File> {
   const res = await fetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!res.ok) throw new Error(`Drive API error: ${res.status}`);
   const blob = await res.blob();
-  return new File([blob], fileName || 'drive.pdf', { type: 'application/pdf' });
+  return new File([blob], fileName || 'file', { type: mimeType || blob.type || 'application/octet-stream' });
 }
 
 /** Check if Google Drive integration is configured */
