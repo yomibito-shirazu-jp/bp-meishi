@@ -1919,9 +1919,11 @@ const App: React.FC = () => {
         reader.readAsDataURL(file);
       });
 
-      // 合議: Gemini Vision + Gemini Flash で同時にOCR → マージ
       const geminiKey = import.meta.env.VITE_GOOGLE_AI_KEY as string;
       if (!geminiKey) throw new Error('VITE_GOOGLE_AI_KEY が未設定です');
+
+      const isAudio = file.type.startsWith('audio/');
+      const mimeType = file.type || (isAudio ? 'audio/mp3' : 'image/png');
 
       const callGemini = async (model: string, prompt: string): Promise<string> => {
         const res = await fetch(
@@ -1932,7 +1934,7 @@ const App: React.FC = () => {
             body: JSON.stringify({
               contents: [{
                 parts: [
-                  { inline_data: { mime_type: file.type || 'image/png', data: b64 } },
+                  { inline_data: { mime_type: mimeType, data: b64 } },
                   { text: prompt },
                 ],
               }],
@@ -1944,7 +1946,9 @@ const App: React.FC = () => {
         return j.candidates?.[0]?.content?.parts?.[0]?.text || '';
       };
 
-      const prompt = 'この画像/PDFに含まれるすべてのテキストを正確に文字起こししてください。改行やレイアウトを可能な限り保持してください。';
+      const prompt = isAudio
+        ? 'この音声に含まれるすべての発言を正確に文字起こししてください。話者が複数いる場合は話者を区別してください。タイムスタンプがわかる場合は付与してください。'
+        : 'この画像/PDFに含まれるすべてのテキストを正確に文字起こししてください。改行やレイアウトを可能な限り保持してください。';
 
       // 合議: 複数モデルで同時実行
       const [result1, result2] = await Promise.all([
@@ -1992,7 +1996,7 @@ const App: React.FC = () => {
       <div className="flex items-center gap-3 mb-6">
         <label className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 cursor-pointer text-white" style={{ background: C.accent }}>
           <Upload size={16} /> ファイルアップロード
-          <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => {
+          <input type="file" accept="image/*,application/pdf,audio/*" className="hidden" onChange={e => {
             const f = e.target.files?.[0];
             if (f) handleTranscribeUpload(f);
             e.target.value = '';
@@ -2018,7 +2022,7 @@ const App: React.FC = () => {
         <div className="text-center py-20" style={{ color: C.muted }}>
           <FileAudio size={48} className="mx-auto mb-4 opacity-50" />
           <p className="text-lg font-medium mb-2">文字起こしプロジェクトがありません</p>
-          <p className="text-sm">画像やPDFをアップロード、またはGoogle Driveから選択してください</p>
+          <p className="text-sm">音声・画像・PDFをアップロード、またはGoogle Driveから選択してください</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -2090,8 +2094,8 @@ const App: React.FC = () => {
             style={{ borderColor: C.border, background: C.surface }}>
             <Upload size={32} style={{ color: C.accent }} />
             <span className="text-sm font-medium" style={{ color: C.text }}>ファイルをアップロード</span>
-            <span className="text-xs" style={{ color: C.muted }}>画像・PDF対応</span>
-            <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => {
+            <span className="text-xs" style={{ color: C.muted }}>音声・画像・PDF対応</span>
+            <input type="file" accept="image/*,application/pdf,audio/*" className="hidden" onChange={e => {
               const f = e.target.files?.[0];
               if (f) handleTranscribeUpload(f);
               e.target.value = '';
@@ -2105,7 +2109,7 @@ const App: React.FC = () => {
             >
               <HardDrive size={32} style={{ color: C.accent }} />
               <span className="text-sm font-medium" style={{ color: C.text }}>Google Driveから選択</span>
-              <span className="text-xs" style={{ color: C.muted }}>Drive内の画像・PDF</span>
+              <span className="text-xs" style={{ color: C.muted }}>Drive内の音声・画像・PDF</span>
             </button>
           )}
         </div>
