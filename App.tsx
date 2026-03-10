@@ -4,7 +4,7 @@ import { analyzePdf, rebuildPdf, SpanOverride } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
-import { pickPdfFromDrive, pickFileFromDrive, isDriveConfigured } from './services/gdrive';
+import { pickPdfFromDrive, pickFileFromDrive } from './services/gdrive';
 import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
@@ -749,28 +749,19 @@ const App: React.FC = () => {
               <Wand2 size={16} /> AIで作成
             </button>
             <button
-              onClick={() => fileRef.current?.click()}
+              onClick={async () => {
+                try {
+                  const file = await pickPdfFromDrive();
+                  if (file) handleUpload(file);
+                } catch (e: any) {
+                  flash(e.message || 'Google Drive接続エラー', 'error');
+                }
+              }}
               className="text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90"
               style={{ background: C.accent }}
             >
-              <Plus size={16} /> PDFアップロード
+              <HardDrive size={16} /> Google Drive
             </button>
-            {isDriveConfigured() && (
-              <button
-                onClick={async () => {
-                  try {
-                    const file = await pickPdfFromDrive();
-                    if (file) handleUpload(file);
-                  } catch (e: any) {
-                    flash(e.message || 'Google Drive接続エラー', 'error');
-                  }
-                }}
-                className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90 border"
-                style={{ borderColor: C.accentBorder, color: C.accent, background: C.accentBg }}
-              >
-                <HardDrive size={16} /> Google Drive
-              </button>
-            )}
           </div>
         )}
         {view === AppState.EDIT && (
@@ -949,23 +940,21 @@ const App: React.FC = () => {
                 <span className="text-[11px] px-2.5 py-1 rounded-full font-medium" style={{ background: C.surface, color: C.muted }}>Cloud Run</span>
                 <span className="text-[11px] px-2.5 py-1 rounded-full font-medium" style={{ background: C.surface, color: C.muted }}>Supabase</span>
               </div>
-              {isDriveConfigured() && (
-                <button
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    try {
-                      const file = await pickPdfFromDrive();
-                      if (file) handleUpload(file);
-                    } catch (err: any) {
-                      flash(err.message || 'Google Drive接続エラー', 'error');
-                    }
-                  }}
-                  className="mt-4 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 mx-auto transition-colors hover:opacity-90 border"
-                  style={{ borderColor: C.accentBorder, color: C.accent, background: C.accentBg }}
-                >
-                  <HardDrive size={16} /> Google Driveから選択
-                </button>
-              )}
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    const file = await pickPdfFromDrive();
+                    if (file) handleUpload(file);
+                  } catch (err: any) {
+                    flash(err.message || 'Google Drive接続エラー', 'error');
+                  }
+                }}
+                className="mt-4 text-white px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 mx-auto transition-colors hover:opacity-90 shadow-sm"
+                style={{ background: C.accent }}
+              >
+                <HardDrive size={16} /> Google Driveから選択
+              </button>
             </div>
           </div>
         )}
@@ -1994,23 +1983,13 @@ const App: React.FC = () => {
   const renderTranscribeList = () => (
     <div className="flex-1 overflow-y-auto p-6">
       <div className="flex items-center gap-3 mb-6">
-        <label className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 cursor-pointer text-white" style={{ background: C.accent }}>
-          <Upload size={16} /> ファイルアップロード
-          <input type="file" accept="image/*,application/pdf,audio/*" className="hidden" onChange={e => {
-            const f = e.target.files?.[0];
-            if (f) handleTranscribeUpload(f);
-            e.target.value = '';
-          }} />
-        </label>
-        {isDriveConfigured() && (
-          <button
-            onClick={handleTranscribeFromDrive}
-            className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 border"
-            style={{ borderColor: C.accentBorder, color: C.accent, background: C.accentBg }}
-          >
-            <HardDrive size={16} /> Google Drive
-          </button>
-        )}
+        <button
+          onClick={handleTranscribeFromDrive}
+          className="text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90"
+          style={{ background: C.accent }}
+        >
+          <HardDrive size={16} /> Google Driveから選択
+        </button>
       </div>
       {transcribeLoading && (
         <div className="flex items-center gap-3 mb-4 p-4 rounded-lg" style={{ background: C.accentBg }}>
@@ -2022,7 +2001,7 @@ const App: React.FC = () => {
         <div className="text-center py-20" style={{ color: C.muted }}>
           <FileAudio size={48} className="mx-auto mb-4 opacity-50" />
           <p className="text-lg font-medium mb-2">文字起こしプロジェクトがありません</p>
-          <p className="text-sm">音声・画像・PDFをアップロード、またはGoogle Driveから選択してください</p>
+          <p className="text-sm">Google Driveから音声・画像・PDFを選択してください</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -2089,29 +2068,16 @@ const App: React.FC = () => {
             最も精度の高い結果を合議で出力します
           </p>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-          <label className="flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-dashed cursor-pointer hover:border-teal-300 transition-colors"
-            style={{ borderColor: C.border, background: C.surface }}>
-            <Upload size={32} style={{ color: C.accent }} />
-            <span className="text-sm font-medium" style={{ color: C.text }}>ファイルをアップロード</span>
+        <div className="flex justify-center mb-6">
+          <button
+            onClick={handleTranscribeFromDrive}
+            className="flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-dashed hover:border-teal-300 transition-colors w-full max-w-md"
+            style={{ borderColor: C.border, background: C.surface }}
+          >
+            <HardDrive size={32} style={{ color: C.accent }} />
+            <span className="text-sm font-medium" style={{ color: C.text }}>Google Driveから選択</span>
             <span className="text-xs" style={{ color: C.muted }}>音声・画像・PDF対応</span>
-            <input type="file" accept="image/*,application/pdf,audio/*" className="hidden" onChange={e => {
-              const f = e.target.files?.[0];
-              if (f) handleTranscribeUpload(f);
-              e.target.value = '';
-            }} />
-          </label>
-          {isDriveConfigured() && (
-            <button
-              onClick={handleTranscribeFromDrive}
-              className="flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-dashed hover:border-teal-300 transition-colors"
-              style={{ borderColor: C.border, background: C.surface }}
-            >
-              <HardDrive size={32} style={{ color: C.accent }} />
-              <span className="text-sm font-medium" style={{ color: C.text }}>Google Driveから選択</span>
-              <span className="text-xs" style={{ color: C.muted }}>Drive内の音声・画像・PDF</span>
-            </button>
-          )}
+          </button>
         </div>
         {transcribeLoading && (
           <div className="flex items-center justify-center gap-3 p-6 rounded-xl" style={{ background: C.accentBg }}>
