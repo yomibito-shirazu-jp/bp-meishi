@@ -12,7 +12,7 @@ import {
   Search, Building2, Inbox, ZoomIn, ZoomOut, Maximize, Move,
   MessageSquare, Send, Bot, Sparkles, Wand2, HardDrive,
   Settings, CheckCircle2, XCircle, Key, RefreshCw,
-  FileAudio, Clock, List,
+  FileAudio, Clock, List, LayoutTemplate, BookOpen,
 } from 'lucide-react';
 
 /* ═══════════════════════════════════════════
@@ -588,6 +588,14 @@ const App: React.FC = () => {
           { icon: FileAudio, label: 'AI作成', badge: 0, state: AppState.TRANSCRIBE_AI },
         ],
       },
+      {
+        title: '自動組版',
+        items: [
+          { icon: LayoutTemplate, label: '一覧', badge: 0, state: AppState.TYPESET_LIST },
+          { icon: BookOpen, label: '履歴', badge: 0, state: AppState.TYPESET_HISTORY },
+          { icon: Sparkles, label: 'AI組版', badge: 0, state: AppState.TYPESET_AI },
+        ],
+      },
     ];
 
     const isActive = (state: AppState) =>
@@ -719,6 +727,14 @@ const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <FileAudio size={16} style={{ color: C.accent }} />
             <h2 className="text-base font-bold text-slate-800">AI文字起こし</h2>
+          </div>
+        )}
+        {view === AppState.TYPESET_LIST && <h2 className="text-base font-bold text-slate-800">自動組版一覧</h2>}
+        {view === AppState.TYPESET_HISTORY && <h2 className="text-base font-bold text-slate-800">組版履歴</h2>}
+        {view === AppState.TYPESET_AI && (
+          <div className="flex items-center gap-2">
+            <LayoutTemplate size={16} style={{ color: C.accent }} />
+            <h2 className="text-base font-bold text-slate-800">AI自動組版</h2>
           </div>
         )}
         {view === AppState.EDIT && (
@@ -2100,6 +2116,207 @@ const App: React.FC = () => {
     </div>
   );
 
+  // ── Typeset (自動組版) views ──
+  const [typesetProjects, setTypesetProjects] = useState<{
+    id: string; name: string; source: string; pages: number;
+    template: string; status: 'done' | 'processing' | 'error';
+    pdf_b64?: string; preview_png?: string;
+    created_at: string;
+  }[]>([]);
+  const [typesetLoading, setTypesetLoading] = useState(false);
+
+  const handleTypesetFromDrive = async () => {
+    try {
+      const file = await pickFileFromDrive();
+      if (!file) return;
+      setTypesetLoading(true);
+      flash('自動組版中…', 'info');
+
+      // PDFをBase64に変換
+      const b64 = await new Promise<string>((res) => {
+        const reader = new FileReader();
+        reader.onload = () => res((reader.result as string).split(',')[1]);
+        reader.readAsDataURL(file);
+      });
+
+      const geminiKey = import.meta.env.VITE_GOOGLE_AI_KEY as string;
+      if (!geminiKey) throw new Error('VITE_GOOGLE_AI_KEY が未設定です');
+
+      // Geminiで文書構造を解析 → 組版指示を生成
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { inline_data: { mime_type: file.type || 'application/pdf', data: b64 } },
+                { text: `この文書を解析して、以下のJSON形式で自動組版データを返してください:
+{
+  "title": "文書タイトル",
+  "page_count": ページ数,
+  "sections": [
+    { "type": "heading"|"body"|"caption"|"footer", "text": "テキスト内容", "font_size_pt": 数値, "font_weight": "normal"|"bold", "alignment": "left"|"center"|"right" }
+  ],
+  "suggested_template": "business_card"|"flyer"|"report"|"brochure"|"poster"
+}
+JSONのみ返してください。` },
+              ],
+            }],
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(`Gemini: ${res.status}`);
+      const j = await res.json();
+      const raw = j.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      // Extract JSON from response
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { title: file.name, page_count: 1, sections: [], suggested_template: 'report' };
+
+      const project = {
+        id: crypto.randomUUID(),
+        name: parsed.title || file.name,
+        source: file.name,
+        pages: parsed.page_count || 1,
+        template: parsed.suggested_template || 'report',
+        status: 'done' as const,
+        created_at: new Date().toISOString(),
+      };
+
+      setTypesetProjects(prev => [project, ...prev]);
+      flash(`組版完了: ${parsed.sections?.length || 0}セクション検出`, 'ok');
+    } catch (e: any) {
+      flash(`組版エラー: ${e.message}`, 'error');
+    } finally {
+      setTypesetLoading(false);
+    }
+  };
+
+  const TEMPLATE_LABELS: Record<string, string> = {
+    business_card: '名刺', flyer: 'チラシ', report: 'レポート',
+    brochure: 'パンフ', poster: 'ポスター',
+  };
+
+  const renderTypesetList = () => (
+    <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex items-center gap-3 mb-6">
+        <button
+          onClick={handleTypesetFromDrive}
+          className="text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90"
+          style={{ background: C.accent }}
+        >
+          <HardDrive size={16} /> Google Driveから選択
+        </button>
+      </div>
+      {typesetLoading && (
+        <div className="flex items-center gap-3 mb-4 p-4 rounded-lg" style={{ background: C.accentBg }}>
+          <div className="w-5 h-5 border-2 border-teal-300 border-t-teal-600 rounded-full animate-spin" />
+          <span className="text-sm font-medium" style={{ color: C.accent }}>AI組版解析中…</span>
+        </div>
+      )}
+      {typesetProjects.length === 0 && !typesetLoading ? (
+        <div className="text-center py-20" style={{ color: C.muted }}>
+          <LayoutTemplate size={48} className="mx-auto mb-4 opacity-50" />
+          <p className="text-lg font-medium mb-2">組版プロジェクトがありません</p>
+          <p className="text-sm">Google Driveから文書を選択してAI自動組版</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {typesetProjects.map(p => (
+            <div key={p.id} className="p-4 rounded-xl border" style={{ background: C.card, borderColor: C.border }}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-medium text-sm" style={{ color: C.text }}>{p.name}</h3>
+                  <p className="text-xs mt-1" style={{ color: C.muted }}>{p.source} · {p.pages}ページ</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: C.accentBg, color: C.accent }}>
+                    {TEMPLATE_LABELS[p.template] || p.template}
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full" style={{
+                    background: p.status === 'done' ? '#dcfce7' : p.status === 'processing' ? '#fef9c3' : '#fee2e2',
+                    color: p.status === 'done' ? '#166534' : p.status === 'processing' ? '#854d0e' : '#991b1b',
+                  }}>
+                    {p.status === 'done' ? '完了' : p.status === 'processing' ? '処理中' : 'エラー'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderTypesetHistory = () => (
+    <div className="flex-1 overflow-y-auto p-6">
+      {typesetProjects.length === 0 ? (
+        <div className="text-center py-20" style={{ color: C.muted }}>
+          <BookOpen size={48} className="mx-auto mb-4 opacity-50" />
+          <p className="text-lg font-medium">履歴はまだありません</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {typesetProjects.map(p => (
+            <div key={p.id} className="flex items-center gap-4 p-3 rounded-lg border" style={{ background: C.card, borderColor: C.border }}>
+              <LayoutTemplate size={18} style={{ color: C.accent }} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate" style={{ color: C.text }}>{p.name}</p>
+                <p className="text-xs" style={{ color: C.muted }}>{new Date(p.created_at).toLocaleString('ja-JP')}</p>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: C.surface, color: C.muted }}>
+                {TEMPLATE_LABELS[p.template] || p.template}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderTypesetAI = () => (
+    <div className="flex-1 overflow-y-auto p-6">
+      <div className="max-w-2xl mx-auto">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: C.accentBg }}>
+            <LayoutTemplate size={32} style={{ color: C.accent }} />
+          </div>
+          <h3 className="text-lg font-bold mb-2" style={{ color: C.text }}>AI自動組版</h3>
+          <p className="text-sm" style={{ color: C.muted }}>
+            Gemini AIが文書構造を自動解析し、<br />
+            最適なレイアウト・テンプレートで組版します
+          </p>
+        </div>
+        <div className="flex justify-center mb-6">
+          <button
+            onClick={handleTypesetFromDrive}
+            className="flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-dashed hover:border-teal-300 transition-colors w-full max-w-md"
+            style={{ borderColor: C.border, background: C.surface }}
+          >
+            <HardDrive size={32} style={{ color: C.accent }} />
+            <span className="text-sm font-medium" style={{ color: C.text }}>Google Driveから選択</span>
+            <span className="text-xs" style={{ color: C.muted }}>PDF・画像・文書ファイル</span>
+          </button>
+        </div>
+        {typesetLoading && (
+          <div className="flex items-center justify-center gap-3 p-6 rounded-xl" style={{ background: C.accentBg }}>
+            <div className="w-6 h-6 border-2 border-teal-300 border-t-teal-600 rounded-full animate-spin" />
+            <span className="font-medium" style={{ color: C.accent }}>AI組版解析中…</span>
+          </div>
+        )}
+        <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {Object.entries(TEMPLATE_LABELS).map(([key, label]) => (
+            <div key={key} className="p-3 rounded-lg border text-center" style={{ background: C.surface, borderColor: C.border }}>
+              <LayoutTemplate size={20} className="mx-auto mb-1" style={{ color: C.accent }} />
+              <span className="text-xs font-medium" style={{ color: C.textSec }}>{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="h-screen flex text-slate-900 font-sans overflow-hidden" style={{ background: C.bg }}>
       {renderToast()}
@@ -2113,6 +2330,9 @@ const App: React.FC = () => {
         {view === AppState.TRANSCRIBE_LIST && renderTranscribeList()}
         {view === AppState.TRANSCRIBE_HISTORY && renderTranscribeHistory()}
         {view === AppState.TRANSCRIBE_AI && renderTranscribeAI()}
+        {view === AppState.TYPESET_LIST && renderTypesetList()}
+        {view === AppState.TYPESET_HISTORY && renderTypesetHistory()}
+        {view === AppState.TYPESET_AI && renderTypesetAI()}
         {view === AppState.EDIT && (
           <div className="flex-1 flex overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0">
