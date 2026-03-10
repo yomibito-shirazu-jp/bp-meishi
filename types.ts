@@ -68,4 +68,27 @@ export enum AppState {
   EDIT = 'EDIT',
   INBOX = 'INBOX',
   AI_CHAT = 'AI_CHAT',
+  SETTINGS = 'SETTINGS',
+  // 文字起こし
+  TRANSCRIBE_LIST = 'TRANSCRIBE_LIST',
+  TRANSCRIBE_HISTORY = 'TRANSCRIBE_HISTORY',
+  TRANSCRIBE_AI = 'TRANSCRIBE_AI',
+}
+
+export interface TranscribeProject {
+  id: string;
+  name: string;
+  source_type: 'drive' | 'upload';
+  source_url?: string;
+  text: string;
+  ai_results: AiResult[];
+  consensus_text?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AiResult {
+  model: string;      // 'gemini' | 'vision' | 'vertex'
+  text: string;
+  confidence?: number;
 }

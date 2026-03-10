@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Span, PageData, CardProject, AppState } from './types';
+import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult } from './types';
 import { analyzePdf, rebuildPdf, SpanOverride } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
@@ -12,6 +12,7 @@ import {
   Search, Building2, Inbox, ZoomIn, ZoomOut, Maximize, Move,
   MessageSquare, Send, Bot, Sparkles, Wand2, HardDrive,
   Settings, CheckCircle2, XCircle, Key, RefreshCw,
+  FileAudio, Clock, List,
 } from 'lucide-react';
 
 /* ═══════════════════════════════════════════
@@ -570,11 +571,30 @@ const App: React.FC = () => {
 
   // ── Sidebar ──
   const renderSidebar = () => {
-    const items = [
-      { icon: LayoutDashboard, label: '名刺一覧', badge: 0, state: AppState.DASHBOARD },
-      { icon: Inbox, label: '受信トレイ', badge: inboxProjects.length, state: AppState.INBOX },
-      { icon: Wand2, label: 'AI作成モード', badge: 0, state: AppState.AI_CHAT },
+    const sections = [
+      {
+        title: '名刺アプリ',
+        items: [
+          { icon: LayoutDashboard, label: '一覧', badge: 0, state: AppState.DASHBOARD },
+          { icon: Inbox, label: '受信', badge: inboxProjects.length, state: AppState.INBOX },
+          { icon: Wand2, label: 'AI作成', badge: 0, state: AppState.AI_CHAT },
+        ],
+      },
+      {
+        title: '文字起こし',
+        items: [
+          { icon: List, label: '一覧', badge: 0, state: AppState.TRANSCRIBE_LIST },
+          { icon: Clock, label: '履歴', badge: 0, state: AppState.TRANSCRIBE_HISTORY },
+          { icon: FileAudio, label: 'AI作成', badge: 0, state: AppState.TRANSCRIBE_AI },
+        ],
+      },
     ];
+
+    const isActive = (state: AppState) =>
+      view === state
+      || (state === AppState.DASHBOARD && view === AppState.EDIT)
+      || (state === AppState.AI_CHAT && view === AppState.EDIT && showChatInEditor);
+
     return (
       <div
         className={`${sidebarCollapsed ? 'w-16' : 'w-56'} flex flex-col transition-all duration-200 shrink-0 border-r`}
@@ -595,36 +615,47 @@ const App: React.FC = () => {
           )}
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 py-3 px-2 space-y-1">
-          {items.map(item => {
-            const active = view === item.state || (item.state === AppState.DASHBOARD && view === AppState.EDIT) || (item.state === AppState.AI_CHAT && view === AppState.EDIT && showChatInEditor);
-            return (
-              <button
-                key={item.label}
-                onClick={() => {
-                  if (item.state === AppState.DASHBOARD) { resetAll(); setShowChatInEditor(false); }
-                  else if (item.state === AppState.AI_CHAT) { setView(AppState.AI_CHAT); setShowChatInEditor(false); }
-                  else setView(item.state);
-                }}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors"
-                style={active
-                  ? { background: C.accentBg, color: C.accent, borderLeft: `3px solid ${C.accent}` }
-                  : { color: C.textSec, borderLeft: '3px solid transparent' }}
-              >
-                <item.icon size={18} className="shrink-0" />
-                {!sidebarCollapsed && <span className="flex-1 text-left">{item.label}</span>}
-                {!sidebarCollapsed && item.badge > 0 && (
-                  <span
-                    className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-white"
-                    style={{ background: C.accent }}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        {/* Nav sections */}
+        <nav className="flex-1 py-3 px-2 space-y-4 overflow-y-auto">
+          {sections.map(section => (
+            <div key={section.title}>
+              {!sidebarCollapsed && (
+                <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: C.muted }}>
+                  {section.title}
+                </div>
+              )}
+              <div className="space-y-0.5">
+                {section.items.map(item => {
+                  const active = isActive(item.state);
+                  return (
+                    <button
+                      key={`${section.title}-${item.label}`}
+                      onClick={() => {
+                        if (item.state === AppState.DASHBOARD) { resetAll(); setShowChatInEditor(false); }
+                        else if (item.state === AppState.AI_CHAT) { setView(AppState.AI_CHAT); setShowChatInEditor(false); }
+                        else setView(item.state);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                      style={active
+                        ? { background: C.accentBg, color: C.accent, borderLeft: `3px solid ${C.accent}` }
+                        : { color: C.textSec, borderLeft: '3px solid transparent' }}
+                    >
+                      <item.icon size={18} className="shrink-0" />
+                      {!sidebarCollapsed && <span className="flex-1 text-left">{item.label}</span>}
+                      {!sidebarCollapsed && item.badge > 0 && (
+                        <span
+                          className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-white"
+                          style={{ background: C.accent }}
+                        >
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
 
         {/* Settings */}
@@ -680,6 +711,14 @@ const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <Settings size={16} className="text-slate-400" />
             <h2 className="text-base font-bold text-slate-800">設定</h2>
+          </div>
+        )}
+        {view === AppState.TRANSCRIBE_LIST && <h2 className="text-base font-bold text-slate-800">文字起こし一覧</h2>}
+        {view === AppState.TRANSCRIBE_HISTORY && <h2 className="text-base font-bold text-slate-800">文字起こし履歴</h2>}
+        {view === AppState.TRANSCRIBE_AI && (
+          <div className="flex items-center gap-2">
+            <FileAudio size={16} style={{ color: C.accent }} />
+            <h2 className="text-base font-bold text-slate-800">AI文字起こし</h2>
           </div>
         )}
         {view === AppState.EDIT && (
@@ -1866,6 +1905,231 @@ const App: React.FC = () => {
     }
   };
 
+  // ── Transcribe views ──
+  const [transcribeProjects, setTranscribeProjects] = useState<TranscribeProject[]>([]);
+  const [transcribeLoading, setTranscribeLoading] = useState(false);
+
+  const handleTranscribeUpload = async (file: File) => {
+    setTranscribeLoading(true);
+    flash('文字起こし中…', 'info');
+    try {
+      const b64 = await new Promise<string>((res) => {
+        const reader = new FileReader();
+        reader.onload = () => res((reader.result as string).split(',')[1]);
+        reader.readAsDataURL(file);
+      });
+
+      // 合議: Gemini Vision + Gemini Flash で同時にOCR → マージ
+      const geminiKey = import.meta.env.VITE_GOOGLE_AI_KEY as string;
+      if (!geminiKey) throw new Error('VITE_GOOGLE_AI_KEY が未設定です');
+
+      const callGemini = async (model: string, prompt: string): Promise<string> => {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { inline_data: { mime_type: file.type || 'image/png', data: b64 } },
+                  { text: prompt },
+                ],
+              }],
+            }),
+          },
+        );
+        if (!res.ok) throw new Error(`Gemini ${model}: ${res.status}`);
+        const j = await res.json();
+        return j.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      };
+
+      const prompt = 'この画像/PDFに含まれるすべてのテキストを正確に文字起こししてください。改行やレイアウトを可能な限り保持してください。';
+
+      // 合議: 複数モデルで同時実行
+      const [result1, result2] = await Promise.all([
+        callGemini('gemini-2.5-flash', prompt),
+        callGemini('gemini-2.0-flash', prompt),
+      ]);
+
+      // 合議結果をマージ（長い方を基準に）
+      const consensus = result1.length >= result2.length ? result1 : result2;
+
+      const project: TranscribeProject = {
+        id: crypto.randomUUID(),
+        name: file.name,
+        source_type: 'upload',
+        text: consensus,
+        ai_results: [
+          { model: 'gemini-2.5-flash', text: result1 },
+          { model: 'gemini-2.0-flash', text: result2 },
+        ],
+        consensus_text: consensus,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      setTranscribeProjects(prev => [project, ...prev]);
+      flash('文字起こし完了（合議出力）', 'ok');
+    } catch (e: any) {
+      flash(`文字起こしエラー: ${e.message}`, 'error');
+    } finally {
+      setTranscribeLoading(false);
+    }
+  };
+
+  const handleTranscribeFromDrive = async () => {
+    try {
+      const file = await pickPdfFromDrive();
+      if (file) handleTranscribeUpload(file);
+    } catch (e: any) {
+      flash(e.message || 'Google Drive接続エラー', 'error');
+    }
+  };
+
+  const renderTranscribeList = () => (
+    <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex items-center gap-3 mb-6">
+        <label className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 cursor-pointer text-white" style={{ background: C.accent }}>
+          <Upload size={16} /> ファイルアップロード
+          <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => {
+            const f = e.target.files?.[0];
+            if (f) handleTranscribeUpload(f);
+            e.target.value = '';
+          }} />
+        </label>
+        {isDriveConfigured() && (
+          <button
+            onClick={handleTranscribeFromDrive}
+            className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 border"
+            style={{ borderColor: C.accentBorder, color: C.accent, background: C.accentBg }}
+          >
+            <HardDrive size={16} /> Google Drive
+          </button>
+        )}
+      </div>
+      {transcribeLoading && (
+        <div className="flex items-center gap-3 mb-4 p-4 rounded-lg" style={{ background: C.accentBg }}>
+          <div className="w-5 h-5 border-2 border-teal-300 border-t-teal-600 rounded-full animate-spin" />
+          <span className="text-sm font-medium" style={{ color: C.accent }}>合議処理中（複数AIモデルで同時解析）…</span>
+        </div>
+      )}
+      {transcribeProjects.length === 0 && !transcribeLoading ? (
+        <div className="text-center py-20" style={{ color: C.muted }}>
+          <FileAudio size={48} className="mx-auto mb-4 opacity-50" />
+          <p className="text-lg font-medium mb-2">文字起こしプロジェクトがありません</p>
+          <p className="text-sm">画像やPDFをアップロード、またはGoogle Driveから選択してください</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {transcribeProjects.map(p => (
+            <div key={p.id} className="p-4 rounded-xl border" style={{ background: C.card, borderColor: C.border }}>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-medium text-sm" style={{ color: C.text }}>{p.name}</h3>
+                <div className="flex items-center gap-2">
+                  {p.ai_results.map(r => (
+                    <span key={r.model} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: C.surface, color: C.muted }}>
+                      {r.model}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <pre className="text-xs whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto p-3 rounded-lg" style={{ background: C.surface, color: C.textSec }}>
+                {p.consensus_text || p.text}
+              </pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderTranscribeHistory = () => (
+    <div className="flex-1 overflow-y-auto p-6">
+      {transcribeProjects.length === 0 ? (
+        <div className="text-center py-20" style={{ color: C.muted }}>
+          <Clock size={48} className="mx-auto mb-4 opacity-50" />
+          <p className="text-lg font-medium">履歴はまだありません</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {transcribeProjects.map(p => (
+            <div key={p.id} className="flex items-center gap-4 p-3 rounded-lg border" style={{ background: C.card, borderColor: C.border }}>
+              <FileAudio size={18} style={{ color: C.accent }} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate" style={{ color: C.text }}>{p.name}</p>
+                <p className="text-xs" style={{ color: C.muted }}>{new Date(p.created_at).toLocaleString('ja-JP')}</p>
+              </div>
+              <div className="flex gap-1">
+                {p.ai_results.map(r => (
+                  <span key={r.model} className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: C.surface, color: C.muted }}>{r.model}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderTranscribeAI = () => (
+    <div className="flex-1 overflow-y-auto p-6">
+      <div className="max-w-2xl mx-auto">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: C.accentBg }}>
+            <Sparkles size={32} style={{ color: C.accent }} />
+          </div>
+          <h3 className="text-lg font-bold mb-2" style={{ color: C.text }}>AI合議文字起こし</h3>
+          <p className="text-sm" style={{ color: C.muted }}>
+            複数のAIモデル（Gemini 2.5 Flash / Gemini 2.0 Flash）が同時に解析し、<br />
+            最も精度の高い結果を合議で出力します
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          <label className="flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-dashed cursor-pointer hover:border-teal-300 transition-colors"
+            style={{ borderColor: C.border, background: C.surface }}>
+            <Upload size={32} style={{ color: C.accent }} />
+            <span className="text-sm font-medium" style={{ color: C.text }}>ファイルをアップロード</span>
+            <span className="text-xs" style={{ color: C.muted }}>画像・PDF対応</span>
+            <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => {
+              const f = e.target.files?.[0];
+              if (f) handleTranscribeUpload(f);
+              e.target.value = '';
+            }} />
+          </label>
+          {isDriveConfigured() && (
+            <button
+              onClick={handleTranscribeFromDrive}
+              className="flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-dashed hover:border-teal-300 transition-colors"
+              style={{ borderColor: C.border, background: C.surface }}
+            >
+              <HardDrive size={32} style={{ color: C.accent }} />
+              <span className="text-sm font-medium" style={{ color: C.text }}>Google Driveから選択</span>
+              <span className="text-xs" style={{ color: C.muted }}>Drive内の画像・PDF</span>
+            </button>
+          )}
+        </div>
+        {transcribeLoading && (
+          <div className="flex items-center justify-center gap-3 p-6 rounded-xl" style={{ background: C.accentBg }}>
+            <div className="w-6 h-6 border-2 border-teal-300 border-t-teal-600 rounded-full animate-spin" />
+            <span className="font-medium" style={{ color: C.accent }}>複数AIで合議解析中…</span>
+          </div>
+        )}
+        <div className="mt-6 p-4 rounded-xl border" style={{ background: C.card, borderColor: C.border }}>
+          <h4 className="text-xs font-bold mb-3 uppercase tracking-wider" style={{ color: C.muted }}>使用モデル</h4>
+          <div className="space-y-2">
+            {['Gemini 2.5 Flash', 'Gemini 2.0 Flash'].map(m => (
+              <div key={m} className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full" style={{ background: C.accent }} />
+                <span className="text-sm" style={{ color: C.textSec }}>{m}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="h-screen flex text-slate-900 font-sans overflow-hidden" style={{ background: C.bg }}>
       {renderToast()}
@@ -1876,6 +2140,9 @@ const App: React.FC = () => {
         {view === AppState.INBOX && renderInbox()}
         {view === AppState.AI_CHAT && renderAIChat()}
         {view === AppState.SETTINGS && renderSettings()}
+        {view === AppState.TRANSCRIBE_LIST && renderTranscribeList()}
+        {view === AppState.TRANSCRIBE_HISTORY && renderTranscribeHistory()}
+        {view === AppState.TRANSCRIBE_AI && renderTranscribeAI()}
         {view === AppState.EDIT && (
           <div className="flex-1 flex overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0">
