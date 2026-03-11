@@ -15,6 +15,7 @@ export const CONFIG_KEYS = [
   'VITE_GOOGLE_AI_KEY',
   'VITE_GOOGLE_CLIENT_ID',
   'VITE_GOOGLE_API_KEY',
+  'GOOGLE_CLIENT_SECRET',
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];

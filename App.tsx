@@ -1680,6 +1680,33 @@ const App: React.FC = () => {
       },
     ];
 
+    // Google OAuth fields (separate section)
+    const oauthFields: FieldDef[] = [
+      {
+        key: 'VITE_GOOGLE_CLIENT_ID',
+        label: 'Google OAuth Client ID',
+        description: 'GCP コンソール → 認証情報 → OAuth 2.0 クライアント ID',
+        placeholder: 'xxxxx.apps.googleusercontent.com',
+        sensitive: false,
+      },
+      {
+        key: 'GOOGLE_CLIENT_SECRET',
+        label: 'Google OAuth Client Secret',
+        description: 'OAuth 2.0 クライアント シークレット',
+        placeholder: 'GOCSPX-...',
+        sensitive: true,
+      },
+      {
+        key: 'VITE_GOOGLE_API_KEY',
+        label: 'Google API Key (Picker)',
+        description: 'Picker API / Drive API 用の API キー',
+        placeholder: 'AIzaSy...',
+        sensitive: false,
+      },
+    ];
+
+    const currentOrigin = window.location.origin;
+
     const handleTest = async (key: ConfigKey, testFn: () => Promise<string>) => {
       setSettingsTesting(prev => ({ ...prev, [key]: true }));
       setSettingsTestStatus(prev => ({ ...prev, [key]: null }));
@@ -1758,6 +1785,11 @@ const App: React.FC = () => {
                             .env から読込済
                           </span>
                         )}
+                        {hasValue ? (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">有効</span>
+                        ) : (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">未設定</span>
+                        )}
                       </div>
                       <p className="text-xs mt-0.5" style={{ color: C.muted }}>{description}</p>
                     </div>
@@ -1813,6 +1845,103 @@ const App: React.FC = () => {
                 </div>
               );
             })}
+          </div>
+
+          {/* Google Drive / OAuth section */}
+          <div className="mt-8">
+            <h3 className="text-sm font-bold text-slate-800 mb-1">Google Drive 連携</h3>
+            <p className="text-xs mb-4" style={{ color: C.muted }}>
+              Google Drive Picker を使うための OAuth 設定です。
+            </p>
+
+            {/* Redirect URI info box */}
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4">
+              <p className="text-xs font-bold text-amber-700 mb-2">
+                GCP OAuth 設定に以下を登録してください
+              </p>
+              <div className="space-y-2">
+                <div>
+                  <p className="text-[10px] font-semibold text-amber-600 mb-0.5">承認済みの JavaScript 生成元</p>
+                  <code className="block text-xs font-mono bg-white border border-amber-200 rounded-lg px-3 py-1.5 select-all text-slate-700">
+                    {currentOrigin}
+                  </code>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-amber-600 mb-0.5">承認済みのリダイレクト URI</p>
+                  <code className="block text-xs font-mono bg-white border border-amber-200 rounded-lg px-3 py-1.5 select-all text-slate-700">
+                    {currentOrigin}
+                  </code>
+                </div>
+              </div>
+            </div>
+
+            {/* Status indicator */}
+            {(() => {
+              const clientId = getConfig('VITE_GOOGLE_CLIENT_ID');
+              const apiKey = getConfig('VITE_GOOGLE_API_KEY');
+              const allSet = !!(clientId && apiKey);
+              return (
+                <div className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg mb-4 ${allSet ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
+                  {allSet ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                  {allSet
+                    ? 'Google Drive 連携: 有効（Client ID・API Key 設定済み）'
+                    : `Google Drive 連携: 無効（${!clientId ? 'Client ID' : ''}${!clientId && !apiKey ? ' / ' : ''}${!apiKey ? 'API Key' : ''} 未設定）`
+                  }
+                </div>
+              );
+            })()}
+
+            <div className="space-y-4">
+              {oauthFields.map(({ key, label, description, placeholder, sensitive }) => {
+                const draftVal = settingsDraft[key] ?? '';
+                const savedVal = getConfig(key);
+                const isOverridden = getAllOverrides()[key] !== undefined;
+
+                return (
+                  <div
+                    key={key}
+                    className="bg-white rounded-2xl border p-5 space-y-3 transition-shadow hover:shadow-sm"
+                    style={{ borderColor: draftVal ? C.accentBorder : C.border }}
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Key size={12} style={{ color: C.accent }} />
+                      <span className="text-sm font-bold text-slate-800">{label}</span>
+                      {isOverridden && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                          style={{ background: C.accentBg, color: C.accent }}>
+                          上書き中
+                        </span>
+                      )}
+                      {savedVal && !isOverridden && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">
+                          .env から読込済
+                        </span>
+                      )}
+                      {savedVal ? (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">有効</span>
+                      ) : (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">未設定</span>
+                      )}
+                    </div>
+                    <p className="text-xs" style={{ color: C.muted }}>{description}</p>
+                    <input
+                      type={sensitive ? 'password' : 'text'}
+                      value={draftVal}
+                      onChange={e => setSettingsDraft(prev => ({ ...prev, [key]: e.target.value }))}
+                      placeholder={
+                        savedVal
+                          ? (sensitive ? '••••••••（設定済み — 変更する場合のみ入力）' : savedVal)
+                          : placeholder
+                      }
+                      className="w-full px-3 py-2.5 rounded-xl border text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-300 bg-white transition-colors"
+                      style={{ borderColor: draftVal ? C.accent : C.border }}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           {/* Danger zone */}
