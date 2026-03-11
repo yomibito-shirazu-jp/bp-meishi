@@ -8,6 +8,9 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        headers: {
+          'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+        },
       },
       plugins: [react()],
       define: {

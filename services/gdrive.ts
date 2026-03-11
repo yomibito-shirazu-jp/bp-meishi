@@ -65,6 +65,7 @@ function getAccessToken(): Promise<string> {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: getClientId(),
       scope: SCOPES,
+      prompt: 'consent',
       callback: (resp: any) => {
         if (resp.error) {
           reject(new Error(resp.error));
@@ -80,8 +81,12 @@ function getAccessToken(): Promise<string> {
         } catch { /* ignore */ }
         resolve(resp.access_token);
       },
+      error_callback: (err: any) => {
+        console.error('GIS token error:', err);
+        reject(new Error(err?.message || err?.type || 'Google認証に失敗しました。ポップアップブロッカーを確認してください。'));
+      },
     });
-    client.requestAccessToken();
+    client.requestAccessToken({ prompt: 'consent' });
   });
 }
 
