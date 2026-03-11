@@ -1,19 +1,31 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { CardProject } from '../types';
+import { getConfig } from './config';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+// ── Dynamic Supabase client ──
+// Re-created automatically when URL / key changes (e.g. after Settings save).
+let _client: SupabaseClient | null = null;
+let _cachedUrl = '';
+let _cachedKey = '';
 
-let supabase: SupabaseClient | null = null;
-if (supabaseUrl && supabaseKey) {
+const getSupabaseClient = (): SupabaseClient | null => {
+  const url = getConfig('VITE_SUPABASE_URL');
+  const key = getConfig('VITE_SUPABASE_ANON_KEY');
+  if (!url || !key) {
+    console.warn('Supabase credentials not set. Using localStorage fallback.');
+    return null;
+  }
+  if (url === _cachedUrl && key === _cachedKey && _client) return _client;
   try {
-    supabase = createClient(supabaseUrl, supabaseKey);
+    _client = createClient(url, key);
+    _cachedUrl = url;
+    _cachedKey = key;
+    return _client;
   } catch {
     console.warn('Supabase init failed, using localStorage fallback.');
+    return null;
   }
-} else {
-  console.warn('Supabase credentials not set. Using localStorage fallback.');
-}
+};
 
 // ── localStorage fallback ──
 // NOTE: base64 binary fields are stripped before writing to localStorage to
@@ -58,6 +70,7 @@ const setLocal = (projects: CardProject[]): void => {
 // ── CRUD ──
 
 export const listProjects = async (): Promise<CardProject[]> => {
+  const supabase = getSupabaseClient();
   if (!supabase) return getLocal();
   try {
     const { data, error } = await supabase
@@ -73,6 +86,7 @@ export const listProjects = async (): Promise<CardProject[]> => {
 };
 
 export const getProject = async (id: string): Promise<CardProject | null> => {
+  const supabase = getSupabaseClient();
   if (!supabase) return getLocal().find(p => p.id === id) || null;
   try {
     const { data, error } = await supabase
@@ -89,6 +103,7 @@ export const getProject = async (id: string): Promise<CardProject | null> => {
 };
 
 export const saveProject = async (project: CardProject): Promise<CardProject> => {
+  const supabase = getSupabaseClient();
   if (!supabase) {
     const updated = { ...project, updated_at: new Date().toISOString() };
     const projects = getLocal();
@@ -144,6 +159,7 @@ export const saveProject = async (project: CardProject): Promise<CardProject> =>
 };
 
 export const deleteProject = async (id: string): Promise<void> => {
+  const supabase = getSupabaseClient();
   if (!supabase) {
     setLocal(getLocal().filter(p => p.id !== id));
     return;

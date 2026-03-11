@@ -1924,7 +1924,7 @@ const App: React.FC = () => {
         reader.readAsDataURL(file);
       });
 
-      const geminiKey = import.meta.env.VITE_GOOGLE_AI_KEY as string;
+      const geminiKey = getConfig('VITE_GOOGLE_AI_KEY');
       if (!geminiKey) throw new Error('VITE_GOOGLE_AI_KEY が未設定です');
 
       const isAudio = file.type.startsWith('audio/');
@@ -2139,7 +2139,7 @@ const App: React.FC = () => {
         reader.readAsDataURL(file);
       });
 
-      const geminiKey = import.meta.env.VITE_GOOGLE_AI_KEY as string;
+      const geminiKey = getConfig('VITE_GOOGLE_AI_KEY');
       if (!geminiKey) throw new Error('VITE_GOOGLE_AI_KEY が未設定です');
 
       // Geminiで文書構造を解析 → 組版指示を生成

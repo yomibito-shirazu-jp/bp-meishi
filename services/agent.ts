@@ -1,6 +1,6 @@
 import { Span } from '../types';
+import { getConfig } from './config';
 
-const GOOGLE_AI_KEY = import.meta.env.VITE_GOOGLE_AI_KEY as string;
 
 export interface AgentMessage {
   role: 'user' | 'assistant';
@@ -31,9 +31,9 @@ export async function runAgentInstruction(
   imageBase64?: string | null,
   conversationHistory: AgentMessage[] = [],
 ): Promise<AgentResponse> {
-  if (!GOOGLE_AI_KEY) {
+  if (!getConfig('VITE_GOOGLE_AI_KEY')) {
     return {
-      message: 'API キーが設定されていません。.env.local に VITE_GOOGLE_AI_KEY を設定してください。',
+      message: 'API キーが設定されていません。設定画面から VITE_GOOGLE_AI_KEY を入力してください。',
       actions: [],
     };
   }
@@ -104,7 +104,7 @@ ${historyContext || '(なし)'}
 
   parts.push({ text: `${systemPrompt}\n\n## ユーザーの指示\n${instruction}` });
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GOOGLE_AI_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${getConfig('VITE_GOOGLE_AI_KEY')}`;
 
   const res = await fetch(url, {
     method: 'POST',

@@ -1,13 +1,10 @@
 import { AnalyzeResponse, RebuildResponse } from '../types';
+import { getConfig } from './config';
 
-const API_URL = import.meta.env.VITE_API_URL as string;
-
-if (!API_URL) {
-  console.warn('VITE_API_URL is not set. Add it to .env.local');
-}
+const getApiUrl = () => getConfig('VITE_API_URL');
 
 export const healthCheck = async (): Promise<boolean> => {
-  const res = await fetch(`${API_URL}/health`);
+  const res = await fetch(`${getApiUrl()}/health`);
   const data = await res.json();
   return data.status === 'ok';
 };
@@ -15,7 +12,7 @@ export const healthCheck = async (): Promise<boolean> => {
 export const analyzePdf = async (file: File): Promise<AnalyzeResponse> => {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`${API_URL}/analyze`, { method: 'POST', body: form });
+  const res = await fetch(`${getApiUrl()}/analyze`, { method: 'POST', body: form });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throw new Error(e.detail || `HTTP ${res.status}`);
@@ -39,7 +36,7 @@ export const rebuildPdf = async (
   clipRect?: [number, number, number, number],
   overrides?: Record<string, SpanOverride>,
 ): Promise<RebuildResponse> => {
-  const res = await fetch(`${API_URL}/rebuild`, {
+  const res = await fetch(`${getApiUrl()}/rebuild`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

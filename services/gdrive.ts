@@ -6,8 +6,10 @@
  *   VITE_GOOGLE_API_KEY    — API Key (Picker API 有効化済み)
  */
 
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
-const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY as string;
+import { getConfig } from './config';
+
+const getClientId = () => getConfig('VITE_GOOGLE_CLIENT_ID');
+const getApiKey = () => getConfig('VITE_GOOGLE_API_KEY');
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 
 let pickerLoaded = false;
@@ -61,7 +63,7 @@ function getAccessToken(): Promise<string> {
   accessToken = null;
   return new Promise((resolve, reject) => {
     const client = window.google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
+      client_id: getClientId(),
       scope: SCOPES,
       callback: (resp: any) => {
         if (resp.error) {
@@ -89,7 +91,7 @@ const MIME_ALL = 'application/pdf,image/png,image/jpeg,image/gif,image/webp,imag
 
 /** Generic picker — mimeTypes でフィルタ */
 async function pickFromDrive(mimeTypes: string, title: string): Promise<File | null> {
-  if (!CLIENT_ID || !API_KEY) {
+  if (!getClientId() || !getApiKey()) {
     throw new Error('Google Drive連携に必要な環境変数が未設定です (VITE_GOOGLE_CLIENT_ID, VITE_GOOGLE_API_KEY)');
   }
 
@@ -104,7 +106,7 @@ async function pickFromDrive(mimeTypes: string, title: string): Promise<File | n
     const picker = new window.google.picker.PickerBuilder()
       .addView(view)
       .setOAuthToken(token)
-      .setDeveloperKey(API_KEY)
+      .setDeveloperKey(getApiKey())
       .setAppId('270124753853')
       .setTitle(title)
       .setCallback(async (data: any) => {
@@ -150,7 +152,7 @@ async function downloadDriveFile(fileId: string, fileName: string, mimeType: str
 
 /** Check if Google Drive integration is configured */
 export function isDriveConfigured(): boolean {
-  return !!(CLIENT_ID && API_KEY);
+  return !!(getClientId() && getApiKey());
 }
 
 // Type declarations for Google APIs

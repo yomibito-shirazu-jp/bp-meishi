@@ -1,9 +1,9 @@
 import { Span } from '../types';
 
-const GOOGLE_AI_KEY = import.meta.env.VITE_GOOGLE_AI_KEY as string;
+import { getConfig } from './config';
 
 const geminiUrl = (model = 'gemini-2.5-flash') =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GOOGLE_AI_KEY}`;
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${getConfig('VITE_GOOGLE_AI_KEY')}`;
 
 export interface CorrectedSpan {
   id: string;
@@ -20,7 +20,7 @@ export async function correctOcrWithAI(
   imageBase64: string,       // raw base64 (no data:... prefix)
   mergedSpans: Span[],
 ): Promise<CorrectedSpan[]> {
-  if (!GOOGLE_AI_KEY) {
+  if (!getConfig('VITE_GOOGLE_AI_KEY')) {
     console.warn('VITE_GOOGLE_AI_KEY not set — skipping AI correction');
     return mergedSpans.map(s => ({ id: s.id, text: s.text, category: 'other' }));
   }

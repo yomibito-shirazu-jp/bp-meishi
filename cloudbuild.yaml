@@ -1,0 +1,46 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'Dockerfile.web'
+      - '--build-arg'
+      - 'VITE_API_URL=${_VITE_API_URL}'
+      - '--build-arg'
+      - 'VITE_SUPABASE_URL=${_VITE_SUPABASE_URL}'
+      - '--build-arg'
+      - 'VITE_SUPABASE_ANON_KEY=${_VITE_SUPABASE_ANON_KEY}'
+      - '--build-arg'
+      - 'VITE_GOOGLE_AI_KEY=${_VITE_GOOGLE_AI_KEY}'
+      - '--build-arg'
+      - 'VITE_GOOGLE_CLIENT_ID=${_VITE_GOOGLE_CLIENT_ID}'
+      - '--build-arg'
+      - 'VITE_GOOGLE_API_KEY=${_VITE_GOOGLE_API_KEY}'
+      - '-t'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/meishi:$COMMIT_SHA'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/meishi:$COMMIT_SHA'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'meishi'
+      - '--image'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/meishi:$COMMIT_SHA'
+      - '--region'
+      - 'asia-northeast1'
+      - '--allow-unauthenticated'
+
+substitutions:
+  _VITE_API_URL: 'https://meishi-api-270124753853.asia-northeast1.run.app'
+  _VITE_SUPABASE_URL: 'https://usevmihhtwjzmgpxmhle.supabase.co'
+  _VITE_SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVzZXZtaWhodHdqem1ncHhtaGxlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE2Mzg1OTUsImV4cCI6MjA3NzIxNDU5NX0.p3xkSemG16kgQvUqvg5Z9w6JDzm9EfeoxRNT_-7AKjw'
+  _VITE_GOOGLE_AI_KEY: 'AIzaSyB90YCcQlPzLzMEflvC1VRS4D1JVsC_l10'
+  _VITE_GOOGLE_CLIENT_ID: '270124753853-u1hjecajdni1e0t1s5dpr5hqo7eah9oa.apps.googleusercontent.com'
+  _VITE_GOOGLE_API_KEY: 'AIzaSyCjjLXhUo0bl1EALyYAq5PZS8DiQw14X88'
