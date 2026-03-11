@@ -37,6 +37,9 @@ steps:
       - 'asia-northeast1'
       - '--allow-unauthenticated'
 
+options:
+  logging: CLOUD_LOGGING_ONLY
+
 substitutions:
   _VITE_API_URL: 'https://meishi-api-270124753853.asia-northeast1.run.app'
   _VITE_SUPABASE_URL: 'https://usevmihhtwjzmgpxmhle.supabase.co'
