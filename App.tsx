@@ -12,7 +12,7 @@ import {
   Search, Building2, Inbox, ZoomIn, ZoomOut, Maximize, Move,
   MessageSquare, Send, Bot, Sparkles, Wand2, HardDrive,
   Settings, CheckCircle2, XCircle, Key, RefreshCw,
-  FileAudio, Clock, List, LayoutTemplate, BookOpen,
+  FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 
@@ -654,6 +654,7 @@ const App: React.FC = () => {
       {
         title: 'Adobe自動組版',
         items: [
+          { icon: MonitorPlay, label: 'セットアップ', badge: 0, state: AppState.ADOBE_SETUP },
           { icon: LayoutTemplate, label: '一覧', badge: 0, state: AppState.TYPESET_LIST },
           { icon: BookOpen, label: '履歴', badge: 0, state: AppState.TYPESET_HISTORY },
           { icon: Sparkles, label: 'AI組版', badge: 0, state: AppState.TYPESET_AI },
@@ -2657,6 +2658,66 @@ JSONのみ返してください。` },
     </div>
   );
 
+  const renderAdobeSetup = () => (
+    <div className="flex-1 overflow-y-auto p-6" style={{ background: C.bg }}>
+      <div className="max-w-2xl mx-auto pb-20">
+        <div className="text-center mb-10">
+          <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-sm" style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)' }}>
+            <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="40" height="40" alt="Illustrator" />
+          </div>
+          <h3 className="text-2xl font-bold mb-3" style={{ color: C.text }}>Adobe 連携セットアップ</h3>
+          <p className="text-base text-slate-600">
+            ローカルのIllustratorと通信するための設定画面です。
+          </p>
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-sm border p-8 space-y-8" style={{ borderColor: C.border }}>
+          <div className="space-y-4">
+            <div>
+              <h4 className="font-bold text-lg border-b pb-2 mb-4">1. プラグインのインストール（初回のみ）</h4>
+              <p className="text-sm text-slate-600 mb-2">Illustratorにプロキシと通信するためのプラグインをインストールします。</p>
+              <div className="bg-slate-50 p-4 rounded-xl border text-sm text-slate-700">
+                <code>mcp/adb-mcp-main/adb-mcp-main/cep/com.mikechambers.ai</code> フォルダをコピーして、<br/>
+                <code>C:\Program Files (x86)\Common Files\Adobe\CEP\extensions\</code> <br/>
+                の中に貼り付けてIllustratorを再起動してください。
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <h4 className="font-bold text-lg border-b pb-2 mb-4">2. ローカルサーバー(プロキシ)の起動</h4>
+              <p className="text-sm text-slate-600 mb-2">
+                コマンドプロンプトやターミナルを開き、以下のコマンドで起動します（起動すると黒い画面で待機状態になります）。
+              </p>
+              <div className="bg-slate-900 text-green-400 p-5 rounded-xl mt-3 font-mono text-sm shadow-inner overflow-x-auto whitespace-pre">
+{`cd mcp\\adb-mcp-main\\adb-mcp-main\\adb-proxy-socket
+npm install
+npm run dev`}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4 pt-4">
+            <h4 className="font-bold text-lg border-b pb-2 mb-4">3. アプリと連携</h4>
+            <p className="text-sm text-slate-600">
+              サーバーの起動が完了したら、下のボタンを押して接続を確立してください。<br />
+              <span className="text-xs text-rose-500 font-bold mb-2 inline-block">※Illustratorを開き、メニューから「ウィンドウ」＞「エクステンション」＞「Illustrator MCP Agent」を開き、Connectボタンも押しておいてください。</span>
+            </p>
+            
+            <button 
+              onClick={connectToAdb}
+              disabled={adbConnected}
+              className={`w-full py-5 rounded-2xl font-bold text-xl text-white shadow-xl transition-all flex items-center justify-center gap-3 ${adbConnected ? 'bg-emerald-500 cursor-default' : 'bg-sky-600 hover:bg-sky-500 hover:-translate-y-1'}`}
+            >
+              {adbConnected ? <><CheckCircle2 size={24}/> 連携済</> : <><RefreshCw size={24}/> Illustratorと連携する</>}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="h-screen flex text-slate-900 font-sans overflow-hidden" style={{ background: C.bg }}>
       {renderToast()}
@@ -2673,6 +2734,7 @@ JSONのみ返してください。` },
         {view === AppState.TYPESET_LIST && renderTypesetList()}
         {view === AppState.TYPESET_HISTORY && renderTypesetHistory()}
         {view === AppState.TYPESET_AI && renderTypesetAI()}
+        {view === AppState.ADOBE_SETUP && renderAdobeSetup()}
         {view === AppState.EDIT && (
           <div className="flex-1 flex overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0">

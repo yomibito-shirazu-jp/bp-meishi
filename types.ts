@@ -77,6 +77,7 @@ export enum AppState {
   TYPESET_LIST = 'TYPESET_LIST',
   TYPESET_HISTORY = 'TYPESET_HISTORY',
   TYPESET_AI = 'TYPESET_AI',
+  ADOBE_SETUP = 'ADOBE_SETUP',
 }
 
 export interface TranscribeProject {
