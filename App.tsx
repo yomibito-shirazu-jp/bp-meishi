@@ -137,8 +137,8 @@ const App: React.FC = () => {
     setAdbSocket(socket);
   };
 
-  const sendToAdobe = () => {
-    if (!adbSocket || !adbConnected) {
+  const sendToAdobe = async () => {
+    if (adobeTarget !== 'indesign' && (!adbSocket || !adbConnected)) {
       flash('Adobe Proxyに接続されていません', 'error');
       return;
     }
@@ -237,13 +237,27 @@ const App: React.FC = () => {
       `;
     }
 
-    adbSocket.emit('command_packet', {
-      application: appName,
-      command: {
-        action: 'executeExtendScript',
-        options: { scriptString }
+    if (adobeTarget === 'indesign') {
+      try {
+        const res = await fetch('http://localhost:3002/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: scriptString })
+        });
+        if (!res.ok) throw new Error('Network response was not ok');
+      } catch (err) {
+        flash('InDesign UXP Bridge (ポート3002) への通信に失敗しました。', 'error');
+        return;
       }
-    });
+    } else {
+      adbSocket!.emit('command_packet', {
+        application: appName,
+        command: {
+          action: 'executeExtendScript',
+          options: { scriptString }
+        }
+      });
+    }
 
     const targetNames = {
       illustrator: 'Illustrator',
@@ -2731,8 +2745,8 @@ node proxy.js`}
             </div>
             <h4 className="font-bold text-xl w-full text-center" style={{ color: C.text }}>最終実行</h4>
             <p className="text-sm font-medium text-slate-500 text-center mb-2">
-              ステップ1とステップ2が両方とも「準備完了」の場合のみボタンが押せます。<br/>
-              対象とするアプリを選び、ボタンを押すと自動的に動作を開始します。
+              対象とするアプリを選び、ボタンを押すと自動的に動作を開始します。<br/>
+              ※ InDesignは専用のUXPサーバー(ポート3002)を使用するため準備完了ステータスに依存しません。
             </p>
 
             <div className="flex gap-4 my-2 mb-4 w-full justify-center">
@@ -2757,9 +2771,9 @@ node proxy.js`}
 
             <button
               onClick={sendToAdobe}
-              disabled={!(spans.length > 0 && adbConnected)}
+              disabled={!(spans.length > 0) || (adobeTarget !== 'indesign' && !adbConnected)}
               className="w-full py-5 rounded-2xl font-bold text-xl text-white shadow-xl transition-all flex items-center justify-center gap-3 disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: (spans.length > 0 && adbConnected) ? 'linear-gradient(135deg, #ff7a00, #ff4d00)' : '#94a3b8' }}
+              style={{ background: spans.length > 0 && (adobeTarget === 'indesign' || adbConnected) ? 'linear-gradient(135deg, #ff7a00, #ff4d00)' : '#94a3b8' }}
             >
               <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="24" height="24" alt="Adobe" className={!(spans.length > 0 && adbConnected) ? "opacity-50 grayscale" : ""} />
               {adobeTarget === 'illustrator' ? 'Illustrator' : adobeTarget === 'indesign' ? 'InDesign' : 'Photoshop'}で自動組版を開始する
