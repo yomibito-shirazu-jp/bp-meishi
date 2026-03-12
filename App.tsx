@@ -274,7 +274,7 @@ const App: React.FC = () => {
         ...prev,
         {
           role: 'assistant',
-          content: \`**✨ \${targetName}への自動組版が完了しました！ ✨**\\n\\n\${targetName}の画面をご覧ください。画像から解析した文字情報が自動配置されています！\\n\\nここからの**「人間のデザイナーが行うような微調整」**も私が担当します。\\n\\nどんな調整が必要ですか？魔法のように一瞬で仕上げてみせますので、何でもお申し付けください！\`,
+          content: `**✨ ${targetName}への自動組版が完了しました！ ✨**\n\n${targetName}の画面をご覧ください。画像から解析した文字情報が自動配置されています！\n\nここからの**「人間のデザイナーが行うような微調整」**も私が担当します。\n\nどんな調整が必要ですか？魔法のように一瞬で仕上げてみせますので、何でもお申し付けください！`,
           timestamp: new Date().toISOString()
         }
       ]);
@@ -2790,79 +2790,99 @@ node proxy.js`}
       <div className="max-w-2xl mx-auto pb-20">
         <div className="text-center mb-10">
           <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-sm" style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)' }}>
-            <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="40" height="40" alt="Illustrator" />
+            <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="40" height="40" alt="Adobe" />
           </div>
           <h3 className="text-2xl font-bold mb-3" style={{ color: C.text }}>Adobe 連携セットアップ</h3>
           <p className="text-base text-slate-600">
-            ローカルのIllustratorと通信するための設定画面です。
+            ローカルのAdobeアプリケーションと自動組版で連携するための設定画面です。
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border p-8 space-y-8" style={{ borderColor: C.border }}>
+        {/* ---------------- InDesign (Modern UXP) Setup ---------------- */}
+        <div className="bg-white rounded-2xl shadow-sm border p-8 space-y-6 mb-8 border-sky-200">
+          <h4 className="font-bold text-xl text-sky-700 border-b border-sky-100 pb-3 flex items-center gap-2">
+            <span className="bg-sky-100 text-sky-700 px-2 py-1 rounded text-sm">推奨</span> 
+            InDesign 専用セットアップ (UXP方式)
+          </h4>
+          <p className="text-sm text-slate-600">
+            InDesignは超高速で安定した最新のUXP(Unified Extensibility Platform)方式で直接通信します。
+          </p>
+          
           <div className="space-y-4">
             <div>
-              <h4 className="font-bold text-lg border-b pb-2 mb-4">1. 自動インストールの実行（初回のみ）</h4>
+              <h5 className="font-bold text-md mb-2">1. UXPサーバーのダウンロードと起動 (毎回)</h5>
               <p className="text-sm text-slate-600 mb-2">
-                PowerShellを開き、以下のコマンドを丸ごとコピーして貼り付けて実行してください。<br />
-                <span className="text-rose-500 font-medium text-xs">※ プラグイン配置(Illustrator用)と、Claude Desktopとの連携設定 (Illustrator, Photoshop, InDesign) を一括で自動で行います。</span>
+                専用のリポジトリをダウンロードし、<strong>ポート3002</strong>でブリッジサーバーを起動します。
               </p>
-              <div className="bg-slate-900 text-green-400 p-5 rounded-xl mt-3 font-mono text-xs shadow-inner overflow-x-auto whitespace-pre">
-{`mkdir -force $env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai
-Copy-Item ".\\mcp\\adb-mcp-main\\adb-mcp-main\\cep\\com.mikechambers.ai\\*" "$env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai" -Recurse -Force
-cd mcp\\adb-mcp-main\\adb-mcp-main\\mcp
-uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with numpy ps-mcp.py
-uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow id-mcp.py
-uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow ai-mcp.py
-cd ..\\adb-proxy-socket
-npm install`}
+              <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-xs shadow-inner overflow-x-auto whitespace-pre">
+{`git clone https://github.com/theloniuser/indesign-uxp-server.git
+cd indesign-uxp-server\\bridge
+# 起動ポートを3002に変更して実行します
+$env:PORT="3002"; node server.js`}
               </div>
-              <ul className="list-disc pl-5 mt-3 text-sm text-slate-600 space-y-1">
-                <li>実行後、Illustrator と Claude Desktop を再起動してください。</li>
-                <li>※ 実行には <code>uv</code> (Python用ツール) および <code>npm</code> が必要です。</li>
-              </ul>
             </div>
-          </div>
 
-          <div className="space-y-4">
             <div>
-              <h4 className="font-bold text-lg border-b pb-2 mb-4">2. Photoshop / InDesign についての設定</h4>
-              <p className="text-sm text-slate-600 mb-2">Photoshop と InDesign のプラグインは直接コピーできず、手動でロードする必要があります。</p>
-              <ol className="list-decimal pl-5 text-sm text-slate-600 space-y-1">
-                <li>Adobe Creative Cloud から <strong>UXP Developer Tools</strong> をインストールして起動します。</li>
-                <li><strong>Add Plugin</strong> をクリックし、<code>mcp\\adb-mcp-main\\adb-mcp-main\\uxp\\ps\\manifest.json</code> (Photoshop用) または <code>uxp\\id\\...</code> (InDesign用) を選択して Load します。</li>
+              <h5 className="font-bold text-md mb-2">2. InDesignプラグインの読み込み (初回のみ)</h5>
+              <ol className="list-decimal pl-5 text-sm text-slate-600 space-y-2">
+                <li>Adobe Creative Cloud から <strong>UXP Developer Tools</strong> を起動します。</li>
+                <li><strong>Add Plugin</strong> をクリックし、ダウンロードしたフォルダ内の <code>plugin\\manifest.json</code> を選択して Load します。</li>
+                <li>InDesignを起動し、メニューの「プラグイン」から <strong>InDesign Bridge</strong> パネルを開きます。</li>
+                <li>パネルに <code>Connected to bridge ✓</code> と表示されていれば完了です。<br/><span className="text-xs text-sky-600 font-bold">※ この状態になれば、ステップ3からいつでも「InDesignで組版開始」ボタンが押せます！</span></li>
               </ol>
             </div>
           </div>
+        </div>
+
+        {/* ---------------- Illustrator / Photoshop (Legacy Socket) Setup ---------------- */}
+        <div className="bg-white rounded-2xl shadow-sm border p-8 space-y-6" style={{ borderColor: C.border }}>
+          <h4 className="font-bold text-xl border-b pb-3 text-slate-700">
+            Illustrator / Photoshop 用セットアップ
+          </h4>
+          <p className="text-sm text-slate-600">
+            従来のExtendScriptとローカルプロキシサーバーを利用した連携通信方式です。
+          </p>
 
           <div className="space-y-4">
             <div>
-              <h4 className="font-bold text-lg border-b pb-2 mb-4">3. ローカルサーバー(プロキシ)の起動（毎回）</h4>
+              <h5 className="font-bold text-md mb-2">1. インストール (初回のみ)</h5>
               <p className="text-sm text-slate-600 mb-2">
-                ターミナルを開き、以下のコマンドでIllustrator等と通信するサーバーを起動します（起動すると黒い画面のままになります）。
+                PowerShellで以下のコマンドを実行し、プラグインを自動配置します。
               </p>
-              <div className="bg-slate-900 text-green-400 p-5 rounded-xl mt-3 font-mono text-sm shadow-inner overflow-x-auto whitespace-pre">
+              <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-xs shadow-inner overflow-x-auto whitespace-pre">
+{`mkdir -force $env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai
+Copy-Item ".\\mcp\\adb-mcp-main\\adb-mcp-main\\cep\\com.mikechambers.ai\\*" "$env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai" -Recurse -Force
+cd mcp\\adb-mcp-main\\adb-mcp-main\\adb-proxy-socket
+npm install`}
+              </div>
+            </div>
+
+            <div>
+              <h5 className="font-bold text-md mb-2">2. ローカルプロキシサーバーの起動 (毎回)</h5>
+              <p className="text-sm text-slate-600 mb-2">ターミナル等で以下のコマンドを実行して3001番で待受を開始します。</p>
+              <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-sm shadow-inner overflow-x-auto whitespace-pre">
 {`cd mcp\\adb-mcp-main\\adb-mcp-main\\adb-proxy-socket
 node proxy.js`}
               </div>
             </div>
-          </div>
 
-          <div className="space-y-4 pt-4">
-            <h4 className="font-bold text-lg border-b pb-2 mb-4">4. このアプリと連携</h4>
-            <p className="text-sm text-slate-600">
-              サーバーの起動が完了したら、下のボタンを押して接続を確立してください。<br />
-              <span className="text-xs text-rose-500 font-bold mb-2 inline-block">※Illustratorを開き、メニューから「ウィンドウ」＞「エクステンション」＞「Illustrator MCP Agent」を開き、Connectボタンも押しておいてください。</span>
-            </p>
-            
-            <button 
-              onClick={connectToAdb}
-              disabled={adbConnected}
-              className={`w-full py-5 rounded-2xl font-bold text-xl text-white shadow-xl transition-all flex items-center justify-center gap-3 ${adbConnected ? 'bg-emerald-500 cursor-default' : 'bg-sky-600 hover:bg-sky-500 hover:-translate-y-1'}`}
-            >
-              {adbConnected ? <><CheckCircle2 size={24}/> 連携済</> : <><RefreshCw size={24}/> Illustratorと連携する</>}
-            </button>
+            <div className="pt-4 border-t">
+              <h5 className="font-bold text-md mb-2">3. アプリと連携 (ステップ3の準備)</h5>
+              <p className="text-sm text-slate-600 mb-4">
+                Illustratorの「ウィンドウ」→「エクステンション」から「Illustrator MCP Agent」を開いて「Connect」ボタンを押してください。<br/>
+                その後、以下のボタンを押してこのWebアプリと接続を完了します。
+              </p>
+              <button 
+                onClick={connectToAdb}
+                disabled={adbConnected}
+                className={`w-full py-4 rounded-xl font-bold text-lg text-white shadow-md transition-all flex items-center justify-center gap-3 ${adbConnected ? 'bg-emerald-500 cursor-default' : 'bg-slate-800 hover:bg-slate-700'}`}
+              >
+                {adbConnected ? <><CheckCircle2 size={24}/> 連携済</> : <><RefreshCw size={24}/> 通信プロキシに接続する</>}
+              </button>
+            </div>
           </div>
         </div>
+
       </div>
     </div>
   );
