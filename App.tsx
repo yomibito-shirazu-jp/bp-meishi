@@ -2539,6 +2539,23 @@ JSONのみ返してください。` },
                 <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
                   <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
                     <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">3</span>
+                    Claude Desktop との連携（オプション）
+                  </h4>
+                  <div className="space-y-4 text-sm text-slate-600">
+                    <p>Claudeのチャットから直接Illustratorを操作したい場合の設定です。</p>
+                    <ol className="list-decimal pl-5 space-y-2">
+                      <li>コマンドプロンプトやターミナルを開きます。</li>
+                      <li><code>cd mcp\adb-mcp-main\adb-mcp-main\mcp</code> に移動します。</li>
+                      <li><code>uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow ai-mcp.py</code> を実行します。</li>
+                      <li>Claude Desktop を再起動します。</li>
+                      <li>チャットの「＋」ボタンから「Add from Adobe Illustrator」を選び、<code>config://get_instructions</code> を送信すると完了です。</li>
+                    </ol>
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
+                  <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                    <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">4</span>
                     自動組版の実行手順
                   </h4>
                   <div className="space-y-4 text-sm text-slate-600">
@@ -2699,8 +2716,26 @@ node proxy.js`}
             </div>
           </div>
 
+          <div className="space-y-4">
+            <div>
+              <h4 className="font-bold text-lg border-b pb-2 mb-4">3. Claude Desktop との連携 (オプション)</h4>
+              <p className="text-sm text-slate-600 mb-2">
+                このアプリの機能に加え、Claudeから直接Illustratorを操作したい場合はMCPサーバーをインストールします。
+              </p>
+              <div className="bg-slate-900 text-green-400 p-5 rounded-xl mt-3 font-mono text-sm shadow-inner overflow-x-auto whitespace-pre">
+{`cd mcp\\adb-mcp-main\\adb-mcp-main\\mcp
+uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow ai-mcp.py`}
+              </div>
+              <ul className="list-disc pl-5 mt-3 text-sm text-slate-600 space-y-1">
+                <li>実行後、Claude Desktop を再起動してください。</li>
+                <li>※ <code>uv</code> (Pythonパッケージマネージャ) がインストールされている必要があります。</li>
+                <li>Claudeのチャット欄の「＋」ボタンから「Add from Adobe Illustrator」を選び、<code>config://get_instructions</code> を送信すると準備完了です。</li>
+              </ul>
+            </div>
+          </div>
+
           <div className="space-y-4 pt-4">
-            <h4 className="font-bold text-lg border-b pb-2 mb-4">3. アプリと連携</h4>
+            <h4 className="font-bold text-lg border-b pb-2 mb-4">4. アプリと連携</h4>
             <p className="text-sm text-slate-600">
               サーバーの起動が完了したら、下のボタンを押して接続を確立してください。<br />
               <span className="text-xs text-rose-500 font-bold mb-2 inline-block">※Illustratorを開き、メニューから「ウィンドウ」＞「エクステンション」＞「Illustrator MCP Agent」を開き、Connectボタンも押しておいてください。</span>
