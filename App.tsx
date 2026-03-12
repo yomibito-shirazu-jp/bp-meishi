@@ -2467,19 +2467,110 @@ JSONのみ返してください。` },
     </div>
   );
 
+  const [showAiTutorial, setShowAiTutorial] = useState(false);
+
   const renderTypesetAI = () => (
     <div className="flex-1 overflow-y-auto p-6" style={{ background: C.bg }}>
-      <div className="max-w-2xl mx-auto pb-20">
+      <div className="max-w-2xl mx-auto pb-20 relative">
         <div className="text-center mb-8">
           <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-sm" style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)' }}>
             <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="40" height="40" alt="Illustrator" />
           </div>
           <h3 className="text-2xl font-bold mb-3" style={{ color: C.text }}>Adobe Illustrator 連携自動組版</h3>
-          <p className="text-base font-medium text-rose-600 bg-rose-50 p-4 rounded-xl border border-rose-200">
-            名刺データをIllustratorの完全な印刷用データに変換します。<br/>
-            必ず以下の【ステップ１〜３】を順番に確認・実行してください。
+          <p className="text-base font-medium flex flex-col gap-3 text-rose-600 bg-rose-50 p-4 rounded-xl border border-rose-200">
+            <span>
+              名刺データをIllustratorの完全な印刷用データに変換します。<br/>
+              必ず以下の【ステップ１〜３】を順番に確認・実行してください。
+            </span>
+            <button 
+              onClick={() => setShowAiTutorial(true)}
+              className="mx-auto flex items-center gap-2 bg-white px-4 py-2 rounded-lg shadow border border-rose-200 text-rose-700 hover:bg-rose-100 transition-colors"
+            >
+              <BookOpen size={18} /> 最初にお読みください（チュートリアルと初期設定）
+            </button>
           </p>
         </div>
+
+        {showAiTutorial && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+              <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between z-10">
+                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                  <Wand2 className="text-sky-500" /> Illustrator自動組版 チュートリアル
+                </h3>
+                <button onClick={() => setShowAiTutorial(false)} className="p-2 hover:bg-slate-100 rounded-full text-slate-500">
+                  <XCircle size={24} />
+                </button>
+              </div>
+              
+              <div className="p-8 space-y-8">
+                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
+                  <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                    <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">1</span>
+                    事前のインストール設定（初回のみ）
+                  </h4>
+                  <div className="space-y-4 text-sm text-slate-600">
+                    <p>この機能を使うには、お使いのPCのIllustratorに専用プラグインを入れる必要があります。</p>
+                    <ol className="list-decimal pl-5 space-y-2">
+                      <li><code>mcp/adb-mcp-main/adb-mcp-main/cep/com.mikechambers.ai</code> フォルダをコピーします。</li>
+                      <li><code>C:\Program Files (x86)\Common Files\Adobe\CEP\extensions\</code> <br/>または <code>C:\Users\あなたの名前\AppData\Roaming\Adobe\CEP\extensions\</code> の中に貼り付けます。</li>
+                      <li>Illustratorを再起動します。</li>
+                    </ol>
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
+                  <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                    <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">2</span>
+                    プロキシサーバーの起動（毎回）
+                  </h4>
+                  <div className="space-y-4 text-sm text-slate-600">
+                    <p>Illustratorとこのアプリを通信させるための「中継ソフト（プロキシ）」を起動します。</p>
+                    <ol className="list-decimal pl-5 space-y-2">
+                      <li>コマンドプロンプトやターミナルを開きます。</li>
+                      <li><code>cd mcp/adb-mcp-main/adb-mcp-main/adb-proxy-socket</code> に移動します。</li>
+                      <li><code>npm install</code>（初回のみ）を実行後、<code>node proxy.js</code> を実行します。</li>
+                      <li>黒い画面に「Server running on port 3001」と出れば成功です。そのまま画面を閉じずに置いておきます。</li>
+                    </ol>
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
+                  <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                    <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">3</span>
+                    自動組版の実行手順
+                  </h4>
+                  <div className="space-y-4 text-sm text-slate-600">
+                    <ol className="list-decimal pl-5 space-y-3">
+                      <li>
+                        <strong>データの準備:</strong> 左側メニュー「一覧」から、組版したい名刺データを選んで開きます。<br/>
+                        <span className="text-emerald-600 font-medium">※現在の画面の「ステップ1」が準備完了（緑色）になっていればOKです。</span>
+                      </li>
+                      <li>
+                        <strong>Illustrator側の準備:</strong> Illustratorのメニューバーから <code>ウィンドウ {'>'} エクステンション {'>'} Illustrator MCP Agent</code> を開きます。
+                      </li>
+                      <li>
+                        <strong>接続の開始:</strong> エクステンション画面の「Connect」を押し、続いてこの画面の「ステップ2」の「Illustratorと通信を開始する」を押します。<br/>
+                        <span className="text-emerald-600 font-medium">※両方とも（緑色）になれば準備完了です！</span>
+                      </li>
+                      <li>
+                        <strong>実行:</strong> 最後に「 Illustlatorで自動組版を開始する」を押すと、Illustratorの画面で自動的にテキストが配置されます。
+                      </li>
+                    </ol>
+                  </div>
+                </div>
+              </div>
+              <div className="sticky bottom-0 bg-white border-t px-6 py-4 text-center rounded-b-2xl">
+                <button 
+                  onClick={() => setShowAiTutorial(false)}
+                  className="bg-slate-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-700 transition-colors shadow-lg"
+                >
+                  確認した（チュートリアルを閉じる）
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="space-y-6">
           {/* STEP 1: Select Card */}
