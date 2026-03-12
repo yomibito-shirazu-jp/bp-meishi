@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(while read d)",
+      "Bash(do basename \"$d\")",
+      "Bash(done)"
+    ]
+  }
+}

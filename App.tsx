@@ -14,6 +14,7 @@ import {
   Settings, CheckCircle2, XCircle, Key, RefreshCw,
   FileAudio, Clock, List, LayoutTemplate, BookOpen,
 } from 'lucide-react';
+import { io, Socket } from 'socket.io-client';
 
 /* ═══════════════════════════════════════════
    Constants
@@ -116,6 +117,68 @@ const App: React.FC = () => {
   const [settingsDraft, setSettingsDraft] = useState<Partial<Record<ConfigKey, string>>>({});
   const [settingsTestStatus, setSettingsTestStatus] = useState<Partial<Record<ConfigKey, { ok: boolean; msg: string } | null>>>({});
   const [settingsTesting, setSettingsTesting] = useState<Partial<Record<ConfigKey, boolean>>>({});
+
+  // ── Adobe MCP ──
+  const [adbConnected, setAdbConnected] = useState(false);
+  const [adbSocket, setAdbSocket] = useState<Socket | null>(null);
+
+  const connectToAdb = () => {
+    if (adbSocket) return;
+    const socket = io('ws://localhost:3001', { transports: ['websocket'] });
+    socket.on('connect', () => {
+      setAdbConnected(true);
+      flash('Adobe Local Proxyへ接続しました', 'ok');
+    });
+    socket.on('disconnect', () => {
+      setAdbConnected(false);
+      flash('Adobe Local Proxyから切断されました', 'error');
+    });
+    setAdbSocket(socket);
+  };
+
+  const sendToIllustrator = () => {
+    if (!adbSocket || !adbConnected) {
+      flash('Adobe Proxyに接続されていません', 'error');
+      return;
+    }
+    
+    // Create script dynamically based on spans, or sample if none
+    const textObjects = spans.length > 0 ? spans.map(s => {
+      const pageW = pageMM[0] / 25.4 * 72; // Convert mm to pt
+      const pageH = pageMM[1] / 25.4 * 72;
+      const x = (s.x_pct / 100) * pageW;
+      const y = -((s.y_pct / 100) * pageH); // standard AI coordinates
+      return `
+        var t = doc.textFrames.add();
+        t.contents = ${JSON.stringify(s.text)};
+        t.position = [${x}, ${y}];
+        t.textRange.characterAttributes.size = ${s.size_pt || 10};
+      `;
+    }).join('\\n') : `
+      var t = doc.textFrames.add();
+      t.contents = 'テキストフィールドがありません';
+      t.position = [50, -50];
+      t.textRange.characterAttributes.size = 20;
+    `;
+
+    const docWidth = (pageMM[0] / 25.4) * 72;
+    const docHeight = (pageMM[1] / 25.4) * 72;
+
+    const scriptString = `
+      var doc = app.documents.add(DocumentColorSpace.CMYK, ${docWidth}, ${docHeight});
+      ${textObjects}
+    `;
+
+    adbSocket.emit('command_packet', {
+      application: 'illustrator',
+      command: {
+        action: 'executeExtendScript',
+        options: { scriptString }
+      }
+    });
+
+    flash('Illustratorへ組版コマンドを送信しました', 'ok');
+  };
 
   // ── Derived ──
   const flash = (text: string, type: 'info' | 'ok' | 'error' = 'info') => {
@@ -589,7 +652,7 @@ const App: React.FC = () => {
         ],
       },
       {
-        title: '自動組版',
+        title: 'Adobe自動組版',
         items: [
           { icon: LayoutTemplate, label: '一覧', badge: 0, state: AppState.TYPESET_LIST },
           { icon: BookOpen, label: '履歴', badge: 0, state: AppState.TYPESET_HISTORY },
@@ -1724,7 +1787,7 @@ const App: React.FC = () => {
 
     const handleSaveAll = () => {
       Object.entries(settingsDraft).forEach(([k, v]) => {
-        if (v !== undefined) saveConfig(k as ConfigKey, v);
+        if (v !== undefined) saveConfig(k as ConfigKey, v as string);
       });
       setSettingsDraft({});
       setSettingsTestStatus({});
@@ -2405,42 +2468,99 @@ JSONのみ返してください。` },
   );
 
   const renderTypesetAI = () => (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-2xl mx-auto">
+    <div className="flex-1 overflow-y-auto p-6" style={{ background: C.bg }}>
+      <div className="max-w-2xl mx-auto pb-20">
         <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: C.accentBg }}>
-            <LayoutTemplate size={32} style={{ color: C.accent }} />
+          <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-sm" style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)' }}>
+            <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="40" height="40" alt="Illustrator" />
           </div>
-          <h3 className="text-lg font-bold mb-2" style={{ color: C.text }}>AI自動組版</h3>
-          <p className="text-sm" style={{ color: C.muted }}>
-            Gemini AIが文書構造を自動解析し、<br />
-            最適なレイアウト・テンプレートで組版します
+          <h3 className="text-2xl font-bold mb-3" style={{ color: C.text }}>Adobe Illustrator 連携自動組版</h3>
+          <p className="text-base font-medium text-rose-600 bg-rose-50 p-4 rounded-xl border border-rose-200">
+            名刺データをIllustratorの完全な印刷用データに変換します。<br/>
+            必ず以下の【ステップ１〜３】を順番に確認・実行してください。
           </p>
         </div>
-        <div className="flex justify-center mb-6">
-          <button
-            onClick={handleTypesetFromDrive}
-            className="flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-dashed hover:border-teal-300 transition-colors w-full max-w-md"
-            style={{ borderColor: C.border, background: C.surface }}
-          >
-            <HardDrive size={32} style={{ color: C.accent }} />
-            <span className="text-sm font-medium" style={{ color: C.text }}>Google Driveから選択</span>
-            <span className="text-xs" style={{ color: C.muted }}>PDF・画像・文書ファイル</span>
-          </button>
-        </div>
-        {typesetLoading && (
-          <div className="flex items-center justify-center gap-3 p-6 rounded-xl" style={{ background: C.accentBg }}>
-            <div className="w-6 h-6 border-2 border-teal-300 border-t-teal-600 rounded-full animate-spin" />
-            <span className="font-medium" style={{ color: C.accent }}>AI組版解析中…</span>
-          </div>
-        )}
-        <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {Object.entries(TEMPLATE_LABELS).map(([key, label]) => (
-            <div key={key} className="p-3 rounded-lg border text-center" style={{ background: C.surface, borderColor: C.border }}>
-              <LayoutTemplate size={20} className="mx-auto mb-1" style={{ color: C.accent }} />
-              <span className="text-xs font-medium" style={{ color: C.textSec }}>{label}</span>
+
+        <div className="space-y-6">
+          {/* STEP 1: Select Card */}
+          <div className="bg-white rounded-2xl shadow-sm border p-6 flex items-start gap-4 transition-all" style={{ borderColor: spans.length > 0 ? '#10b981' : '#f43f5e', borderWidth: spans.length > 0 ? '1px' : '2px' }}>
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shrink-0 shadow-md ${spans.length > 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}>
+              1
             </div>
-          ))}
+            <div className="flex-1">
+              <h4 className="font-bold text-lg mb-2" style={{ color: C.text }}>印刷対象データの設定</h4>
+              {spans.length > 0 ? (
+                <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg border border-emerald-100 flex items-center gap-2 font-medium">
+                  <CheckCircle2 size={18} className="shrink-0" />
+                  準備完了： 現在 {spans.length} 個の要素が選択されています
+                </div>
+              ) : (
+                <div className="bg-rose-50 text-rose-700 p-4 rounded-lg border border-rose-100 flex flex-col gap-2">
+                  <p className="font-bold flex items-center gap-2 text-base">
+                    <XCircle size={18} className="shrink-0" /> エラー: 印刷データがありません
+                  </p>
+                  <p className="text-sm pl-6">
+                    左側メニューの「一覧」から印刷したい名刺を選択し、<br/>データが表示された状態にしてからここに戻ってきてください。
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* STEP 2: Connection */}
+          <div className="bg-white rounded-2xl shadow-sm border p-6 flex items-start gap-4 transition-all" style={{ borderColor: adbConnected ? '#10b981' : '#f59e0b', borderWidth: adbConnected ? '1px' : '2px' }}>
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shrink-0 shadow-md ${adbConnected ? 'bg-emerald-500' : 'bg-amber-500'}`}>
+              2
+            </div>
+            <div className="flex-1">
+              <h4 className="font-bold text-lg mb-2" style={{ color: C.text }}>Illustrator 通信チェック</h4>
+              {adbConnected ? (
+                <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg border border-emerald-100 flex items-center gap-2 font-medium">
+                  <CheckCircle2 size={18} className="shrink-0" />
+                  準備完了： Illustratorに正しく接続されています
+                </div>
+              ) : (
+                <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
+                  <p className="text-amber-800 font-bold mb-3 flex items-center gap-2">
+                    <XCircle size={18} className="shrink-0" /> 未接続： 通信を開始してください
+                  </p>
+                  <ol className="list-decimal pl-6 text-sm text-amber-900 space-y-2 mb-5 font-medium">
+                    <li>PC上で <strong>adb-proxy-socket</strong> を起動したままにする</li>
+                    <li><strong>Illustrator</strong>を開き、エクステンションから「Illustrator MCP Agent」を開いて「Connect」ボタンを押す</li>
+                    <li>下のボタンを押してアプリと通信をつなぐ</li>
+                  </ol>
+                  <button 
+                    onClick={connectToAdb}
+                    className="w-full py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-md"
+                  >
+                    <RefreshCw size={18} /> Illustratorと通信を開始する
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* STEP 3: Execution */}
+          <div className="bg-white rounded-2xl shadow-sm p-8 flex flex-col items-center gap-4 transition-all" style={{ border: (spans.length > 0 && adbConnected) ? '2px solid #0ea5e9' : '1px solid #e2e8f0', background: (spans.length > 0 && adbConnected) ? '#f0f9ff' : '#ffffff' }}>
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white shadow-md ${spans.length > 0 && adbConnected ? 'bg-sky-500' : 'bg-slate-300'}`}>
+              3
+            </div>
+            <h4 className="font-bold text-xl my-1 w-full text-center" style={{ color: C.text }}>最終実行</h4>
+            <p className="text-sm font-medium text-slate-500 text-center mb-2">
+              ステップ1とステップ2が両方とも「準備完了」の場合のみボタンが押せます。<br/>
+              ボタンを押すとIllustratorが自動的に動作を開始します。
+            </p>
+            <button
+              onClick={sendToIllustrator}
+              disabled={!(spans.length > 0 && adbConnected)}
+              className="w-full py-5 rounded-2xl font-bold text-xl text-white shadow-xl transition-all flex items-center justify-center gap-3 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ background: (spans.length > 0 && adbConnected) ? 'linear-gradient(135deg, #ff7a00, #ff4d00)' : '#94a3b8' }}
+            >
+              <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="24" height="24" alt="Illustrator" className={!(spans.length > 0 && adbConnected) ? "opacity-50 grayscale" : ""} />
+              Illustratorで自動組版を開始する
+            </button>
+          </div>
+
         </div>
       </div>
     </div>
