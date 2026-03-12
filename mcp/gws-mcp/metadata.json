@@ -1,0 +1,8 @@
+{
+  "name": "Nexus Executive AI",
+  "description": "High-end mobile-first secretary for business leaders.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ]
+}
