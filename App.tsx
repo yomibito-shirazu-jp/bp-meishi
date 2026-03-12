@@ -142,17 +142,31 @@ const App: React.FC = () => {
       return;
     }
     
-    // Create script dynamically based on spans, or sample if none
+    // Create script dynamically based on spans
+    const docWidth = (pageMM[0] / 25.4) * 72;
+    const docHeight = (pageMM[1] / 25.4) * 72;
+
     const textObjects = spans.length > 0 ? spans.map(s => {
-      const pageW = pageMM[0] / 25.4 * 72; // Convert mm to pt
-      const pageH = pageMM[1] / 25.4 * 72;
-      const x = (s.x_pct / 100) * pageW;
-      const y = -((s.y_pct / 100) * pageH); // standard AI coordinates
+      const x = (s.x_pct / 100) * docWidth;
+      const y = -((s.y_pct / 100) * docHeight); // standard AI coordinate (origin top-left usually maps to negative Y)
+      
+      // Determine font family mappings
+      let fontName = 'KozGoPr6N-Regular'; // Default Gothic
+      if (s.font_class === 'mincho') fontName = 'KozMinPr6N-Regular';
+      if (s.font_class === 'gothic_bold') fontName = 'KozGoPr6N-Bold';
+      if (s.font_class === 'light') fontName = 'KozGoPr6N-Light';
+
       return `
-        var t = doc.textFrames.add();
-        t.contents = ${JSON.stringify(s.text)};
-        t.position = [${x}, ${y}];
-        t.textRange.characterAttributes.size = ${s.size_pt || 10};
+        try {
+          var t = doc.textFrames.add();
+          t.contents = ${JSON.stringify(s.text)};
+          t.position = [${x}, ${y}];
+          t.textRange.characterAttributes.size = ${s.size_pt || 10};
+          try {
+            t.textRange.characterAttributes.textFont = app.textFonts.getByName('${fontName}');
+          } catch(e) { /* Ignore if font not found */ }
+          t.textRange.characterAttributes.fillColor = blackColor;
+        } catch(e) { }
       `;
     }).join('\\n') : `
       var t = doc.textFrames.add();
@@ -161,11 +175,13 @@ const App: React.FC = () => {
       t.textRange.characterAttributes.size = 20;
     `;
 
-    const docWidth = (pageMM[0] / 25.4) * 72;
-    const docHeight = (pageMM[1] / 25.4) * 72;
-
     const scriptString = `
       var doc = app.documents.add(DocumentColorSpace.CMYK, ${docWidth}, ${docHeight});
+      var blackColor = new CMYKColor();
+      blackColor.black = 100;
+      blackColor.cyan = 0;
+      blackColor.magenta = 0;
+      blackColor.yellow = 0;
       ${textObjects}
     `;
 
@@ -2508,54 +2524,42 @@ JSONのみ返してください。` },
                 <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
                   <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
                     <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">1</span>
-                    事前のインストール設定（初回のみ）
+                    自動インストールの実行（初回のみ）
                   </h4>
                   <div className="space-y-4 text-sm text-slate-600">
-                    <p>この機能を使うには、お使いのPCのIllustratorに専用プラグインを入れる必要があります。</p>
-                    <ol className="list-decimal pl-5 space-y-2">
-                      <li><code>mcp\adb-mcp-main\adb-mcp-main\cep\com.mikechambers.ai</code> フォルダをコピーします。</li>
-                      <li><code>%APPDATA%\Adobe\CEP\extensions\</code> <br/>の中に貼り付けます（フォルダがない場合は作成してください）。</li>
-                      <li>Illustratorを再起動します。</li>
-                    </ol>
+                    <p>PowerShellを開き、以下のコマンドを貼り付けて実行してください。<br/>Illustrator用プラグインの配置と、Claudeとの連携設定 (Illustrator/Photoshop/InDesign) を自動で行います。</p>
+                    <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-xs overflow-x-auto whitespace-pre">
+{`mkdir -force $env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai
+Copy-Item ".\\mcp\\adb-mcp-main\\adb-mcp-main\\cep\\com.mikechambers.ai\\*" "$env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai" -Recurse -Force
+cd mcp\\adb-mcp-main\\adb-mcp-main\\mcp
+uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with numpy ps-mcp.py
+uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow id-mcp.py
+uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow ai-mcp.py
+cd ..\\adb-proxy-socket
+npm install`}
+                    </div>
+                    <p className="text-xs text-rose-500 mt-2">※ 実行後、Illustrator と Claude Desktop を再起動してください。<br/>※ Photoshop / InDesign のプラグインは別途 UXP Developer Tools からロードする必要があります。</p>
                   </div>
                 </div>
 
                 <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
                   <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
                     <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">2</span>
-                    プロキシサーバーの起動（毎回）
+                    ローカルサーバーの起動（毎回）
                   </h4>
                   <div className="space-y-4 text-sm text-slate-600">
-                    <p>Illustratorとこのアプリを通信させるための「中継ソフト（プロキシ）」を起動します。</p>
-                    <ol className="list-decimal pl-5 space-y-2">
-                      <li>コマンドプロンプトやターミナルを開きます。</li>
-                      <li><code>cd mcp\adb-mcp-main\adb-mcp-main\adb-proxy-socket</code> に移動します。</li>
-                      <li><code>npm install</code>（初回のみ）を実行後、<code>node proxy.js</code> を実行します。</li>
-                      <li>黒い画面に「Server running on port 3001」と出れば成功です。そのまま画面を閉じずに置いておきます。</li>
-                    </ol>
+                    <p>Illustrator等と通信するための中継サーバーを起動します。</p>
+                    <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-xs overflow-x-auto whitespace-pre">
+{`cd mcp\\adb-mcp-main\\adb-mcp-main\\adb-proxy-socket
+node proxy.js`}
+                    </div>
+                    <p>黒い画面が出たままになれば成功です。閉じずに置いておきます。</p>
                   </div>
                 </div>
 
                 <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
                   <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
                     <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">3</span>
-                    Claude Desktop との連携（オプション）
-                  </h4>
-                  <div className="space-y-4 text-sm text-slate-600">
-                    <p>Claudeのチャットから直接Illustratorを操作したい場合の設定です。</p>
-                    <ol className="list-decimal pl-5 space-y-2">
-                      <li>コマンドプロンプトやターミナルを開きます。</li>
-                      <li><code>cd mcp\adb-mcp-main\adb-mcp-main\mcp</code> に移動します。</li>
-                      <li><code>uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow ai-mcp.py</code> を実行します。</li>
-                      <li>Claude Desktop を再起動します。</li>
-                      <li>チャットの「＋」ボタンから「Add from Adobe Illustrator」を選び、<code>config://get_instructions</code> を送信すると完了です。</li>
-                    </ol>
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
-                  <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
-                    <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">4</span>
                     自動組版の実行手順
                   </h4>
                   <div className="space-y-4 text-sm text-slate-600">
@@ -2691,51 +2695,54 @@ JSONのみ返してください。` },
         <div className="bg-white rounded-2xl shadow-sm border p-8 space-y-8" style={{ borderColor: C.border }}>
           <div className="space-y-4">
             <div>
-              <h4 className="font-bold text-lg border-b pb-2 mb-4">1. プラグインのインストール（初回のみ）</h4>
-              <p className="text-sm text-slate-600 mb-2">Illustratorにプロキシと通信するためのプラグインをインストールします。</p>
-              <div className="bg-slate-50 p-4 rounded-xl border text-sm text-slate-700">
-                <code>mcp\adb-mcp-main\adb-mcp-main\cep\com.mikechambers.ai</code> フォルダをコピーして、<br/>
-                <code>%APPDATA%\Adobe\CEP\extensions\</code> <br/>
-                の中に貼り付けて、Illustratorを再起動してください。<br/>
-                <span className="text-xs text-rose-500 mt-2 inline-block">※フォルダがない場合は新しく作成してください。</span>
+              <h4 className="font-bold text-lg border-b pb-2 mb-4">1. 自動インストールの実行（初回のみ）</h4>
+              <p className="text-sm text-slate-600 mb-2">
+                PowerShellを開き、以下のコマンドを丸ごとコピーして貼り付けて実行してください。<br />
+                <span className="text-rose-500 font-medium text-xs">※ プラグイン配置(Illustrator用)と、Claude Desktopとの連携設定 (Illustrator, Photoshop, InDesign) を一括で自動で行います。</span>
+              </p>
+              <div className="bg-slate-900 text-green-400 p-5 rounded-xl mt-3 font-mono text-xs shadow-inner overflow-x-auto whitespace-pre">
+{`mkdir -force $env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai
+Copy-Item ".\\mcp\\adb-mcp-main\\adb-mcp-main\\cep\\com.mikechambers.ai\\*" "$env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai" -Recurse -Force
+cd mcp\\adb-mcp-main\\adb-mcp-main\\mcp
+uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with numpy ps-mcp.py
+uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow id-mcp.py
+uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow ai-mcp.py
+cd ..\\adb-proxy-socket
+npm install`}
               </div>
+              <ul className="list-disc pl-5 mt-3 text-sm text-slate-600 space-y-1">
+                <li>実行後、Illustrator と Claude Desktop を再起動してください。</li>
+                <li>※ 実行には <code>uv</code> (Python用ツール) および <code>npm</code> が必要です。</li>
+              </ul>
             </div>
           </div>
 
           <div className="space-y-4">
             <div>
-              <h4 className="font-bold text-lg border-b pb-2 mb-4">2. ローカルサーバー(プロキシ)の起動</h4>
+              <h4 className="font-bold text-lg border-b pb-2 mb-4">2. Photoshop / InDesign についての設定</h4>
+              <p className="text-sm text-slate-600 mb-2">Photoshop と InDesign のプラグインは直接コピーできず、手動でロードする必要があります。</p>
+              <ol className="list-decimal pl-5 text-sm text-slate-600 space-y-1">
+                <li>Adobe Creative Cloud から <strong>UXP Developer Tools</strong> をインストールして起動します。</li>
+                <li><strong>Add Plugin</strong> をクリックし、<code>mcp\\adb-mcp-main\\adb-mcp-main\\uxp\\ps\\manifest.json</code> (Photoshop用) または <code>uxp\\id\\...</code> (InDesign用) を選択して Load します。</li>
+              </ol>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <h4 className="font-bold text-lg border-b pb-2 mb-4">3. ローカルサーバー(プロキシ)の起動（毎回）</h4>
               <p className="text-sm text-slate-600 mb-2">
-                コマンドプロンプトやターミナルを開き、以下のコマンドで起動します（起動すると黒い画面で待機状態になります）。
+                ターミナルを開き、以下のコマンドでIllustrator等と通信するサーバーを起動します（起動すると黒い画面のままになります）。
               </p>
               <div className="bg-slate-900 text-green-400 p-5 rounded-xl mt-3 font-mono text-sm shadow-inner overflow-x-auto whitespace-pre">
 {`cd mcp\\adb-mcp-main\\adb-mcp-main\\adb-proxy-socket
-npm install
 node proxy.js`}
               </div>
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div>
-              <h4 className="font-bold text-lg border-b pb-2 mb-4">3. Claude Desktop との連携 (オプション)</h4>
-              <p className="text-sm text-slate-600 mb-2">
-                このアプリの機能に加え、Claudeから直接Illustratorを操作したい場合はMCPサーバーをインストールします。
-              </p>
-              <div className="bg-slate-900 text-green-400 p-5 rounded-xl mt-3 font-mono text-sm shadow-inner overflow-x-auto whitespace-pre">
-{`cd mcp\\adb-mcp-main\\adb-mcp-main\\mcp
-uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow ai-mcp.py`}
-              </div>
-              <ul className="list-disc pl-5 mt-3 text-sm text-slate-600 space-y-1">
-                <li>実行後、Claude Desktop を再起動してください。</li>
-                <li>※ <code>uv</code> (Pythonパッケージマネージャ) がインストールされている必要があります。</li>
-                <li>Claudeのチャット欄の「＋」ボタンから「Add from Adobe Illustrator」を選び、<code>config://get_instructions</code> を送信すると準備完了です。</li>
-              </ul>
-            </div>
-          </div>
-
           <div className="space-y-4 pt-4">
-            <h4 className="font-bold text-lg border-b pb-2 mb-4">4. アプリと連携</h4>
+            <h4 className="font-bold text-lg border-b pb-2 mb-4">4. このアプリと連携</h4>
             <p className="text-sm text-slate-600">
               サーバーの起動が完了したら、下のボタンを押して接続を確立してください。<br />
               <span className="text-xs text-rose-500 font-bold mb-2 inline-block">※Illustratorを開き、メニューから「ウィンドウ」＞「エクステンション」＞「Illustrator MCP Agent」を開き、Connectボタンも押しておいてください。</span>

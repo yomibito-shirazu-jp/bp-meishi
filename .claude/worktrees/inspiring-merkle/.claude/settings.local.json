@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(while read d)",
+      "Bash(do basename \"$d\")",
+      "Bash(done)",
+      "WebFetch(domain:developer.adobe.com)",
+      "WebFetch(domain:github.com)",
+      "mcp__mcp-registry__search_mcp_registry"
+    ]
+  }
+}

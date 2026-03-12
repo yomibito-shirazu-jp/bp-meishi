@@ -83,7 +83,13 @@ function getAccessToken(): Promise<string> {
       },
       error_callback: (err: any) => {
         console.error('GIS token error:', err);
-        reject(new Error(err?.message || err?.type || 'Google認証に失敗しました。ポップアップブロッカーを確認してください。'));
+        let errorMsg = err?.message || err?.type || '認証フローでエラーが発生しました。ポップアップブロッカーを確認してください。';
+        if (err?.type === 'popup_closed') {
+           errorMsg = 'Google認証のポップアップが閉じられました。';
+        } else if (err?.message && err.message.includes('origin_mismatch')) {
+           errorMsg = 'URLがGoogle Cloud Consoleの「承認済みのJavaScript生成元」に登録されていません。';
+        }
+        reject(new Error(errorMsg));
       },
     });
     client.requestAccessToken({ prompt: 'consent' });
@@ -97,10 +103,15 @@ const MIME_ALL = 'application/pdf,image/png,image/jpeg,image/gif,image/webp,imag
 /** Generic picker — mimeTypes でフィルタ */
 async function pickFromDrive(mimeTypes: string, title: string): Promise<File | null> {
   if (!getClientId() || !getApiKey()) {
-    throw new Error('Google Drive連携に必要な環境変数が未設定です (VITE_GOOGLE_CLIENT_ID, VITE_GOOGLE_API_KEY)');
+    throw new Error('Google Drive連携に必要な環境変数が未設定です (VITE_GOOGLE_CLIENT_ID, VITE_GOOGLE_API_KEY)。「設定」から正しく入力してください。');
   }
 
-  await Promise.all([loadPickerApi(), loadGis()]);
+  try {
+    await Promise.all([loadPickerApi(), loadGis()]);
+  } catch (err: any) {
+    throw new Error('Googleのスクリプト読み込みに失敗しました。広告ブロックが影響している場合があります。');
+  }
+  
   const token = await getAccessToken();
 
   return new Promise((resolve) => {
