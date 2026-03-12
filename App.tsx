@@ -2513,8 +2513,8 @@ JSONのみ返してください。` },
                   <div className="space-y-4 text-sm text-slate-600">
                     <p>この機能を使うには、お使いのPCのIllustratorに専用プラグインを入れる必要があります。</p>
                     <ol className="list-decimal pl-5 space-y-2">
-                      <li><code>mcp/adb-mcp-main/adb-mcp-main/cep/com.mikechambers.ai</code> フォルダをコピーします。</li>
-                      <li><code>C:\Program Files (x86)\Common Files\Adobe\CEP\extensions\</code> <br/>または <code>C:\Users\あなたの名前\AppData\Roaming\Adobe\CEP\extensions\</code> の中に貼り付けます。</li>
+                      <li><code>mcp\adb-mcp-main\adb-mcp-main\cep\com.mikechambers.ai</code> フォルダをコピーします。</li>
+                      <li><code>%APPDATA%\Adobe\CEP\extensions\</code> <br/>の中に貼り付けます（フォルダがない場合は作成してください）。</li>
                       <li>Illustratorを再起動します。</li>
                     </ol>
                   </div>
@@ -2529,7 +2529,7 @@ JSONのみ返してください。` },
                     <p>Illustratorとこのアプリを通信させるための「中継ソフト（プロキシ）」を起動します。</p>
                     <ol className="list-decimal pl-5 space-y-2">
                       <li>コマンドプロンプトやターミナルを開きます。</li>
-                      <li><code>cd mcp/adb-mcp-main/adb-mcp-main/adb-proxy-socket</code> に移動します。</li>
+                      <li><code>cd mcp\adb-mcp-main\adb-mcp-main\adb-proxy-socket</code> に移動します。</li>
                       <li><code>npm install</code>（初回のみ）を実行後、<code>node proxy.js</code> を実行します。</li>
                       <li>黒い画面に「Server running on port 3001」と出れば成功です。そのまま画面を閉じずに置いておきます。</li>
                     </ol>
