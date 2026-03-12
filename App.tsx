@@ -2677,9 +2677,10 @@ JSONのみ返してください。` },
               <h4 className="font-bold text-lg border-b pb-2 mb-4">1. プラグインのインストール（初回のみ）</h4>
               <p className="text-sm text-slate-600 mb-2">Illustratorにプロキシと通信するためのプラグインをインストールします。</p>
               <div className="bg-slate-50 p-4 rounded-xl border text-sm text-slate-700">
-                <code>mcp/adb-mcp-main/adb-mcp-main/cep/com.mikechambers.ai</code> フォルダをコピーして、<br/>
-                <code>C:\Program Files (x86)\Common Files\Adobe\CEP\extensions\</code> <br/>
-                の中に貼り付けてIllustratorを再起動してください。
+                <code>mcp\adb-mcp-main\adb-mcp-main\cep\com.mikechambers.ai</code> フォルダをコピーして、<br/>
+                <code>%APPDATA%\Adobe\CEP\extensions\</code> <br/>
+                の中に貼り付けて、Illustratorを再起動してください。<br/>
+                <span className="text-xs text-rose-500 mt-2 inline-block">※フォルダがない場合は新しく作成してください。</span>
               </div>
             </div>
           </div>
@@ -2693,7 +2694,7 @@ JSONのみ返してください。` },
               <div className="bg-slate-900 text-green-400 p-5 rounded-xl mt-3 font-mono text-sm shadow-inner overflow-x-auto whitespace-pre">
 {`cd mcp\\adb-mcp-main\\adb-mcp-main\\adb-proxy-socket
 npm install
-npm run dev`}
+node proxy.js`}
               </div>
             </div>
           </div>
