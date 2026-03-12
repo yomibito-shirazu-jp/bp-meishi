@@ -121,6 +121,7 @@ const App: React.FC = () => {
   // ── Adobe MCP ──
   const [adbConnected, setAdbConnected] = useState(false);
   const [adbSocket, setAdbSocket] = useState<Socket | null>(null);
+  const [adobeTarget, setAdobeTarget] = useState<'illustrator' | 'indesign' | 'photoshop'>('indesign');
 
   const connectToAdb = () => {
     if (adbSocket) return;
@@ -136,7 +137,7 @@ const App: React.FC = () => {
     setAdbSocket(socket);
   };
 
-  const sendToIllustrator = () => {
+  const sendToAdobe = () => {
     if (!adbSocket || !adbConnected) {
       flash('Adobe Proxyに接続されていません', 'error');
       return;
@@ -145,55 +146,113 @@ const App: React.FC = () => {
     // Create script dynamically based on spans
     const docWidth = (pageMM[0] / 25.4) * 72;
     const docHeight = (pageMM[1] / 25.4) * 72;
+    let scriptString = '';
+    const appName = adobeTarget; // 'illustrator' | 'indesign' | 'photoshop'
 
-    const textObjects = spans.length > 0 ? spans.map(s => {
-      const x = (s.x_pct / 100) * docWidth;
-      const y = -((s.y_pct / 100) * docHeight); // standard AI coordinate (origin top-left usually maps to negative Y)
-      
-      // Determine font family mappings
-      let fontName = 'KozGoPr6N-Regular'; // Default Gothic
-      if (s.font_class === 'mincho') fontName = 'KozMinPr6N-Regular';
-      if (s.font_class === 'gothic_bold') fontName = 'KozGoPr6N-Bold';
-      if (s.font_class === 'light') fontName = 'KozGoPr6N-Light';
+    if (adobeTarget === 'illustrator') {
+      const textObjects = spans.length > 0 ? spans.map(s => {
+        const x = (s.x_pct / 100) * docWidth;
+        const y = -((s.y_pct / 100) * docHeight); // AI: origin top-left usually maps to negative Y
+        let fontName = 'KozGoPr6N-Regular'; 
+        if (s.font_class === 'mincho') fontName = 'KozMinPr6N-Regular';
+        if (s.font_class === 'gothic_bold') fontName = 'KozGoPr6N-Bold';
+        if (s.font_class === 'light') fontName = 'KozGoPr6N-Light';
 
-      return `
-        try {
-          var t = doc.textFrames.add();
-          t.contents = ${JSON.stringify(s.text)};
-          t.position = [${x}, ${y}];
-          t.textRange.characterAttributes.size = ${s.size_pt || 10};
+        return `
           try {
-            t.textRange.characterAttributes.textFont = app.textFonts.getByName('${fontName}');
-          } catch(e) { /* Ignore if font not found */ }
-          t.textRange.characterAttributes.fillColor = blackColor;
-        } catch(e) { }
-      `;
-    }).join('\\n') : `
-      var t = doc.textFrames.add();
-      t.contents = 'テキストフィールドがありません';
-      t.position = [50, -50];
-      t.textRange.characterAttributes.size = 20;
-    `;
+            var t = doc.textFrames.add();
+            t.contents = ${JSON.stringify(s.text)};
+            t.position = [${x}, ${y}];
+            t.textRange.characterAttributes.size = ${s.size_pt || 10};
+            try { t.textRange.characterAttributes.textFont = app.textFonts.getByName('${fontName}'); } catch(e) { }
+            t.textRange.characterAttributes.fillColor = blackColor;
+          } catch(e) { }
+        `;
+      }).join('\\n') : ``;
 
-    const scriptString = `
-      var doc = app.documents.add(DocumentColorSpace.CMYK, ${docWidth}, ${docHeight});
-      var blackColor = new CMYKColor();
-      blackColor.black = 100;
-      blackColor.cyan = 0;
-      blackColor.magenta = 0;
-      blackColor.yellow = 0;
-      ${textObjects}
-    `;
+      scriptString = `
+        var doc = app.documents.add(DocumentColorSpace.CMYK, ${docWidth}, ${docHeight});
+        var blackColor = new CMYKColor();
+        blackColor.black = 100;
+        blackColor.cyan = 0;
+        blackColor.magenta = 0;
+        blackColor.yellow = 0;
+        ${textObjects}
+      `;
+    } else if (adobeTarget === 'indesign') {
+      const textObjects = spans.length > 0 ? spans.map(s => {
+        const x = (s.x_pct / 100) * docWidth;
+        const y = (s.y_pct / 100) * docHeight; 
+        
+        let fontName = 'Kozuka Gothic Pr6N\\tRegular';
+        if (s.font_class === 'mincho') fontName = 'Kozuka Mincho Pr6N\\tRegular';
+        if (s.font_class === 'gothic_bold') fontName = 'Kozuka Gothic Pr6N\\tBold';
+        if (s.font_class === 'light') fontName = 'Kozuka Gothic Pr6N\\tEL';
+        return `
+          try {
+            var tf = page.textFrames.add();
+            tf.geometricBounds = [${y}, ${x}, ${y + Math.max((s.size_pt || 10) * 2, 50)}, ${x + docWidth}];
+            tf.contents = ${JSON.stringify(s.text)};
+            var st = tf.parentStory;
+            st.pointSize = ${s.size_pt || 10};
+            try { st.appliedFont = app.fonts.item('${fontName}'); } catch(e) {}
+          } catch(e) { }
+        `;
+      }).join('\\n') : ``;
+
+      scriptString = `
+        app.scriptPreferences.measurementUnit = MeasurementUnits.POINTS;
+        var doc = app.documents.add();
+        doc.documentPreferences.pageWidth = ${docWidth};
+        doc.documentPreferences.pageHeight = ${docHeight};
+        var page = doc.pages.item(0);
+        ${textObjects}
+      `;
+    } else if (adobeTarget === 'photoshop') {
+      const textObjects = spans.length > 0 ? spans.map(s => {
+        const x = (s.x_pct / 100) * docWidth;
+        const y = (s.y_pct / 100) * docHeight;
+        let fontName = 'KozGoPr6N-Regular';
+        if (s.font_class === 'mincho') fontName = 'KozMinPr6N-Regular';
+        if (s.font_class === 'gothic_bold') fontName = 'KozGoPr6N-Bold';
+        if (s.font_class === 'light') fontName = 'KozGoPr6N-Light';
+        
+        return `
+          try {
+            var layer = doc.artLayers.add();
+            layer.kind = LayerKind.TEXT;
+            var textItem = layer.textItem;
+            textItem.contents = ${JSON.stringify(s.text)};
+            textItem.position = [${x}, ${y}];
+            textItem.size = ${s.size_pt || 10};
+            try { textItem.font = '${fontName}'; } catch(e) {}
+          } catch(e) { }
+        `;
+      }).join('\\n') : ``;
+
+      scriptString = `
+        app.preferences.rulerUnits = Units.POINTS;
+        var doc = app.documents.add(${docWidth}, ${docHeight}, 72, "Meishi", NewDocumentMode.CMYK);
+        ${textObjects}
+      `;
+    }
 
     adbSocket.emit('command_packet', {
-      application: 'illustrator',
+      application: appName,
       command: {
         action: 'executeExtendScript',
         options: { scriptString }
       }
     });
 
-    flash('Illustratorへ組版コマンドを送信しました', 'ok');
+    const targetNames = {
+      illustrator: 'Illustrator',
+      indesign: 'InDesign',
+      photoshop: 'Photoshop'
+    };
+    const targetName = targetNames[adobeTarget];
+
+    flash(targetName + 'へ組版コマンドを送信しました', 'ok');
     
     setTimeout(() => {
       setView(AppState.AI_CHAT);
@@ -201,7 +260,7 @@ const App: React.FC = () => {
         ...prev,
         {
           role: 'assistant',
-          content: `**✨ Illustratorへの自動組版が完了しました！ ✨**\n\nIllustratorの画面をご覧ください。画像から解析した文字情報が、わずか数秒でプロ仕様の印刷用CMYKデータとして自動配置されています！\n\nここからの**「人間のデザイナーが行うような微調整」**も私が担当します。例えば：\n\n🎨 **デザインの微調整**\n- 「名前のカーニング（文字詰め）を少しキュッと詰めて」\n- 「部署名の文字色を自社のコーポレートカラー（#0055FF）に合わせて」\n\n📝 **内容の翻訳や変換**\n- 「裏面用に、この日本語の役職を最も適切なネイティブの英語表現にして」\n\n💻 **Illustratorの直接操作**\n- 「選択したテキストのフォントを小塚明朝に変更して」\n- 「すべてのアウトラインを作成して入稿データを作って」\n\nどんな調整が必要ですか？魔法のように一瞬で仕上げてみせますので、何でもお申し付けください！`,
+          content: \`**✨ \${targetName}への自動組版が完了しました！ ✨**\\n\\n\${targetName}の画面をご覧ください。画像から解析した文字情報が自動配置されています！\\n\\nここからの**「人間のデザイナーが行うような微調整」**も私が担当します。\\n\\nどんな調整が必要ですか？魔法のように一瞬で仕上げてみせますので、何でもお申し付けください！\`,
           timestamp: new Date().toISOString()
         }
       ]);
@@ -2638,11 +2697,11 @@ node proxy.js`}
               2
             </div>
             <div className="flex-1">
-              <h4 className="font-bold text-lg mb-2" style={{ color: C.text }}>Illustrator 通信チェック</h4>
+              <h4 className="font-bold text-lg mb-2" style={{ color: C.text }}>Adobe (InDesign等) 通信チェック</h4>
               {adbConnected ? (
                 <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg border border-emerald-100 flex items-center gap-2 font-medium">
                   <CheckCircle2 size={18} className="shrink-0" />
-                  準備完了： Illustratorに正しく接続されています
+                  準備完了： Adobeアプリと正しく接続されています
                 </div>
               ) : (
                 <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
@@ -2651,14 +2710,14 @@ node proxy.js`}
                   </p>
                   <ol className="list-decimal pl-6 text-sm text-amber-900 space-y-2 mb-5 font-medium">
                     <li>PC上で <strong>adb-proxy-socket</strong> を起動したままにする</li>
-                    <li><strong>Illustrator</strong>を開き、エクステンションから「Illustrator MCP Agent」を開いて「Connect」ボタンを押す</li>
+                    <li><strong>対象のAdobeアプリ</strong>を開き、エクステンションから「Illustrator MCP Agent」を開いて「Connect」ボタンを押す</li>
                     <li>下のボタンを押してアプリと通信をつなぐ</li>
                   </ol>
                   <button 
                     onClick={connectToAdb}
                     className="w-full py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-md"
                   >
-                    <RefreshCw size={18} /> Illustratorと通信を開始する
+                    <RefreshCw size={18} /> Adobeアプリと通信を開始する
                   </button>
                 </div>
               )}
@@ -2670,19 +2729,40 @@ node proxy.js`}
             <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white shadow-md ${spans.length > 0 && adbConnected ? 'bg-sky-500' : 'bg-slate-300'}`}>
               3
             </div>
-            <h4 className="font-bold text-xl my-1 w-full text-center" style={{ color: C.text }}>最終実行</h4>
+            <h4 className="font-bold text-xl w-full text-center" style={{ color: C.text }}>最終実行</h4>
             <p className="text-sm font-medium text-slate-500 text-center mb-2">
               ステップ1とステップ2が両方とも「準備完了」の場合のみボタンが押せます。<br/>
-              ボタンを押すとIllustratorが自動的に動作を開始します。
+              対象とするアプリを選び、ボタンを押すと自動的に動作を開始します。
             </p>
+
+            <div className="flex gap-4 my-2 mb-4 w-full justify-center">
+              {[
+                { id: 'illustrator', label: 'Illustrator' },
+                { id: 'indesign', label: 'InDesign' },
+                { id: 'photoshop', label: 'Photoshop' }
+              ].map(app => (
+                <label key={app.id} className="flex items-center gap-2 cursor-pointer p-3 border rounded-xl hover:bg-slate-50 transition-colors" style={{ borderColor: adobeTarget === app.id ? '#0ea5e9' : '#e2e8f0', background: adobeTarget === app.id ? '#f0f9ff' : '#ffffff' }}>
+                  <input
+                    type="radio"
+                    name="adobeTarget"
+                    value={app.id}
+                    checked={adobeTarget === app.id}
+                    onChange={(e) => setAdobeTarget(e.target.value as any)}
+                    className="w-4 h-4 text-sky-500"
+                  />
+                  <span className={`font-bold ${adobeTarget === app.id ? 'text-sky-600' : 'text-slate-600'}`}>{app.label}</span>
+                </label>
+              ))}
+            </div>
+
             <button
-              onClick={sendToIllustrator}
+              onClick={sendToAdobe}
               disabled={!(spans.length > 0 && adbConnected)}
               className="w-full py-5 rounded-2xl font-bold text-xl text-white shadow-xl transition-all flex items-center justify-center gap-3 disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ background: (spans.length > 0 && adbConnected) ? 'linear-gradient(135deg, #ff7a00, #ff4d00)' : '#94a3b8' }}
             >
-              <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="24" height="24" alt="Illustrator" className={!(spans.length > 0 && adbConnected) ? "opacity-50 grayscale" : ""} />
-              Illustratorで自動組版を開始する
+              <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="24" height="24" alt="Adobe" className={!(spans.length > 0 && adbConnected) ? "opacity-50 grayscale" : ""} />
+              {adobeTarget === 'illustrator' ? 'Illustrator' : adobeTarget === 'indesign' ? 'InDesign' : 'Photoshop'}で自動組版を開始する
             </button>
           </div>
 
