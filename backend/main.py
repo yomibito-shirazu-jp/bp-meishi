@@ -164,9 +164,12 @@ def init_fonts():
         print("  Noto fallback: Google Fonts (Noto Sans JP / Noto Serif JP)")
     else:
         def find(pattern):
-            r = subprocess.run(["fc-match", "-f", "%{file}", pattern], capture_output=True, text=True)
-            p = r.stdout.strip()
-            return p if os.path.exists(p) else None
+            try:
+                r = subprocess.run(["fc-match", "-f", "%{file}", pattern], capture_output=True, text=True)
+                p = r.stdout.strip()
+                return p if os.path.exists(p) else None
+            except FileNotFoundError:
+                return None
         FONT_PATHS = {
             "gothic":      find("Noto Sans CJK JP:weight=regular"),
             "gothic_bold": find("Noto Sans CJK JP:weight=bold"),
@@ -174,7 +177,7 @@ def init_fonts():
             "mincho_bold": find("Noto Serif CJK JP:weight=bold"),
             "light":       find("Noto Sans CJK JP:weight=light"),
         }
-        print("  Noto fallback: system Noto CJK fonts")
+        print("  Noto fallback: system Noto CJK fonts (or None on Windows)")
 
     for k, v in FONT_PATHS.items():
         print(f"  Font [{k}]: {v}")
@@ -697,6 +700,190 @@ async def rebuild(req: RebuildRequest):
         "pdf_b64": base64.b64encode(pdf_out).decode(),
         "png_b64": base64.b64encode(png_out).decode(),
     }
+
+# ── Vivliostyle PDF Build ──
+
+import tempfile
+import shutil
+
+class VivliostyleSpan(BaseModel):
+    text: str
+    font_class: str = "gothic"
+    size_pt: float = 10.0
+    x_pct: float = 0.0
+    y_pct: float = 0.0
+    w_pct: float = 50.0
+    h_pct: float = 5.0
+
+class VivliostyleBuildRequest(BaseModel):
+    spans: list[VivliostyleSpan]
+    page_mm: list[float] = [91, 55]  # width, height
+    title: str = "名刺"
+
+def _generate_html_css(spans: list[VivliostyleSpan], page_mm: list[float], title: str) -> tuple[str, str]:
+    """スパンデータからVivliostyle用HTML + CSSを生成"""
+    w_mm, h_mm = page_mm[0], page_mm[1]
+
+    font_map = {
+        "gothic": "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+        "gothic_bold": "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+        "mincho": "'Noto Serif JP', 'Hiragino Mincho ProN', serif",
+        "light": "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+    }
+    weight_map = {
+        "gothic": "400",
+        "gothic_bold": "700",
+        "mincho": "400",
+        "light": "300",
+    }
+
+    css = f"""@page {{
+  size: {w_mm}mm {h_mm}mm;
+  margin: 0;
+  bleed: 3mm;
+  marks: crop cross;
+}}
+
+@font-face {{
+  font-family: 'Noto Sans JP';
+  src: local('Noto Sans JP'), local('NotoSansJP');
+  font-weight: 100 900;
+}}
+
+@font-face {{
+  font-family: 'Noto Serif JP';
+  src: local('Noto Serif JP'), local('NotoSerifJP');
+  font-weight: 100 900;
+}}
+
+* {{
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}}
+
+body {{
+  width: {w_mm}mm;
+  height: {h_mm}mm;
+  position: relative;
+  overflow: hidden;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}}
+
+.card-container {{
+  position: relative;
+  width: 100%;
+  height: 100%;
+}}
+
+.span-element {{
+  position: absolute;
+  white-space: nowrap;
+  line-height: 1.4;
+}}
+"""
+
+    elements_html = ""
+    for i, s in enumerate(spans):
+        font_family = font_map.get(s.font_class, font_map["gothic"])
+        font_weight = weight_map.get(s.font_class, "400")
+        elements_html += f"""    <div class="span-element" style="
+      left: {s.x_pct}%;
+      top: {s.y_pct}%;
+      font-family: {font_family};
+      font-weight: {font_weight};
+      font-size: {s.size_pt}pt;
+    ">{s.text}</div>
+"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>{title}</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="card-container">
+{elements_html}  </div>
+</body>
+</html>"""
+
+    return html, css
+
+
+@app.post("/vivliostyle-build")
+async def vivliostyle_build(req: VivliostyleBuildRequest):
+    """Vivliostyle CLIでHTML+CSS → 印刷用PDF生成"""
+    # vivliostyle CLI の存在確認
+    vivliostyle_cmd = shutil.which("vivliostyle")
+    if not vivliostyle_cmd:
+        # npx 経由でも試す
+        npx_cmd = shutil.which("npx")
+        if npx_cmd:
+            vivliostyle_cmd = "npx"
+        else:
+            raise HTTPException(500, "vivliostyle CLI が見つかりません。npm install -g @vivliostyle/cli でインストールしてください。")
+
+    html_content, css_content = _generate_html_css(req.spans, req.page_mm, req.title)
+
+    # 一時ディレクトリに書き出し
+    tmpdir = tempfile.mkdtemp(prefix="vivliostyle_")
+    try:
+        html_path = os.path.join(tmpdir, "index.html")
+        css_path = os.path.join(tmpdir, "style.css")
+        pdf_path = os.path.join(tmpdir, "output.pdf")
+
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        with open(css_path, "w", encoding="utf-8") as f:
+            f.write(css_content)
+
+        # vivliostyle build 実行
+        if vivliostyle_cmd == "npx":
+            cmd = ["npx", "-y", "@vivliostyle/cli", "build", html_path, "-o", pdf_path]
+        else:
+            cmd = [vivliostyle_cmd, "build", html_path, "-o", pdf_path]
+
+        print(f"  Vivliostyle build: {' '.join(cmd)}")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=tmpdir,
+        )
+
+        if result.returncode != 0:
+            print(f"  Vivliostyle stderr: {result.stderr[:500]}")
+            raise HTTPException(500, f"Vivliostyle build エラー: {result.stderr[:300]}")
+
+        if not os.path.exists(pdf_path):
+            raise HTTPException(500, "Vivliostyle: PDF が生成されませんでした")
+
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+
+        print(f"  Vivliostyle PDF generated: {len(pdf_bytes)} bytes")
+
+        return {
+            "pdf_b64": base64.b64encode(pdf_bytes).decode(),
+            "html": html_content,
+            "css": css_content,
+            "engine": "vivliostyle",
+            "version": "cli 10.3.1 / core 2.40.0",
+        }
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "Vivliostyle build タイムアウト (120秒)")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Vivliostyle build 失敗: {e}")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     import uvicorn

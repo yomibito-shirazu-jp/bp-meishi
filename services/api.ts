@@ -55,3 +55,50 @@ export const rebuildPdf = async (
   }
   return res.json();
 };
+
+export interface VivliostyleSpan {
+  text: string;
+  font_class: string;
+  size_pt: number;
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
+}
+
+export interface VivliostyleBuildResponse {
+  pdf_b64: string;
+  html: string;
+  css: string;
+  engine: string;
+  version: string;
+}
+
+export const vivliostyleBuild = async (
+  spans: VivliostyleSpan[],
+  pageMM: [number, number],
+  title: string = '名刺',
+): Promise<VivliostyleBuildResponse> => {
+  const res = await fetch(`${getApiUrl()}/vivliostyle-build`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      spans: spans.map(s => ({
+        text: s.text,
+        font_class: s.font_class,
+        size_pt: s.size_pt,
+        x_pct: s.x_pct,
+        y_pct: s.y_pct,
+        w_pct: s.w_pct,
+        h_pct: s.h_pct,
+      })),
+      page_mm: pageMM,
+      title,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+};
