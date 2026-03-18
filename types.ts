@@ -36,9 +36,43 @@ export interface PageData {
   clip_rect: [number, number, number, number];
 }
 
+export interface JobInstruction {
+  document_info: {
+    creation_date: string;
+    product_name: string;
+    customer_name: string;
+    order_number: string;
+    pasteboard_creator: string;
+  };
+  typesetting_format: {
+    finished_size: {
+      format: string;
+      width_mm: number | null;
+      height_mm: number | null;
+    };
+    text_direction: string;
+    font_size_q: number | null;
+    font_size_pt: number | null;
+    line_spacing: {
+      size_q: number | null;
+      size_pt: number | null;
+    };
+  };
+  character_attributes: {
+    fonts: {
+      kanji: string;
+      kana: string;
+      alphanumeric: string;
+      ruby: string;
+    };
+    all_fonts_used: { name: string; char_count: number }[];
+  };
+}
+
 export interface AnalyzeResponse {
   pages: PageData[];
   pdf_b64: string;
+  job_instruction?: JobInstruction;
 }
 
 export interface RebuildResponse {

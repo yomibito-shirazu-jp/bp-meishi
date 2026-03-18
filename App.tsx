@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult } from './types';
+import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction } from './types';
 import { analyzePdf, rebuildPdf, SpanOverride, vivliostyleBuild } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
@@ -89,6 +89,7 @@ const App: React.FC = () => {
   const [showOverlay, setShowOverlay] = useState(true);
   const [previewTab, setPreviewTab] = useState<'edit' | 'original' | 'rebuilt'>('edit');
   const [fieldCategories, setFieldCategories] = useState<Record<string, string>>({});
+  const [jobInstruction, setJobInstruction] = useState<JobInstruction | null>(null);
 
   // ── Multi-Page ──
   const [allPages, setAllPages] = useState<PageData[]>([]);
@@ -441,6 +442,7 @@ const App: React.FC = () => {
       const pages = data.pages;
       setAllPages(pages);
       setPdfB64(data.pdf_b64);
+      setJobInstruction(data.job_instruction || null);
       setEditingProjectId(null);
 
       if (pages.length === 0) {
@@ -584,6 +586,7 @@ const App: React.FC = () => {
     setOriginalSpans([]);
     setSpanMapping({});
     setFieldCategories({});
+    setJobInstruction(null);
     setPdfB64(null);
     setOriginalPng(null);
     setRebuiltPng(null);
@@ -1417,6 +1420,48 @@ const App: React.FC = () => {
               <span>Y:{sel.y_pct.toFixed(1)}%</span>
               <span>W:{sel.w_pct.toFixed(1)}%</span>
               <span>H:{sel.h_pct.toFixed(1)}%</span>
+            </div>
+          </div>
+        )}
+
+        {/* Job Instruction Panel */}
+        {jobInstruction && (
+          <div className="border-t px-3 py-3 space-y-2 shrink-0" style={{ borderColor: '#2a2a4a', background: '#0f0f20' }}>
+            <h4 className="text-[11px] font-medium flex items-center gap-1.5" style={{ color: '#8888aa' }}>
+              <FileText size={12} /> 組版指示 (自動抽出)
+            </h4>
+            <div className="space-y-1 text-[10px] font-mono" style={{ color: '#6b6b8a' }}>
+              <div className="flex justify-between">
+                <span>サイズ</span>
+                <span style={{ color: '#e0e0f0' }}>
+                  {jobInstruction.typesetting_format.finished_size.format || '不明'}{' '}
+                  ({jobInstruction.typesetting_format.finished_size.width_mm}×{jobInstruction.typesetting_format.finished_size.height_mm}mm)
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>方向</span>
+                <span style={{ color: '#e0e0f0' }}>{jobInstruction.typesetting_format.text_direction}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>本文級数</span>
+                <span style={{ color: '#e0e0f0' }}>
+                  {jobInstruction.typesetting_format.font_size_q}Q ({jobInstruction.typesetting_format.font_size_pt}pt)
+                </span>
+              </div>
+              {jobInstruction.typesetting_format.line_spacing.size_q && (
+                <div className="flex justify-between">
+                  <span>行送り</span>
+                  <span style={{ color: '#e0e0f0' }}>
+                    {jobInstruction.typesetting_format.line_spacing.size_q}Q ({jobInstruction.typesetting_format.line_spacing.size_pt}pt)
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span>主フォント</span>
+                <span style={{ color: '#e0e0f0' }} className="truncate ml-2 max-w-[150px]" title={jobInstruction.character_attributes.fonts.kanji}>
+                  {jobInstruction.character_attributes.fonts.kanji.split('+').pop()?.split('-')[0] || '不明'}
+                </span>
+              </div>
             </div>
           </div>
         )}

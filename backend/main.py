@@ -419,6 +419,125 @@ async def analyze_page_region(doc, page_idx: int, clip_rect: list, label: str | 
     return result
 
 
+def extract_job_instruction(doc) -> dict:
+    """PDFの全ページからフォント・サイズ・行間・ページサイズ等の組版指示を自動抽出"""
+    all_fonts: dict[str, int] = {}
+    all_sizes: list[float] = []
+    all_line_spacings: list[float] = []
+    text_directions: dict[str, int] = {"horizontal": 0, "vertical": 0}
+
+    for page_idx in range(len(doc)):
+        page = doc[page_idx]
+        blocks = page.get_text("dict")["blocks"]
+        for block in blocks:
+            if "lines" not in block:
+                continue
+            prev_y = None
+            for line in block["lines"]:
+                # 行方向検出: dir=(1,0)=横書き, dir=(0,1)=縦書き
+                line_dir = line.get("dir", (1, 0))
+                if abs(line_dir[0]) > abs(line_dir[1]):
+                    text_directions["horizontal"] += 1
+                else:
+                    text_directions["vertical"] += 1
+
+                for span in line["spans"]:
+                    if not span["text"].strip():
+                        continue
+                    fname = span["font"]
+                    all_fonts[fname] = all_fonts.get(fname, 0) + len(span["text"])
+                    all_sizes.append(span["size"])
+
+                # 行間計算 (同一ブロック内の連続行)
+                line_y = line["bbox"][1]
+                if prev_y is not None:
+                    spacing = line_y - prev_y
+                    if 0 < spacing < 100:  # 合理的な範囲のみ
+                        all_line_spacings.append(spacing)
+                prev_y = line_y
+
+    # 最頻フォント分類
+    sorted_fonts = sorted(all_fonts.items(), key=lambda x: -x[1])
+    kanji_font = sorted_fonts[0][0] if sorted_fonts else ""
+    kana_font = kanji_font  # 通常同一
+    alpha_font = ""
+    for fname, _ in sorted_fonts:
+        n = fname.lower()
+        if any(k in n for k in ["arial", "helvetica", "times", "courier", "century"]):
+            alpha_font = fname
+            break
+    if not alpha_font and sorted_fonts:
+        alpha_font = sorted_fonts[0][0]
+
+    # ページサイズ (pt → mm)
+    page0 = doc[0]
+    pw_pt, ph_pt = page0.rect.width, page0.rect.height
+    pw_mm = round(pw_pt / 72 * 25.4, 1)
+    ph_mm = round(ph_pt / 72 * 25.4, 1)
+
+    # 仕上がりサイズ判定
+    format_name = ""
+    known_sizes = [
+        ("名刺", 91, 55), ("A4", 210, 297), ("A5", 148, 210), ("A3", 297, 420),
+        ("B5", 182, 257), ("B4", 257, 364), ("はがき", 100, 148),
+    ]
+    for name, w, h in known_sizes:
+        if (abs(pw_mm - w) < 3 and abs(ph_mm - h) < 3) or (abs(pw_mm - h) < 3 and abs(ph_mm - w) < 3):
+            format_name = name
+            break
+
+    # 本文級数 (最頻サイズ, pt → Q)
+    from collections import Counter
+    size_counts = Counter([round(s, 1) for s in all_sizes])
+    body_size_pt = size_counts.most_common(1)[0][0] if size_counts else 10.0
+    body_size_q = round(body_size_pt * 4 / (72 / 25.4), 1)  # pt → Q (1Q = 0.25mm)
+
+    # 行間 (最頻値, pt → Q)
+    line_spacing_pt = 0.0
+    if all_line_spacings:
+        ls_counts = Counter([round(s, 1) for s in all_line_spacings])
+        line_spacing_pt = ls_counts.most_common(1)[0][0]
+    line_spacing_q = round(line_spacing_pt * 4 / (72 / 25.4), 1) if line_spacing_pt else None
+
+    # テキスト方向
+    text_dir = "横組み" if text_directions["horizontal"] >= text_directions["vertical"] else "縦組み"
+
+    return {
+        "job_instruction": {
+            "document_info": {
+                "creation_date": "",
+                "product_name": "",
+                "customer_name": "",
+                "order_number": "",
+                "pasteboard_creator": "",
+            },
+            "typesetting_format": {
+                "finished_size": {
+                    "format": format_name,
+                    "width_mm": pw_mm,
+                    "height_mm": ph_mm,
+                },
+                "text_direction": text_dir,
+                "font_size_q": body_size_q,
+                "font_size_pt": body_size_pt,
+                "line_spacing": {
+                    "size_q": line_spacing_q,
+                    "size_pt": round(line_spacing_pt, 2) if line_spacing_pt else None,
+                },
+            },
+            "character_attributes": {
+                "fonts": {
+                    "kanji": kanji_font,
+                    "kana": kana_font,
+                    "alphanumeric": alpha_font,
+                    "ruby": "",
+                },
+                "all_fonts_used": [{"name": f, "char_count": c} for f, c in sorted_fonts[:20]],
+            },
+        },
+    }
+
+
 async def analyze_pdf(pdf_bytes: bytes) -> dict:
     """PDF全ページを分析"""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -431,7 +550,10 @@ async def analyze_pdf(pdf_bytes: bytes) -> dict:
         page_data = await analyze_page_region(doc, page_idx, clip_rect, None)
         pages.append(page_data)
 
-    return {"pages": pages}
+    # 組版指示を自動抽出
+    job_info = extract_job_instruction(doc)
+
+    return {"pages": pages, **job_info}
 
 
 # ── PDF Rebuild ──
