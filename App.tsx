@@ -487,7 +487,10 @@ const App: React.FC = () => {
 
   // ── Rebuild PDF + auto-save ──
   const handleRebuild = async () => {
-    if (!pdfB64) return;
+    if (!pdfB64) {
+      flash('元PDFデータがありません。PDFをアップロードし直してください。', 'error');
+      return;
+    }
     const edits: Record<string, string> = {};
     const ovMap: Record<string, SpanOverride> = {};
     spans.forEach((s, i) => {
@@ -967,9 +970,11 @@ const App: React.FC = () => {
             </button>
             <button
               onClick={handleRebuild}
+              disabled={!pdfB64 || editCount === 0}
               className={`text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all shadow-sm
-                ${editCount > 0 ? 'hover:opacity-90' : 'opacity-40 cursor-not-allowed'}`}
-              style={{ background: editCount > 0 ? C.accent : '#94a3b8' }}
+                ${pdfB64 && editCount > 0 ? 'hover:opacity-90' : 'opacity-40 cursor-not-allowed'}`}
+              style={{ background: pdfB64 && editCount > 0 ? C.accent : '#94a3b8' }}
+              title={!pdfB64 ? '元PDFがありません' : editCount === 0 ? '変更がありません' : '再構築してPDFをダウンロード'}
             >
               <Download size={15} /> 再構築 & PDF出力
             </button>
