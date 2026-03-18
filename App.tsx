@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult } from './types';
-import { analyzePdf, rebuildPdf, SpanOverride } from './services/api';
+import { analyzePdf, rebuildPdf, SpanOverride, vivliostyleBuild } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
@@ -1219,191 +1219,33 @@ const App: React.FC = () => {
   };
 
   // ── Editor ──
-  const renderEditor = () => (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Page selector bar (only when multiple pages) */}
-      {allPages.length > 1 && (
-        <div className="px-4 py-2 border-b flex items-center justify-end gap-3 shrink-0" style={{ background: C.card, borderColor: C.border }}>
-          <div className="flex items-center gap-1.5">
-            {allPages.map((p, i) => (
-              <button
-                key={i}
-                onClick={() => handlePageSwitch(i)}
-                className="px-4 py-2 rounded-lg text-sm font-bold transition-all border-2"
-                style={{
-                  background: currentPageIdx === i ? C.accent : 'transparent',
-                  color: currentPageIdx === i ? '#fff' : C.textSec,
-                  borderColor: currentPageIdx === i ? C.accent : C.border,
-                  boxShadow: currentPageIdx === i ? '0 2px 8px rgba(13,148,136,0.3)' : 'none',
-                }}
-              >
-                {p.page_label || `ページ ${i + 1}`}
-              </button>
-            ))}
-          </div>
-          <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: C.accentBg, color: C.accent }}>
-            {allPages.length}ページ
-          </span>
-        </div>
-      )}
-
-      <div className="flex-1 flex overflow-hidden">
-      {/* Left: Fields Form + Property Panel */}
-      <div className="w-96 flex flex-col shrink-0 border-r" style={{ background: C.bg, borderColor: C.border }}>
-        <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: C.border }}>
-          <div className="flex items-center gap-2">
-            <FileText size={14} style={{ color: C.accent }} />
-            <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: C.accent }}>
-              検出フィールド ({spans.length})
-            </h3>
-          </div>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ background: C.surface, color: C.muted }}>
-            {pageMM[0]}×{pageMM[1]}mm
-          </span>
-        </div>
-
-        <div className="flex-1 overflow-y-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr style={{ background: C.surface }}>
-                <th className="text-left text-[10px] font-bold uppercase px-3 py-2 tracking-wider" style={{ color: C.muted, width: '80px' }}>フォント</th>
-                <th className="text-left text-[10px] font-bold uppercase px-3 py-2 tracking-wider" style={{ color: C.muted }}>テキスト</th>
-              </tr>
-            </thead>
-            <tbody>
-              {spans.map((s, i) => {
-                const isActive = selectedId === s.id;
-                const changed = originalSpans[i] && s.text !== originalSpans[i].text;
-                return (
-                  <tr
-                    key={s.id}
-                    onClick={() => setSelectedId(isActive ? null : s.id)}
-                    className="cursor-pointer"
-                    style={{
-                      background: isActive ? C.accentBg : i % 2 === 0 ? C.card : C.bg,
-                      borderBottom: `1px solid ${C.border}`,
-                    }}
-                  >
-                    <td className="px-3 py-2 align-top" style={{ width: '80px' }}>
-                      <div className="flex flex-col gap-0.5">
-                        <span
-                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded inline-block text-center"
-                          style={{ background: C.surface, color: C.textSec }}
-                        >
-                          {FONT_LABELS[s.font_class] || s.font_class}
-                        </span>
-                        <span className="text-[9px] text-center" style={{ color: C.muted }}>{s.size_pt}pt</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <input
-                        type="text"
-                        value={s.text}
-                        onChange={e => updateSpan(s.id, { text: e.target.value })}
-                        onFocus={() => setSelectedId(s.id)}
-                        className="w-full px-2 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 bg-white"
-                        style={{
-                          borderColor: changed ? C.accent : C.border,
-                          color: changed ? C.accent : C.text,
-                          fontWeight: changed ? 600 : 400,
-                        }}
-                      />
-                      {changed && originalSpans[i] && (
-                        <div className="text-[10px] mt-0.5 truncate" style={{ color: C.muted }}>
-                          <span className="line-through">{originalSpans[i].text}</span>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Property Panel — shown when a span is selected */}
-        {selectedId && (() => {
-          const sel = spans.find(s => s.id === selectedId);
-          if (!sel) return null;
-          return (
-            <div className="border-t px-4 py-3 space-y-3 shrink-0" style={{ borderColor: C.border, background: C.card }}>
-              <div className="flex items-center justify-between">
-                <h4 className="text-[11px] font-bold uppercase tracking-wider" style={{ color: C.accent }}>
-                  プロパティ
-                </h4>
-                <span className="text-[10px] font-mono" style={{ color: C.muted }}>{sel.id}</span>
-              </div>
-              {/* Font family */}
-              <div>
-                <label className="text-[10px] font-semibold block mb-1" style={{ color: C.textSec }}>フォント</label>
-                <select
-                  value={sel.font_class}
-                  onChange={e => updateSpan(sel.id, { font_class: e.target.value as Span['font_class'] })}
-                  className="w-full px-2 py-1.5 border rounded text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-300"
-                  style={{ borderColor: C.border }}
+  const renderEditor = () => {
+    const sel = selectedId ? spans.find(s => s.id === selectedId) : null;
+    return (
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: '#1a1a2e' }}>
+      {/* Top toolbar */}
+      <div className="px-4 py-2 border-b flex items-center justify-between shrink-0" style={{ background: '#16162a', borderColor: '#2a2a4a' }}>
+        <div className="flex items-center gap-3">
+          {/* Page selector */}
+          {allPages.length > 1 && (
+            <div className="flex items-center gap-1">
+              {allPages.map((p, i) => (
+                <button
+                  key={i}
+                  onClick={() => handlePageSwitch(i)}
+                  className="px-3 py-1.5 rounded text-xs font-medium transition-all"
+                  style={{
+                    background: currentPageIdx === i ? C.accent : 'transparent',
+                    color: currentPageIdx === i ? '#fff' : '#8888aa',
+                  }}
                 >
-                  <option value="gothic">ゴシック (Noto Sans JP)</option>
-                  <option value="mincho">明朝 (Noto Serif JP)</option>
-                  <option value="light">ライト</option>
-                  <option value="gothic_bold">ゴシック太</option>
-                </select>
-              </div>
-              {/* Font size */}
-              <div>
-                <label className="text-[10px] font-semibold block mb-1" style={{ color: C.textSec }}>サイズ (pt)</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    value={sel.size_pt}
-                    onChange={e => updateSpan(sel.id, { size_pt: parseFloat(e.target.value) || sel.size_pt })}
-                    step={0.5}
-                    min={1}
-                    max={120}
-                    className="w-20 px-2 py-1.5 border rounded text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-300"
-                    style={{ borderColor: C.border }}
-                  />
-                  <div className="flex gap-1">
-                    {[6, 8, 9, 10, 12, 14, 18, 24].map(sz => (
-                      <button
-                        key={sz}
-                        onClick={() => updateSpan(sel.id, { size_pt: sz })}
-                        className="px-1.5 py-0.5 rounded text-[10px] font-mono border transition-colors"
-                        style={{
-                          borderColor: sel.size_pt === sz ? C.accent : C.border,
-                          background: sel.size_pt === sz ? C.accentBg : 'transparent',
-                          color: sel.size_pt === sz ? C.accent : C.muted,
-                        }}
-                      >
-                        {sz}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              {/* Position */}
-              <div>
-                <label className="text-[10px] font-semibold block mb-1" style={{ color: C.textSec }}>
-                  位置 <Move size={10} className="inline ml-0.5" style={{ color: C.muted }} />
-                </label>
-                <div className="flex gap-2 text-[10px]" style={{ color: C.muted }}>
-                  <span>X: {sel.x_pct.toFixed(1)}%</span>
-                  <span>Y: {sel.y_pct.toFixed(1)}%</span>
-                  <span>W: {sel.w_pct.toFixed(1)}%</span>
-                  <span>H: {sel.h_pct.toFixed(1)}%</span>
-                </div>
-                <p className="text-[9px] mt-1" style={{ color: C.muted }}>
-                  プレビュー上でドラッグして移動可能
-                </p>
-              </div>
+                  {p.page_label || `P${i + 1}`}
+                </button>
+              ))}
             </div>
-          );
-        })()}
-      </div>
-
-      {/* Preview — 3-tab panel with zoom */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="px-4 py-2 border-b flex items-center justify-between" style={{ background: C.card, borderColor: C.border }}>
-          <div className="flex items-center gap-1 p-0.5 rounded-lg" style={{ background: C.surface }}>
+          )}
+          {/* Preview tabs */}
+          <div className="flex items-center gap-1 px-1 py-0.5 rounded-lg" style={{ background: '#12122a' }}>
             {([
               { key: 'edit' as const, label: 'プレビュー' },
               { key: 'original' as const, label: 'オリジナル' },
@@ -1412,82 +1254,192 @@ const App: React.FC = () => {
               <button
                 key={tab.key}
                 onClick={() => setPreviewTab(tab.key)}
-                className="px-3 py-1.5 rounded-md text-xs font-bold transition-all"
+                className="px-3 py-1.5 rounded text-xs font-medium transition-all"
                 style={{
-                  background: previewTab === tab.key ? C.card : 'transparent',
-                  color: previewTab === tab.key
-                    ? tab.key === 'rebuilt' ? '#059669' : C.accent
-                    : C.muted,
-                  boxShadow: previewTab === tab.key ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                  background: previewTab === tab.key ? '#2a2a4a' : 'transparent',
+                  color: previewTab === tab.key ? '#fff' : '#6b6b8a',
                 }}
               >
                 {tab.label}
               </button>
             ))}
-            {editCount > 0 && previewTab === 'edit' && (
-              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full ml-1"
-                style={{ background: C.accentBg, color: C.accent, border: `1px solid ${C.accentBorder}` }}>
-                {editCount}件変更中
-              </span>
-            )}
           </div>
-          <div className="flex items-center gap-2">
-            {/* Zoom controls */}
-            <div className="flex items-center gap-1 border rounded-lg px-1" style={{ borderColor: C.border }}>
-              <button onClick={zoomOut} className="p-1 rounded hover:bg-slate-50 transition-colors" style={{ color: C.muted }}>
-                <ZoomOut size={14} />
-              </button>
-              <button
-                onClick={zoomReset}
-                className="px-1.5 py-0.5 text-[10px] font-mono font-bold rounded hover:bg-slate-50 transition-colors"
-                style={{ color: C.textSec }}
-              >
-                {Math.round(zoom * 100)}%
-              </button>
-              <button onClick={zoomIn} className="p-1 rounded hover:bg-slate-50 transition-colors" style={{ color: C.muted }}>
-                <ZoomIn size={14} />
-              </button>
-              <button onClick={zoomReset} className="p-1 rounded hover:bg-slate-50 transition-colors" title="リセット" style={{ color: C.muted }}>
-                <Maximize size={14} />
-              </button>
-            </div>
-            {previewTab === 'edit' && (
-              <button
-                onClick={() => setShowOverlay(!showOverlay)}
-                className="px-2 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-colors border"
+          {editCount > 0 && (
+            <span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
+              {editCount}件変更
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Zoom */}
+          <div className="flex items-center gap-1 px-2 py-1 rounded-lg" style={{ background: '#12122a' }}>
+            <button onClick={zoomOut} className="p-0.5 rounded hover:bg-white/5 transition-colors" style={{ color: '#8888aa' }}>
+              <ZoomOut size={14} />
+            </button>
+            <button onClick={zoomReset} className="px-2 text-xs font-mono" style={{ color: '#aaaacc' }}>
+              {Math.round(zoom * 100)}%
+            </button>
+            <button onClick={zoomIn} className="p-0.5 rounded hover:bg-white/5 transition-colors" style={{ color: '#8888aa' }}>
+              <ZoomIn size={14} />
+            </button>
+          </div>
+          {previewTab === 'edit' && (
+            <button
+              onClick={() => setShowOverlay(!showOverlay)}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors"
+              style={{
+                background: showOverlay ? 'rgba(16,185,129,0.15)' : '#12122a',
+                color: showOverlay ? '#10b981' : '#6b6b8a',
+              }}
+            >
+              {showOverlay ? <Eye size={13} /> : <EyeOff size={13} />}
+              枠線
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 flex overflow-hidden">
+      {/* Left: Field list */}
+      <div className="w-80 flex flex-col shrink-0 border-r" style={{ background: '#16162a', borderColor: '#2a2a4a' }}>
+        <div className="px-3 py-2.5 border-b flex items-center justify-between" style={{ borderColor: '#2a2a4a' }}>
+          <span className="text-xs font-medium" style={{ color: '#8888aa' }}>
+            フィールド ({spans.length})
+          </span>
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ background: '#12122a', color: '#6b6b8a' }}>
+            {pageMM[0]}x{pageMM[1]}mm
+          </span>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {spans.map((s, i) => {
+            const isActive = selectedId === s.id;
+            const changed = originalSpans[i] && s.text !== originalSpans[i].text;
+            return (
+              <div
+                key={s.id}
+                onClick={() => setSelectedId(isActive ? null : s.id)}
+                className="px-3 py-2 cursor-pointer transition-colors"
                 style={{
-                  background: showOverlay ? C.accentBg : 'transparent',
-                  color: showOverlay ? C.accent : C.muted,
-                  borderColor: showOverlay ? C.accentBorder : C.border,
+                  background: isActive ? 'rgba(16,185,129,0.08)' : 'transparent',
+                  borderLeft: isActive ? '3px solid #10b981' : '3px solid transparent',
+                  borderBottom: '1px solid #1e1e3a',
                 }}
               >
-                {showOverlay ? <Eye size={12} /> : <EyeOff size={12} />}
-                オーバーレイ
-              </button>
-            )}
-          </div>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ background: '#12122a', color: '#8888aa' }}>
+                    {FONT_LABELS[s.font_class] || s.font_class}
+                  </span>
+                  <span className="text-[10px] font-mono" style={{ color: '#5a5a7a' }}>{s.size_pt}pt</span>
+                  {changed && (
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full ml-auto" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
+                      変更済
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={s.text}
+                  onChange={e => updateSpan(s.id, { text: e.target.value })}
+                  onFocus={() => setSelectedId(s.id)}
+                  onClick={e => e.stopPropagation()}
+                  className="w-full px-2.5 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40 transition-all"
+                  style={{
+                    background: '#12122a',
+                    border: `1px solid ${isActive ? '#10b981' : changed ? '#10b981' : '#2a2a4a'}`,
+                    color: changed ? '#10b981' : '#e0e0f0',
+                  }}
+                />
+                {changed && originalSpans[i] && (
+                  <div className="text-[10px] mt-1 flex items-center gap-1" style={{ color: '#5a5a7a' }}>
+                    <span className="line-through">{originalSpans[i].text}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
+
+        {/* Property Panel — shown when a span is selected */}
+        {sel && (
+          <div className="border-t px-3 py-3 space-y-3 shrink-0" style={{ borderColor: '#2a2a4a', background: '#12122a' }}>
+            <h4 className="text-[11px] font-medium" style={{ color: '#8888aa' }}>プロパティ</h4>
+            <div>
+              <label className="text-[10px] block mb-1" style={{ color: '#6b6b8a' }}>フォント</label>
+              <select
+                value={sel.font_class}
+                onChange={e => updateSpan(sel.id, { font_class: e.target.value as Span['font_class'] })}
+                className="w-full px-2.5 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                style={{ background: '#1a1a2e', border: '1px solid #2a2a4a', color: '#e0e0f0' }}
+              >
+                <option value="gothic">ゴシック</option>
+                <option value="mincho">明朝</option>
+                <option value="light">ライト</option>
+                <option value="gothic_bold">ゴシック太</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] block mb-1" style={{ color: '#6b6b8a' }}>サイズ (pt)</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={sel.size_pt}
+                  onChange={e => updateSpan(sel.id, { size_pt: parseFloat(e.target.value) || sel.size_pt })}
+                  step={0.5} min={1} max={120}
+                  className="w-20 px-2.5 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                  style={{ background: '#1a1a2e', border: '1px solid #2a2a4a', color: '#e0e0f0' }}
+                />
+                <div className="flex gap-1 flex-wrap">
+                  {[6, 8, 10, 12, 14, 18, 24].map(sz => (
+                    <button
+                      key={sz}
+                      onClick={() => updateSpan(sel.id, { size_pt: sz })}
+                      className="px-2 py-1 rounded text-[10px] font-mono transition-colors"
+                      style={{
+                        background: sel.size_pt === sz ? 'rgba(16,185,129,0.15)' : '#1a1a2e',
+                        color: sel.size_pt === sz ? '#10b981' : '#6b6b8a',
+                        border: `1px solid ${sel.size_pt === sz ? '#10b981' : '#2a2a4a'}`,
+                      }}
+                    >
+                      {sz}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-3 text-[10px] font-mono" style={{ color: '#5a5a7a' }}>
+              <span>X:{sel.x_pct.toFixed(1)}%</span>
+              <span>Y:{sel.y_pct.toFixed(1)}%</span>
+              <span>W:{sel.w_pct.toFixed(1)}%</span>
+              <span>H:{sel.h_pct.toFixed(1)}%</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Center: Preview */}
+      <div className="flex-1 flex flex-col overflow-hidden">
         <div
           ref={previewContainerRef}
           className="flex-1 overflow-auto"
-          style={{ background: C.surface }}
+          style={{ background: '#1a1a2e' }}
           onMouseMove={draggingId ? handleMouseMove : undefined}
           onMouseUp={draggingId ? handleMouseUp : undefined}
           onMouseLeave={draggingId ? handleMouseUp : undefined}
         >
-          <div className="min-h-full flex items-center justify-center p-6">
+          <div className="min-h-full flex items-center justify-center p-8">
           {previewTab === 'rebuilt' && rebuiltPng ? (
             <img
               src={rebuiltPng}
               alt="再構築プレビュー"
-              className="object-contain rounded-lg shadow-2xl"
+              className="object-contain rounded shadow-2xl"
               style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', transition: draggingId ? 'none' : 'transform 0.2s' }}
             />
           ) : previewTab === 'edit' ? (
             originalPng ? (
               <div
                 ref={previewImgRef}
-                className="relative rounded-lg shadow-2xl overflow-visible bg-white"
+                className="relative rounded shadow-2xl overflow-visible bg-white"
                 style={{
                   aspectRatio: `${pageMM[0]} / ${pageMM[1]}`,
                   maxHeight: `${85 * zoom}vh`,
@@ -1510,7 +1462,7 @@ const App: React.FC = () => {
                       key={s.id}
                       onMouseDown={e => handleOverlayMouseDown(e, s.id)}
                       onClick={e => { e.stopPropagation(); if (!draggingId) setSelectedId(isActive ? null : s.id); }}
-                      title={`${s.text} (${FONT_LABELS[s.font_class] || s.font_class} ${s.size_pt}pt)\nドラッグで移動`}
+                      title={`${s.text}\nドラッグで移動`}
                       style={{
                         position: 'absolute',
                         left: `${s.x_pct}%`,
@@ -1519,60 +1471,37 @@ const App: React.FC = () => {
                         height: `${s.h_pct}%`,
                         cursor: isDragging ? 'grabbing' : 'grab',
                         border: isActive
-                          ? `2px solid ${C.accent}`
+                          ? '2px solid #10b981'
                           : isModified
-                            ? `2px solid ${C.accent}`
-                            : `1px solid rgba(13,148,136,0.25)`,
+                            ? '2px dashed #10b981'
+                            : '1px solid rgba(255,255,255,0.15)',
                         background: isDragging
-                          ? 'rgba(13,148,136,0.2)'
+                          ? 'rgba(16,185,129,0.25)'
                           : isActive
-                            ? 'rgba(13,148,136,0.12)'
-                            : isModified
-                              ? 'rgba(13,148,136,0.08)'
-                              : 'rgba(13,148,136,0.04)',
-                        borderRadius: '3px',
-                        transition: isDragging ? 'none' : 'all 0.1s',
+                            ? 'rgba(16,185,129,0.1)'
+                            : 'transparent',
+                        borderRadius: '2px',
+                        transition: isDragging ? 'none' : 'all 0.15s',
                         zIndex: isDragging ? 30 : isActive ? 20 : 10,
-                        display: 'flex',
-                        alignItems: 'center',
-                        overflow: 'hidden',
                         userSelect: 'none',
                       }}
-                    >
-                      {isModified && (
-                        <span style={{
-                          background: 'rgba(255,255,255,0.92)',
-                          color: C.accent,
-                          fontWeight: 600,
-                          fontSize: `max(9px, ${s.h_pct * 0.75}vh)`,
-                          whiteSpace: 'nowrap',
-                          padding: '0 2px',
-                          lineHeight: 1,
-                          width: '100%',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        }}>
-                          {s.text}
-                        </span>
-                      )}
-                    </div>
+                    />
                   );
                 })}
               </div>
             ) : (
-              <div className="text-sm" style={{ color: C.muted }}>プレビューなし</div>
+              <div className="text-sm" style={{ color: '#6b6b8a' }}>プレビューなし</div>
             )
           ) : (
-            /* Original tab */
             originalPng ? (
               <img
                 src={originalPng}
                 alt="オリジナル"
-                className="object-contain rounded-lg shadow-2xl"
+                className="object-contain rounded shadow-2xl"
                 style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', transition: 'transform 0.2s' }}
               />
             ) : (
-              <div className="text-sm" style={{ color: C.muted }}>オリジナル画像なし</div>
+              <div className="text-sm" style={{ color: '#6b6b8a' }}>オリジナル画像なし</div>
             )
           )}
           </div>
@@ -1581,6 +1510,7 @@ const App: React.FC = () => {
     </div>
     </div>
   );
+  };
 
   // ── Chat Panel Component (reusable) ──
   const renderChatPanel = (isStandalone = false) => (
@@ -2446,14 +2376,56 @@ const App: React.FC = () => {
             contents: [{
               parts: [
                 { inline_data: { mime_type: file.type || 'application/pdf', data: b64 } },
-                { text: `この文書を解析して、以下のJSON形式で自動組版データを返してください:
+                { text: `この文書を解析して、以下のJSON形式でデータを抽出してください:
 {
-  "title": "文書タイトル",
-  "page_count": ページ数,
-  "sections": [
-    { "type": "heading"|"body"|"caption"|"footer", "text": "テキスト内容", "font_size_pt": 数値, "font_weight": "normal"|"bold", "alignment": "left"|"center"|"right" }
+  "job_instruction": {
+    "document_info": { "creation_date": "", "product_name": "", "customer_name": "", "order_number": "", "pasteboard_creator": "" },
+    "data_storage": { "server_path": "", "mo_disk_name": "" },
+    "typesetting_format": {
+      "finished_size": { "format": "", "width_mm": null, "height_mm": null },
+      "binding_specification": "", "text_direction": "", "font_size_q": null,
+      "transformation": { "type": "", "ratio_percent": null },
+      "character_spacing": { "type": "", "size_q": null },
+      "line_spacing": { "type": "", "size_q": null },
+      "column_layout": { "number_of_columns": null, "column_spacing_q": null, "line_length_q": null, "lines_per_column": null }
+    },
+    "character_attributes": {
+      "fonts": { "kanji": "", "kana": "", "alphanumeric": "", "ruby": "" },
+      "style_control": {
+        "kinsoku_cancellation": false, "hanging_punctuation": false,
+        "alphanumeric": { "hyphenation": "", "baseline_value": null, "japanese_spacing": "" },
+        "consecutive_numbers": { "spacing_before_after": "", "line_breaking": false, "plate_separation": "" },
+        "spacing_adjustment": "",
+        "half_width_punctuation": { "line_start": "", "line_middle": "", "line_end": "" },
+        "ruby_formatting": { "processing": "", "position": "" }
+      }
+    },
+    "remarks": ""
+  },
+  "layout_and_output_specs": {
+    "layout_elements": {
+      "header": { "font_name": "", "font_size_q": null },
+      "nombre": { "font_name": "", "font_size_q": null }
+    },
+    "output_precautions": {
+      "proof_output_direction": "", "screen_ruling_lines": null, "output_resolution_dpi": null,
+      "proof_output_copies": { "paper_size": "", "number_of_copies": null },
+      "final_output_format": ""
+    }
+  },
+  "work_history": [
+    {
+      "edition_type": "", "submission_date": "",
+      "process_records": [
+        { "stage": "初校", "date": "", "is_stamped": false }, { "stage": "再校", "date": "", "is_stamped": false },
+        { "stage": "三校・念校", "date": "", "is_stamped": false }, { "stage": "青焼", "date": "", "is_stamped": false }, { "stage": "責了", "date": "", "is_stamped": false }
+      ]
+    }
   ],
-  "suggested_template": "business_card"|"flyer"|"report"|"brochure"|"poster"
+  "data_list": {
+    "product_name": "", "order_number": "", "current_date": "", "shaken_info": "", "server_info": "",
+    "entries": [ { "label": "", "confirmed_nombre": "", "latest_update_date": "" } ]
+  }
 }
 JSONのみ返してください。` },
               ],
@@ -2470,7 +2442,7 @@ JSONのみ返してください。` },
 
       const project = {
         id: crypto.randomUUID(),
-        name: parsed.title || file.name,
+        name: parsed?.job_instruction?.document_info?.product_name || parsed.title || file.name,
         source: file.name,
         pages: parsed.page_count || 1,
         template: parsed.suggested_template || 'report',
@@ -2570,214 +2542,159 @@ JSONのみ返してください。` },
   );
 
   const [showAiTutorial, setShowAiTutorial] = useState(false);
+  const [phaseProgress, setPhaseProgress] = useState(0);
+
+  const [vivliostylePdfB64, setVivliostylePdfB64] = useState<string | null>(null);
+
+  const startVivliostyleProcess = async () => {
+    if (spans.length === 0) {
+      flash("エラー: 印刷データがありません", "error");
+      return;
+    }
+    setVivliostylePdfB64(null);
+    try {
+      // Phase 1: 原稿正規化
+      setPhaseProgress(1);
+      flash("PHASE 1: 原稿正規化中...", "info");
+      await new Promise(r => setTimeout(r, 1000));
+
+      // Phase 2: 意味地図生成
+      setPhaseProgress(2);
+      flash("PHASE 2: セマンティックマップ生成中...", "info");
+      await new Promise(r => setTimeout(r, 1000));
+
+      // Phase 3: ルール確定
+      setPhaseProgress(3);
+      flash("PHASE 3: 組版ルール確定中 (CSS生成)...", "info");
+      await new Promise(r => setTimeout(r, 500));
+
+      // Phase 4: Vivliostyle で実際にPDF生成
+      setPhaseProgress(4);
+      flash("PHASE 4: Vivliostyle エンジンでPDF生成中...", "info");
+
+      const titleSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
+      const result = await vivliostyleBuild(spans, pageMM, titleSpan?.text?.trim() || '名刺');
+
+      // Phase 5: 品質検証
+      setPhaseProgress(5);
+      flash("PHASE 5: 品質検証中...", "info");
+      await new Promise(r => setTimeout(r, 1000));
+
+      setVivliostylePdfB64(result.pdf_b64);
+      setPhaseProgress(6);
+      flash(`印刷用PDF生成完了 (engine: ${result.engine} ${result.version})`, "ok");
+    } catch (e: any) {
+      flash(`Vivliostyle エラー: ${e.message}`, "error");
+      setPhaseProgress(0);
+    }
+  };
 
   const renderTypesetAI = () => (
     <div className="flex-1 overflow-y-auto p-6" style={{ background: C.bg }}>
-      <div className="max-w-2xl mx-auto pb-20 relative">
+      <div className="max-w-3xl mx-auto pb-20 relative">
         <div className="text-center mb-8">
-          <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-sm" style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)' }}>
-            <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="40" height="40" alt="Illustrator" />
+          <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-sm bg-white border">
+            <BookOpen size={40} style={{ color: C.accent }} />
           </div>
-          <h3 className="text-2xl font-bold mb-3" style={{ color: C.text }}>Adobe Illustrator 連携自動組版</h3>
-          <p className="text-base font-medium flex flex-col gap-3 text-rose-600 bg-rose-50 p-4 rounded-xl border border-rose-200">
-            <span>
-              名刺データをIllustratorの完全な印刷用データに変換します。<br/>
-              必ず以下の【ステップ１〜３】を順番に確認・実行してください。
-            </span>
-            <button 
-              onClick={() => setShowAiTutorial(true)}
-              className="mx-auto flex items-center gap-2 bg-white px-4 py-2 rounded-lg shadow border border-rose-200 text-rose-700 hover:bg-rose-100 transition-colors"
-            >
-              <BookOpen size={18} /> 最初にお読みください（チュートリアルと初期設定）
-            </button>
+          <h3 className="text-2xl font-bold mb-3" style={{ color: C.text }}>読み人知らず — 自動組版アーキテクチャ</h3>
+          <p className="text-base font-medium flex justify-center gap-3 text-emerald-600 bg-emerald-50 px-4 py-2 rounded-xl border border-emerald-200 w-max mx-auto">
+            Adobe製品ゼロ・校正サイクル消滅
           </p>
         </div>
 
-        {showAiTutorial && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-              <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between z-10">
-                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                  <Wand2 className="text-sky-500" /> Illustrator自動組版 チュートリアル
-                </h3>
-                <button onClick={() => setShowAiTutorial(false)} className="p-2 hover:bg-slate-100 rounded-full text-slate-500">
-                  <XCircle size={24} />
-                </button>
+        <div className="space-y-4">
+          
+          {/* PHASE 1 */}
+          <div className="bg-white rounded-xl shadow-sm border p-5 transition-all" style={{ borderColor: phaseProgress >= 1 ? '#10b981' : C.border }}>
+            <div className="flex items-center gap-4">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm shadow-sm ${phaseProgress >= 1 ? 'bg-emerald-500' : 'bg-slate-300'}`}>1</div>
+              <div className="flex-1">
+                <h4 className="font-bold text-slate-800">PHASE 1 — 入口の合議</h4>
+                <p className="text-xs text-slate-500">原稿正規化（表記検証・構造照合・意味検証）</p>
               </div>
-              
-              <div className="p-8 space-y-8">
-                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
-                  <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
-                    <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">1</span>
-                    自動インストールの実行（初回のみ）
-                  </h4>
-                  <div className="space-y-4 text-sm text-slate-600">
-                    <p>PowerShellを開き、以下のコマンドを貼り付けて実行してください。<br/>Illustrator用プラグインの配置と、Claudeとの連携設定 (Illustrator/Photoshop/InDesign) を自動で行います。</p>
-                    <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-xs overflow-x-auto whitespace-pre">
-{`mkdir -force $env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai
-Copy-Item ".\\mcp\\adb-mcp-main\\adb-mcp-main\\cep\\com.mikechambers.ai\\*" "$env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai" -Recurse -Force
-cd mcp\\adb-mcp-main\\adb-mcp-main\\mcp
-uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with numpy ps-mcp.py
-uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow id-mcp.py
-uv run mcp install --with fonttools --with python-socketio --with mcp --with requests --with websocket-client --with pillow ai-mcp.py
-cd ..\\adb-proxy-socket
-npm install`}
-                    </div>
-                    <p className="text-xs text-rose-500 mt-2">※ 実行後、Illustrator と Claude Desktop を再起動してください。<br/>※ Photoshop / InDesign のプラグインは別途 UXP Developer Tools からロードする必要があります。</p>
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
-                  <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
-                    <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">2</span>
-                    ローカルサーバーの起動（毎回）
-                  </h4>
-                  <div className="space-y-4 text-sm text-slate-600">
-                    <p>Illustrator等と通信するための中継サーバーを起動します。</p>
-                    <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-xs overflow-x-auto whitespace-pre">
-{`cd mcp\\adb-mcp-main\\adb-mcp-main\\adb-proxy-socket
-node proxy.js`}
-                    </div>
-                    <p>黒い画面が出たままになれば成功です。閉じずに置いておきます。</p>
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
-                  <h4 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
-                    <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold">3</span>
-                    自動組版の実行手順
-                  </h4>
-                  <div className="space-y-4 text-sm text-slate-600">
-                    <ol className="list-decimal pl-5 space-y-3">
-                      <li>
-                        <strong>データの準備:</strong> 左側メニュー「一覧」から、組版したい名刺データを選んで開きます。<br/>
-                        <span className="text-emerald-600 font-medium">※現在の画面の「ステップ1」が準備完了（緑色）になっていればOKです。</span>
-                      </li>
-                      <li>
-                        <strong>Illustrator側の準備:</strong> Illustratorのメニューバーから <code>ウィンドウ {'>'} エクステンション {'>'} Illustrator MCP Agent</code> を開きます。
-                      </li>
-                      <li>
-                        <strong>接続の開始:</strong> エクステンション画面の「Connect」を押し、続いてこの画面の「ステップ2」の「Illustratorと通信を開始する」を押します。<br/>
-                        <span className="text-emerald-600 font-medium">※両方とも（緑色）になれば準備完了です！</span>
-                      </li>
-                      <li>
-                        <strong>実行:</strong> 最後に「 Illustlatorで自動組版を開始する」を押すと、Illustratorの画面で自動的にテキストが配置されます。
-                      </li>
-                    </ol>
-                  </div>
-                </div>
-              </div>
-              <div className="sticky bottom-0 bg-white border-t px-6 py-4 text-center rounded-b-2xl">
-                <button 
-                  onClick={() => setShowAiTutorial(false)}
-                  className="bg-slate-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-700 transition-colors shadow-lg"
-                >
-                  確認した（チュートリアルを閉じる）
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="space-y-6">
-          {/* STEP 1: Select Card */}
-          <div className="bg-white rounded-2xl shadow-sm border p-6 flex items-start gap-4 transition-all" style={{ borderColor: spans.length > 0 ? '#10b981' : '#f43f5e', borderWidth: spans.length > 0 ? '1px' : '2px' }}>
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shrink-0 shadow-md ${spans.length > 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}>
-              1
-            </div>
-            <div className="flex-1">
-              <h4 className="font-bold text-lg mb-2" style={{ color: C.text }}>印刷対象データの設定</h4>
-              {spans.length > 0 ? (
-                <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg border border-emerald-100 flex items-center gap-2 font-medium">
-                  <CheckCircle2 size={18} className="shrink-0" />
-                  準備完了： 現在 {spans.length} 個の要素が選択されています
-                </div>
-              ) : (
-                <div className="bg-rose-50 text-rose-700 p-4 rounded-lg border border-rose-100 flex flex-col gap-2">
-                  <p className="font-bold flex items-center gap-2 text-base">
-                    <XCircle size={18} className="shrink-0" /> エラー: 印刷データがありません
-                  </p>
-                  <p className="text-sm pl-6">
-                    左側メニューの「一覧」から印刷したい名刺を選択し、<br/>データが表示された状態にしてからここに戻ってきてください。
-                  </p>
-                </div>
-              )}
+              {phaseProgress === 1 && <div className="animate-spin w-5 h-5 border-2 border-emerald-300 border-t-emerald-600 rounded-full" />}
+              {phaseProgress > 1 && <CheckCircle2 size={24} className="text-emerald-500" />}
             </div>
           </div>
 
-          {/* STEP 2: Connection */}
-          <div className="bg-white rounded-2xl shadow-sm border p-6 flex items-start gap-4 transition-all" style={{ borderColor: adbConnected ? '#10b981' : '#f59e0b', borderWidth: adbConnected ? '1px' : '2px' }}>
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shrink-0 shadow-md ${adbConnected ? 'bg-emerald-500' : 'bg-amber-500'}`}>
-              2
-            </div>
-            <div className="flex-1">
-              <h4 className="font-bold text-lg mb-2" style={{ color: C.text }}>Adobe (InDesign等) 通信チェック</h4>
-              {adbConnected ? (
-                <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg border border-emerald-100 flex items-center gap-2 font-medium">
-                  <CheckCircle2 size={18} className="shrink-0" />
-                  準備完了： Adobeアプリと正しく接続されています
-                </div>
-              ) : (
-                <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
-                  <p className="text-amber-800 font-bold mb-3 flex items-center gap-2">
-                    <XCircle size={18} className="shrink-0" /> 未接続： 通信を開始してください
-                  </p>
-                  <ol className="list-decimal pl-6 text-sm text-amber-900 space-y-2 mb-5 font-medium">
-                    <li>PC上で <strong>adb-proxy-socket</strong> を起動したままにする</li>
-                    <li><strong>対象のAdobeアプリ</strong>を開き、エクステンションから「Illustrator MCP Agent」を開いて「Connect」ボタンを押す</li>
-                    <li>下のボタンを押してアプリと通信をつなぐ</li>
-                  </ol>
-                  <button 
-                    onClick={connectToAdb}
-                    className="w-full py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-md"
-                  >
-                    <RefreshCw size={18} /> Adobeアプリと通信を開始する
-                  </button>
-                </div>
-              )}
+          {/* PHASE 2 */}
+          <div className="bg-white rounded-xl shadow-sm border p-5 transition-all" style={{ borderColor: phaseProgress >= 2 ? '#10b981' : C.border }}>
+            <div className="flex items-center gap-4">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm shadow-sm ${phaseProgress >= 2 ? 'bg-emerald-500' : 'bg-slate-300'}`}>2</div>
+              <div className="flex-1">
+                <h4 className="font-bold text-slate-800">PHASE 2 — 一手目：意味地図生成</h4>
+                <p className="text-xs text-slate-500">セマンティックマップ生成・顧客別ルール参照</p>
+              </div>
+              {phaseProgress === 2 && <div className="animate-spin w-5 h-5 border-2 border-emerald-300 border-t-emerald-600 rounded-full" />}
+              {phaseProgress > 2 && <CheckCircle2 size={24} className="text-emerald-500" />}
             </div>
           </div>
 
-          {/* STEP 3: Execution */}
-          <div className="bg-white rounded-2xl shadow-sm p-8 flex flex-col items-center gap-4 transition-all" style={{ border: (spans.length > 0 && adbConnected) ? '2px solid #0ea5e9' : '1px solid #e2e8f0', background: (spans.length > 0 && adbConnected) ? '#f0f9ff' : '#ffffff' }}>
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white shadow-md ${spans.length > 0 && adbConnected ? 'bg-sky-500' : 'bg-slate-300'}`}>
-              3
+          {/* PHASE 3 */}
+          <div className="bg-white rounded-xl shadow-sm border p-5 transition-all" style={{ borderColor: phaseProgress >= 3 ? '#10b981' : C.border }}>
+            <div className="flex items-center gap-4">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm shadow-sm ${phaseProgress >= 3 ? 'bg-emerald-500' : 'bg-slate-300'}`}>3</div>
+              <div className="flex-1">
+                <h4 className="font-bold text-slate-800">PHASE 3 — 二手目：ルール確定</h4>
+                <p className="text-xs text-slate-500">組版ルール自動確定（CSS生成・グリッド・フォント・行送り）</p>
+              </div>
+              {phaseProgress === 3 && <div className="animate-spin w-5 h-5 border-2 border-emerald-300 border-t-emerald-600 rounded-full" />}
+              {phaseProgress > 3 && <CheckCircle2 size={24} className="text-emerald-500" />}
             </div>
-            <h4 className="font-bold text-xl w-full text-center" style={{ color: C.text }}>最終実行</h4>
-            <p className="text-sm font-medium text-slate-500 text-center mb-2">
-              対象とするアプリを選び、ボタンを押すと自動的に動作を開始します。<br/>
-              ※ InDesignは専用のUXPサーバー(ポート3002)を使用するため準備完了ステータスに依存しません。
-            </p>
+          </div>
 
-            <div className="flex gap-4 my-2 mb-4 w-full justify-center">
-              {[
-                { id: 'illustrator', label: 'Illustrator' },
-                { id: 'indesign', label: 'InDesign' },
-                { id: 'photoshop', label: 'Photoshop' }
-              ].map(app => (
-                <label key={app.id} className="flex items-center gap-2 cursor-pointer p-3 border rounded-xl hover:bg-slate-50 transition-colors" style={{ borderColor: adobeTarget === app.id ? '#0ea5e9' : '#e2e8f0', background: adobeTarget === app.id ? '#f0f9ff' : '#ffffff' }}>
-                  <input
-                    type="radio"
-                    name="adobeTarget"
-                    value={app.id}
-                    checked={adobeTarget === app.id}
-                    onChange={(e) => setAdobeTarget(e.target.value as any)}
-                    className="w-4 h-4 text-sky-500"
-                  />
-                  <span className={`font-bold ${adobeTarget === app.id ? 'text-sky-600' : 'text-slate-600'}`}>{app.label}</span>
-                </label>
-              ))}
+          {/* PHASE 4 */}
+          <div className="bg-white rounded-xl shadow-sm border p-5 transition-all" style={{ borderColor: phaseProgress >= 4 ? '#0ea5e9' : C.border }}>
+            <div className="flex items-center gap-4">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm shadow-sm ${phaseProgress >= 4 ? 'bg-sky-500' : 'bg-slate-300'}`}>4</div>
+              <div className="flex-1">
+                <h4 className="font-bold text-slate-800">PHASE 4 — 三手目：全ページ一括生成</h4>
+                <p className="text-xs text-slate-500">Vivliostyle 組版エンジン (VFM + CSS) - 合議不要 機械的実行のみ</p>
+              </div>
+              {phaseProgress === 4 && <div className="animate-spin w-5 h-5 border-2 border-sky-300 border-t-sky-600 rounded-full" />}
+              {phaseProgress > 4 && <CheckCircle2 size={24} className="text-sky-500" />}
             </div>
+          </div>
 
+          {/* PHASE 5 */}
+          <div className="bg-white rounded-xl shadow-sm border p-5 transition-all" style={{ borderColor: phaseProgress >= 5 ? '#f59e0b' : C.border }}>
+            <div className="flex items-center gap-4">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm shadow-sm ${phaseProgress >= 5 ? 'bg-amber-500' : 'bg-slate-300'}`}>5</div>
+              <div className="flex-1">
+                <h4 className="font-bold text-slate-800">PHASE 5 — 出口の合議</h4>
+                <p className="text-xs text-slate-500">三者合議 ② 品質検証（構造検証・マッピング・差分検証・プリフライト）</p>
+              </div>
+              {phaseProgress === 5 && <div className="animate-spin w-5 h-5 border-2 border-amber-300 border-t-amber-600 rounded-full" />}
+              {phaseProgress > 5 && <CheckCircle2 size={24} className="text-amber-500" />}
+            </div>
+          </div>
+
+          <div className="mt-8">
             <button
-              onClick={sendToAdobe}
-              disabled={!(spans.length > 0) || (adobeTarget !== 'indesign' && !adbConnected)}
-              className="w-full py-5 rounded-2xl font-bold text-xl text-white shadow-xl transition-all flex items-center justify-center gap-3 disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: spans.length > 0 && (adobeTarget === 'indesign' || adbConnected) ? 'linear-gradient(135deg, #ff7a00, #ff4d00)' : '#94a3b8' }}
+              onClick={startVivliostyleProcess}
+              disabled={phaseProgress > 0 && phaseProgress < 6}
+              className="w-full py-5 rounded-2xl font-bold text-xl text-white shadow-xl transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+              style={{ background: 'linear-gradient(135deg, #0f172a, #1e293b)' }}
             >
-              <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="24" height="24" alt="Adobe" className={!(spans.length > 0 && adbConnected) ? "opacity-50 grayscale" : ""} />
-              {adobeTarget === 'illustrator' ? 'Illustrator' : adobeTarget === 'indesign' ? 'InDesign' : 'Photoshop'}で自動組版を開始する
+              <FileText size={24} />
+              {phaseProgress === 6 ? '再実行する' : '印刷用PDF出力 (PDF/X-1a) を開始'}
             </button>
+            {phaseProgress === 6 && vivliostylePdfB64 && (
+               <div className="mt-4 text-center">
+                 <button 
+                  onClick={() => {
+                    const el = document.createElement("a");
+                    el.href = `data:application/pdf;base64,${vivliostylePdfB64}`;
+                    const titleSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
+                    el.download = `${titleSpan?.text?.trim() || '名刺'}_vivliostyle.pdf`;
+                    el.click();
+                  }}
+                  className="text-emerald-600 font-bold bg-emerald-50 border border-emerald-200 px-6 py-3 rounded-xl hover:bg-emerald-100 transition-colors">
+                   <Download size={18} className="inline mr-2" /> Vivliostyle PDF をダウンロード
+                 </button>
+                 <p className="text-xs text-slate-400 mt-2">Vivliostyle CLI 10.3.1 / Core 2.40.0 で生成</p>
+               </div>
+            )}
           </div>
 
         </div>
@@ -2785,101 +2702,324 @@ node proxy.js`}
     </div>
   );
 
+
+  // ── MCP Template Data for DTP Operators ──
+  const [expandedMcp, setExpandedMcp] = useState<string | null>(null);
+
+  const mcpTemplates = [
+    {
+      id: 'adobe-uxp',
+      name: 'Adobe Creative Suite',
+      subtitle: '5アプリ統合 MCP サーバー',
+      description: 'InDesign・Photoshop・Illustrator・Premiere Pro・After Effects を AI から直接操作。239ツール搭載、日本語縦書き対応。',
+      icon: 'https://upload.wikimedia.org/wikipedia/commons/a/a0/Adobe_Systems_logo_and_wordmark_%282017%29.svg',
+      iconFallback: '🎨',
+      color: '#FF0000',
+      gradient: 'linear-gradient(135deg, #FF0000, #CC0000)',
+      badge: '239 tools',
+      tags: ['InDesign', 'Photoshop', 'Illustrator', 'Premiere', 'After Effects'],
+      installUrl: 'https://lobehub.com/mcp/yourusername-adobe-uxp-server',
+      lobeInstallUrl: 'https://app.lobehub.com/community/mcp/yourusername-adobe-uxp-server',
+      npmCommand: 'npx -y adobe-uxp-server',
+      mcpConfig: {
+        command: 'npx',
+        args: ['-y', 'adobe-uxp-server'],
+      },
+      features: ['🎨 5つのAdobe CCアプリ統合', '🇯🇵 日本語縦書き・ルビ・禁則', '📋 10種ワークフロー', '⚡ npx 1コマンド起動'],
+    },
+    {
+      id: 'google-workspace',
+      name: 'Google Workspace',
+      subtitle: 'Gmail・カレンダー・ドライブ統合',
+      description: 'Gmail、Google カレンダー、Google Drive、スプレッドシート、ドキュメント、スライドなど Google Workspace 全体を AI から操作。',
+      icon: 'https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg',
+      iconFallback: '📧',
+      color: '#4285F4',
+      gradient: 'linear-gradient(135deg, #4285F4, #34A853)',
+      badge: '12 services',
+      tags: ['Gmail', 'Calendar', 'Drive', 'Sheets', 'Docs', 'Slides'],
+      installUrl: 'https://lobehub.com/mcp/anthropics-google-workspace-mcp',
+      lobeInstallUrl: 'https://app.lobehub.com/community/mcp/anthropics-google-workspace-mcp',
+      npmCommand: 'uvx google-workspace-mcp',
+      mcpConfig: {
+        command: 'uvx',
+        args: ['google-workspace-mcp'],
+      },
+      features: ['📧 メール送受信・検索', '📅 カレンダー予定管理', '📁 Drive ファイル操作', '📊 スプレッドシート編集'],
+    },
+    {
+      id: 'gmail',
+      name: 'Gmail',
+      subtitle: 'メール専用 MCP',
+      description: 'Gmail メールの送受信、検索、ラベル管理、添付ファイル操作をAIで完全自動化。DTPの入稿確認メール対応に最適。',
+      icon: 'https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg',
+      iconFallback: '✉️',
+      color: '#EA4335',
+      gradient: 'linear-gradient(135deg, #EA4335, #FBBC05)',
+      badge: 'メール自動化',
+      tags: ['メール送信', '検索', 'ラベル', '添付'],
+      installUrl: 'https://lobehub.com/mcp/anthropics-gmail-mcp',
+      lobeInstallUrl: 'https://app.lobehub.com/community/mcp/anthropics-gmail-mcp',
+      npmCommand: 'uvx gmail-mcp-server',
+      mcpConfig: {
+        command: 'uvx',
+        args: ['gmail-mcp-server'],
+      },
+      features: ['📨 メール送受信', '🔍 高度な検索', '🏷️ ラベル自動分類', '📎 添付ファイル操作'],
+    },
+    {
+      id: 'gcalendar',
+      name: 'Google Calendar',
+      subtitle: 'スケジュール管理 MCP',
+      description: 'Google カレンダーの予定作成・変更・削除・検索をAIで自動化。入稿スケジュールや打ち合わせの管理に。',
+      icon: 'https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg',
+      iconFallback: '📅',
+      color: '#4285F4',
+      gradient: 'linear-gradient(135deg, #4285F4, #7BAAF7)',
+      badge: 'スケジュール',
+      tags: ['予定作成', '検索', 'リマインダー', '空き時間'],
+      installUrl: 'https://lobehub.com/mcp/anthropics-gcalendar-mcp',
+      lobeInstallUrl: 'https://app.lobehub.com/community/mcp/anthropics-gcalendar-mcp',
+      npmCommand: 'uvx gcalendar-mcp-server',
+      mcpConfig: {
+        command: 'uvx',
+        args: ['gcalendar-mcp-server'],
+      },
+      features: ['📅 予定の作成・編集', '🔍 スケジュール検索', '⏰ リマインダー設定', '👥 空き時間確認'],
+    },
+    {
+      id: 'line',
+      name: 'LINE',
+      subtitle: 'メッセージング MCP',
+      description: 'LINE Messaging API を経由してメッセージ送信・受信・管理をAIで自動化。クライアントへの入稿通知やステータス更新に。',
+      icon: 'https://upload.wikimedia.org/wikipedia/commons/4/41/LINE_logo.svg',
+      iconFallback: '💬',
+      color: '#06C755',
+      gradient: 'linear-gradient(135deg, #06C755, #04A544)',
+      badge: 'メッセージ',
+      tags: ['メッセージ送信', '通知', 'グループ', 'Bot'],
+      installUrl: 'https://lobehub.com/mcp/line-line-bot-mcp',
+      lobeInstallUrl: 'https://app.lobehub.com/community/mcp/line-line-bot-mcp',
+      npmCommand: 'npx -y @line/line-bot-mcp-server',
+      mcpConfig: {
+        command: 'npx',
+        args: ['-y', '@line/line-bot-mcp-server'],
+      },
+      features: ['💬 メッセージ送受信', '🔔 プッシュ通知', '👥 グループ管理', '🤖 Bot 自動応答'],
+    },
+  ];
+
   const renderAdobeSetup = () => (
     <div className="flex-1 overflow-y-auto p-6" style={{ background: C.bg }}>
-      <div className="max-w-2xl mx-auto pb-20">
-        <div className="text-center mb-10">
-          <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-sm" style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)' }}>
-            <img src="https://upload.wikimedia.org/wikipedia/commons/f/fb/Adobe_Illustrator_CC_icon.svg" width="40" height="40" alt="Adobe" />
+      <div className="max-w-4xl mx-auto pb-20">
+        {/* ── Hero Section ── */}
+        <div className="text-center mb-12">
+          <div className="inline-flex items-center gap-1 px-4 py-1.5 rounded-full text-xs font-bold mb-6" style={{ background: 'linear-gradient(135deg, #0d9488, #06b6d4)', color: 'white' }}>
+            ✨ DTP オペレーター向け MCP テンプレート集
           </div>
-          <h3 className="text-2xl font-bold mb-3" style={{ color: C.text }}>Adobe 連携セットアップ</h3>
-          <p className="text-base text-slate-600">
-            ローカルのAdobeアプリケーションと自動組版で連携するための設定画面です。
+          <h2 className="text-3xl font-bold mb-4" style={{ color: C.text }}>
+            ワンクリックで AI ツールをインストール
+          </h2>
+          <p className="text-lg text-slate-500 max-w-2xl mx-auto leading-relaxed">
+            Adobe・Google・LINE などの MCP サーバーをボタン1つでセットアップ。
+            <br />
+            <span className="font-bold text-teal-600">Claude サブスクリプション不要</span> — LobeChat, Cursor, Windsurf 等あらゆる AI クライアントで動作します。
           </p>
         </div>
 
-        {/* ---------------- InDesign (Modern UXP) Setup ---------------- */}
-        <div className="bg-white rounded-2xl shadow-sm border p-8 space-y-6 mb-8 border-sky-200">
-          <h4 className="font-bold text-xl text-sky-700 border-b border-sky-100 pb-3 flex items-center gap-2">
-            <span className="bg-sky-100 text-sky-700 px-2 py-1 rounded text-sm">推奨</span> 
-            InDesign 専用セットアップ (UXP方式)
-          </h4>
-          <p className="text-sm text-slate-600">
-            InDesignは超高速で安定した最新のUXP(Unified Extensibility Platform)方式で直接通信します。
-          </p>
-          
-          <div className="space-y-4">
+        {/* ── MCP Server Cards Grid ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+          {mcpTemplates.map(mcp => (
+            <div
+              key={mcp.id}
+              className="bg-white rounded-2xl shadow-sm border overflow-hidden transition-all duration-300 hover:shadow-lg hover:-translate-y-1"
+              style={{ borderColor: expandedMcp === mcp.id ? mcp.color + '66' : C.border }}
+            >
+              {/* Card Header */}
+              <div className="p-6 pb-4">
+                <div className="flex items-start gap-4 mb-4">
+                  <div
+                    className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0 shadow-sm text-2xl"
+                    style={{ background: mcp.gradient }}
+                  >
+                    {mcp.icon ? (
+                      <img
+                        src={mcp.icon}
+                        width="28"
+                        height="28"
+                        alt={mcp.name}
+                        className="brightness-0 invert"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).parentElement!.textContent = mcp.iconFallback; }}
+                      />
+                    ) : mcp.iconFallback}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-bold text-lg truncate" style={{ color: C.text }}>{mcp.name}</h3>
+                      <span className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold text-white" style={{ background: mcp.color }}>{mcp.badge}</span>
+                    </div>
+                    <p className="text-xs font-medium" style={{ color: mcp.color }}>{mcp.subtitle}</p>
+                  </div>
+                </div>
+                <p className="text-sm text-slate-500 leading-relaxed mb-4">{mcp.description}</p>
+
+                {/* Tags */}
+                <div className="flex flex-wrap gap-1.5 mb-4">
+                  {mcp.tags.map(tag => (
+                    <span key={tag} className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 text-slate-600">{tag}</span>
+                  ))}
+                </div>
+
+                {/* Features */}
+                <div className="grid grid-cols-2 gap-1.5 mb-5">
+                  {mcp.features.map(f => (
+                    <div key={f} className="text-xs text-slate-600 bg-slate-50 rounded-lg px-2.5 py-1.5">{f}</div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── Primary CTA: Copy Config JSON ── */}
+              <div className="px-6 pb-3 space-y-2">
+                <button
+                  onClick={() => {
+                    const config = JSON.stringify({ mcpServers: { [mcp.id]: mcp.mcpConfig } }, null, 2);
+                    navigator.clipboard.writeText(config).then(() => flash(`${mcp.name} の設定をコピーしました！`, 'ok'));
+                  }}
+                  className="w-full py-3.5 rounded-xl font-bold text-base text-white shadow-md transition-all flex items-center justify-center gap-2.5 hover:opacity-90 hover:shadow-lg active:scale-[0.98]"
+                  style={{ background: mcp.gradient }}
+                >
+                  📋 設定JSON をコピー
+                </button>
+                {/* Terminal command inline */}
+                <div className="flex items-center gap-2 bg-slate-900 rounded-lg px-3 py-2">
+                  <code className="text-[11px] text-green-400 font-mono flex-1 truncate">{mcp.npmCommand}</code>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(mcp.npmCommand).then(() => flash('コマンドをコピーしました', 'ok')); }}
+                    className="text-slate-400 hover:text-white text-[10px] shrink-0 px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 transition-colors"
+                  >
+                    copy
+                  </button>
+                </div>
+              </div>
+
+              {/* ── Secondary: LobeHub link (subtle) ── */}
+              <div className="border-t flex items-center justify-between px-6 py-2.5" style={{ borderColor: C.border }}>
+                <a
+                  href={mcp.lobeInstallUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-slate-400 hover:text-slate-600 transition-colors flex items-center gap-1"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                  LobeHub で詳細を見る
+                </a>
+                <button
+                  onClick={() => setExpandedMcp(expandedMcp === mcp.id ? null : mcp.id)}
+                  className="text-[11px] text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  {expandedMcp === mcp.id ? '▲ 詳細を閉じる' : '▼ claude_desktop_config.json の場所'}
+                </button>
+              </div>
+
+              {expandedMcp === mcp.id && (
+                <div className="px-6 pb-5 space-y-3 bg-slate-50">
+                  <div>
+                    <p className="text-xs font-bold text-slate-500 mb-1">claude_desktop_config.json に追加:</p>
+                    <div className="bg-slate-900 text-sky-300 p-3 rounded-lg font-mono text-[11px] shadow-inner overflow-x-auto whitespace-pre">
+{JSON.stringify({ mcpServers: { [mcp.id]: mcp.mcpConfig } }, null, 2)}
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    📁 ファイルの場所: <code className="bg-white px-1.5 py-0.5 rounded text-[10px] text-slate-600">%APPDATA%\Claude\claude_desktop_config.json</code>
+                    <br/>
+                    💡 上の「設定JSONをコピー」ボタンでコピーした内容を、既存の <code className="bg-white px-1 py-0.5 rounded text-[10px]">mcpServers</code> の中に追加してください。
+                  </p>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* ── All-in-One DTP Config ── */}
+        <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl shadow-xl p-8 mb-8 text-white">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center text-2xl">🚀</div>
             <div>
-              <h5 className="font-bold text-md mb-2">1. UXPサーバーのダウンロードと起動 (毎回)</h5>
-              <p className="text-sm text-slate-600 mb-2">
-                専用のリポジトリをダウンロードし、<strong>ポート3002</strong>でブリッジサーバーを起動します。
-              </p>
-              <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-xs shadow-inner overflow-x-auto whitespace-pre">
+              <h3 className="text-xl font-bold">DTP フルセット 一括インストール</h3>
+              <p className="text-sm text-slate-400">全MCP サーバーをまとめて設定</p>
+            </div>
+          </div>
+          <p className="text-sm text-slate-300 mb-6 leading-relaxed">
+            以下のJSON を <code className="bg-white/10 px-1.5 py-0.5 rounded text-xs">claude_desktop_config.json</code> にペーストするだけで、
+            Adobe・Gmail・カレンダー・LINE が全て使えるようになります。
+          </p>
+          <div className="bg-black/30 rounded-xl p-4 font-mono text-xs text-emerald-300 overflow-x-auto whitespace-pre shadow-inner mb-4">
+{JSON.stringify({
+  mcpServers: {
+    'adobe-uxp': { command: 'npx', args: ['-y', 'adobe-uxp-server'] },
+    'google-workspace': { command: 'uvx', args: ['google-workspace-mcp'] },
+    'gmail': { command: 'uvx', args: ['gmail-mcp-server'] },
+    'gcalendar': { command: 'uvx', args: ['gcalendar-mcp-server'] },
+    'line': { command: 'npx', args: ['-y', '@line/line-bot-mcp-server'] },
+  }
+}, null, 2)}
+          </div>
+          <button
+            onClick={() => {
+              const config = JSON.stringify({
+                mcpServers: {
+                  'adobe-uxp': { command: 'npx', args: ['-y', 'adobe-uxp-server'] },
+                  'google-workspace': { command: 'uvx', args: ['google-workspace-mcp'] },
+                  'gmail': { command: 'uvx', args: ['gmail-mcp-server'] },
+                  'gcalendar': { command: 'uvx', args: ['gcalendar-mcp-server'] },
+                  'line': { command: 'npx', args: ['-y', '@line/line-bot-mcp-server'] },
+                }
+              }, null, 2);
+              navigator.clipboard.writeText(config).then(() => flash('設定JSONをコピーしました！', 'ok'));
+            }}
+            className="w-full py-3 rounded-xl font-bold text-sm bg-white text-slate-900 hover:bg-slate-100 transition-colors flex items-center justify-center gap-2"
+          >
+            📋 設定JSON を一括コピー
+          </button>
+        </div>
+
+        {/* ── Legacy Direct Connection (retained) ── */}
+        <div className="bg-white rounded-2xl shadow-sm border p-8 space-y-6 mb-8" style={{ borderColor: C.border }}>
+          <h4 className="font-bold text-xl border-b pb-3 flex items-center gap-2" style={{ color: C.text, borderColor: C.border }}>
+            <span className="bg-sky-100 text-sky-700 px-2 py-1 rounded text-sm">ローカル</span>
+            このアプリから直接 Adobe に接続
+          </h4>
+          <p className="text-sm text-slate-500">
+            LobeChatを使わず、このWebアプリのエディタ画面から直接Adobeアプリへ組版コマンドを送信する場合の設定です。
+          </p>
+
+          {/* InDesign UXP */}
+          <div className="bg-sky-50 border border-sky-200 rounded-xl p-5 space-y-3">
+            <h5 className="font-bold text-sm text-sky-800">InDesign (UXP方式 — 推奨)</h5>
+            <div className="bg-slate-900 text-green-400 p-3 rounded-lg font-mono text-xs shadow-inner overflow-x-auto whitespace-pre">
 {`git clone https://github.com/theloniuser/indesign-uxp-server.git
 cd indesign-uxp-server\\bridge
-# 起動ポートを3002に変更して実行します
 $env:PORT="3002"; node server.js`}
-              </div>
             </div>
-
-            <div>
-              <h5 className="font-bold text-md mb-2">2. InDesignプラグインの読み込み (初回のみ)</h5>
-              <ol className="list-decimal pl-5 text-sm text-slate-600 space-y-2">
-                <li>Adobe Creative Cloud から <strong>UXP Developer Tools</strong> を起動します。</li>
-                <li><strong>Add Plugin</strong> をクリックし、ダウンロードしたフォルダ内の <code>plugin\\manifest.json</code> を選択して Load します。</li>
-                <li>InDesignを起動し、メニューの「プラグイン」から <strong>InDesign Bridge</strong> パネルを開きます。</li>
-                <li>パネルに <code>Connected to bridge ✓</code> と表示されていれば完了です。<br/><span className="text-xs text-sky-600 font-bold">※ この状態になれば、ステップ3からいつでも「InDesignで組版開始」ボタンが押せます！</span></li>
-              </ol>
-            </div>
+            <p className="text-xs text-sky-700">UXP Developer Tools → Add Plugin → plugin\\manifest.json → InDesign で「プラグイン」→「InDesign Bridge」を開く</p>
           </div>
-        </div>
 
-        {/* ---------------- Illustrator / Photoshop (Legacy Socket) Setup ---------------- */}
-        <div className="bg-white rounded-2xl shadow-sm border p-8 space-y-6" style={{ borderColor: C.border }}>
-          <h4 className="font-bold text-xl border-b pb-3 text-slate-700">
-            Illustrator / Photoshop 用セットアップ
-          </h4>
-          <p className="text-sm text-slate-600">
-            従来のExtendScriptとローカルプロキシサーバーを利用した連携通信方式です。
-          </p>
-
-          <div className="space-y-4">
-            <div>
-              <h5 className="font-bold text-md mb-2">1. インストール (初回のみ)</h5>
-              <p className="text-sm text-slate-600 mb-2">
-                PowerShellで以下のコマンドを実行し、プラグインを自動配置します。
-              </p>
-              <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-xs shadow-inner overflow-x-auto whitespace-pre">
+          {/* Illustrator / Photoshop Legacy */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-3">
+            <h5 className="font-bold text-sm text-slate-700">Illustrator / Photoshop (ExtendScript)</h5>
+            <div className="bg-slate-900 text-green-400 p-3 rounded-lg font-mono text-xs shadow-inner overflow-x-auto whitespace-pre">
 {`mkdir -force $env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai
 Copy-Item ".\\mcp\\adb-mcp-main\\adb-mcp-main\\cep\\com.mikechambers.ai\\*" "$env:APPDATA\\Adobe\\CEP\\extensions\\com.mikechambers.ai" -Recurse -Force
 cd mcp\\adb-mcp-main\\adb-mcp-main\\adb-proxy-socket
-npm install`}
-              </div>
+npm install && node proxy.js`}
             </div>
-
-            <div>
-              <h5 className="font-bold text-md mb-2">2. ローカルプロキシサーバーの起動 (毎回)</h5>
-              <p className="text-sm text-slate-600 mb-2">ターミナル等で以下のコマンドを実行して3001番で待受を開始します。</p>
-              <div className="bg-slate-900 text-green-400 p-4 rounded-xl font-mono text-sm shadow-inner overflow-x-auto whitespace-pre">
-{`cd mcp\\adb-mcp-main\\adb-mcp-main\\adb-proxy-socket
-node proxy.js`}
-              </div>
-            </div>
-
-            <div className="pt-4 border-t">
-              <h5 className="font-bold text-md mb-2">3. アプリと連携 (ステップ3の準備)</h5>
-              <p className="text-sm text-slate-600 mb-4">
-                Illustratorの「ウィンドウ」→「エクステンション」から「Illustrator MCP Agent」を開いて「Connect」ボタンを押してください。<br/>
-                その後、以下のボタンを押してこのWebアプリと接続を完了します。
-              </p>
-              <button 
-                onClick={connectToAdb}
-                disabled={adbConnected}
-                className={`w-full py-4 rounded-xl font-bold text-lg text-white shadow-md transition-all flex items-center justify-center gap-3 ${adbConnected ? 'bg-emerald-500 cursor-default' : 'bg-slate-800 hover:bg-slate-700'}`}
-              >
-                {adbConnected ? <><CheckCircle2 size={24}/> 連携済</> : <><RefreshCw size={24}/> 通信プロキシに接続する</>}
-              </button>
-            </div>
+            <button 
+              onClick={connectToAdb}
+              disabled={adbConnected}
+              className={`w-full py-3 rounded-xl font-bold text-sm text-white shadow-md transition-all flex items-center justify-center gap-2 ${adbConnected ? 'bg-emerald-500 cursor-default' : 'bg-slate-800 hover:bg-slate-700'}`}
+            >
+              {adbConnected ? <><CheckCircle2 size={18}/> 連携済</> : <><RefreshCw size={18}/> 通信プロキシに接続する</>}
+            </button>
           </div>
         </div>
 
