@@ -6,8 +6,11 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
       server: {
-        port: 3000,
+        port: 5173,
         host: '0.0.0.0',
+        headers: {
+          'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+        },
       },
       plugins: [react()],
       define: {
