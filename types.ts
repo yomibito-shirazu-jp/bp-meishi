@@ -107,7 +107,13 @@ export enum AppState {
   TRANSCRIBE_LIST = 'TRANSCRIBE_LIST',
   TRANSCRIBE_HISTORY = 'TRANSCRIBE_HISTORY',
   TRANSCRIBE_AI = 'TRANSCRIBE_AI',
-  // AI ツール（今後追加時に拡張）
+  // 印刷ツール
+  TOOL_WRITING = 'TOOL_WRITING',           // 文章作成系
+  TOOL_OCR = 'TOOL_OCR',                   // 文字起こし・OCR系
+  TOOL_PDF_EDIT = 'TOOL_PDF_EDIT',         // PDF加工・修正・編集
+  TOOL_PDF_COMPARE = 'TOOL_PDF_COMPARE',   // PDF比較
+  TOOL_PROOFREAD = 'TOOL_PROOFREAD',       // 校閲・校正・ファクトチェック
+  TOOL_TYPESET_SPEC = 'TOOL_TYPESET_SPEC', // 組版指示書作成・読み取り
 }
 
 export interface TranscribeProject {
