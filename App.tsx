@@ -2603,32 +2603,22 @@ JSONのみ返してください。` },
     }
     setVivliostylePdfB64(null);
     try {
-      // Phase 1: 原稿正規化
+      // Phase 1-3: 準備（現時点では個別処理なし）
       setPhaseProgress(1);
-      flash("PHASE 1: 原稿正規化中...", "info");
-      await new Promise(r => setTimeout(r, 1000));
+      flash("データ準備中...", "info");
 
-      // Phase 2: 意味地図生成
+      const titleSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
       setPhaseProgress(2);
-      flash("PHASE 2: セマンティックマップ生成中...", "info");
-      await new Promise(r => setTimeout(r, 1000));
-
-      // Phase 3: ルール確定
       setPhaseProgress(3);
-      flash("PHASE 3: 組版ルール確定中 (CSS生成)...", "info");
-      await new Promise(r => setTimeout(r, 500));
 
       // Phase 4: Vivliostyle で実際にPDF生成
       setPhaseProgress(4);
-      flash("PHASE 4: Vivliostyle エンジンでPDF生成中...", "info");
+      flash("Vivliostyle エンジンでPDF生成中...", "info");
 
-      const titleSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
       const result = await vivliostyleBuild(spans, pageMM, titleSpan?.text?.trim() || '名刺');
 
-      // Phase 5: 品質検証
+      // Phase 5: 完了
       setPhaseProgress(5);
-      flash("PHASE 5: 品質検証中...", "info");
-      await new Promise(r => setTimeout(r, 1000));
 
       setVivliostylePdfB64(result.pdf_b64);
       setPhaseProgress(6);
