@@ -1,5 +1,0 @@
-{
-  "name": "アプリ作成し太郎",
-  "description": "名刺PDFをアップロードし、テキスト・フォント・座標を自動抽出。AI補正・編集・再構築してPDF出力。",
-  "requestFramePermissions": []
-}

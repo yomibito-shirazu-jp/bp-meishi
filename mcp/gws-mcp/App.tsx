@@ -261,7 +261,7 @@ const App: React.FC = () => {
     setActiveTab('chat');
     setIsProcessing(true);
     try {
-      const res = await getExecutiveAction(text, 'gemini-3-flash-preview', history);
+      const res = await getExecutiveAction(text, 'gemini-2.5-flash', history);
       const newAssistantEntry: ChatEntry = {
         role: 'assistant',
         text: res.text,

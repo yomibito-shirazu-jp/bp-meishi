@@ -182,7 +182,7 @@ const executeTool = async (name: string, args: any) => {
   }
 };
 
-export const getExecutiveAction = async (prompt: string | any[], modelName: string = 'gemini-3-flash-preview', chatHistory?: any[]) => {
+export const getExecutiveAction = async (prompt: string | any[], modelName: string = 'gemini-2.5-flash', chatHistory?: any[]) => {
   const ai = getAI();
 
   // prompt can be a string or tool results array
@@ -248,7 +248,7 @@ export const executeApprovedTool = async (call: any, chatHistory: any[]) => {
       name: call.name,
       response: { content: response }
     }
-  }] as any, 'gemini-3-flash-preview', chatHistory);
+  }] as any, 'gemini-2.5-flash', chatHistory);
 };
 
 export const generateBriefing = async (currentTime: string): Promise<(BriefingItem | TriageEmail)[]> => {
@@ -288,7 +288,7 @@ export const generateBriefing = async (currentTime: string): Promise<(BriefingIt
 export const speakContent = async (text: string): Promise<Uint8Array> => {
   const ai = getAI();
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash",
+    model: "gemini-2.5-flash",
     contents: [{ parts: [{ text }] }],
     config: {
       responseModalities: [Modality.AUDIO],

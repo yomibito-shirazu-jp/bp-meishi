@@ -73,7 +73,7 @@
     "network": {
       "domains": [
         "all",
-        "http://localhost:3001"
+        "http://localhost:49300"
       ]
     },
     "localFileSystem": "fullAccess"

@@ -37,7 +37,7 @@ mcp = FastMCP(mcp_name, log_level="ERROR")
 print(f"{mcp_name} running on stdio", file=sys.stderr)
 
 APPLICATION = "indesign"
-PROXY_URL = 'http://localhost:3001'
+PROXY_URL = 'http://localhost:49300'
 PROXY_TIMEOUT = 20
 
 socket_client.configure(
