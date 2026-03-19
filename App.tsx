@@ -14,7 +14,7 @@ import {
   Settings, CheckCircle2, XCircle, Key, RefreshCw,
   FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
 } from 'lucide-react';
-import { io, Socket } from 'socket.io-client';
+
 
 /* ═══════════════════════════════════════════
    Constants
@@ -583,7 +583,7 @@ const App: React.FC = () => {
   const renderSidebar = () => {
     const sections = [
       {
-        title: '名刺アプリ',
+        title: '名刺データ管理',
         items: [
           { icon: LayoutDashboard, label: '一覧', badge: 0, state: AppState.DASHBOARD },
           { icon: Inbox, label: '受信', badge: inboxProjects.length, state: AppState.INBOX },
@@ -591,7 +591,7 @@ const App: React.FC = () => {
         ],
       },
       {
-        title: '文字起こし',
+        title: 'AI文字起こし',
         items: [
           { icon: List, label: '一覧', badge: 0, state: AppState.TRANSCRIBE_LIST },
           { icon: Clock, label: '履歴', badge: 0, state: AppState.TRANSCRIBE_HISTORY },
@@ -616,11 +616,11 @@ const App: React.FC = () => {
             className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 text-white"
             style={{ background: C.accent }}
           >
-            ア
+            印
           </div>
           {!sidebarCollapsed && (
             <span className="text-sm font-bold tracking-tight leading-tight" style={{ color: C.text }}>
-              アプリ作成し太郎
+              印刷ツールボックス
             </span>
           )}
         </div>
@@ -709,7 +709,7 @@ const App: React.FC = () => {
             <ArrowLeft size={16} /> 一覧へ戻る
           </button>
         )}
-        {view === AppState.DASHBOARD && <h2 className="text-base font-bold text-slate-800">名刺一覧</h2>}
+        {view === AppState.DASHBOARD && <h2 className="text-base font-bold text-slate-800">名刺データ一覧</h2>}
         {view === AppState.INBOX && <h2 className="text-base font-bold text-slate-800">受信トレイ</h2>}
         {view === AppState.AI_CHAT && (
           <div className="flex items-center gap-2">
@@ -735,7 +735,7 @@ const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <CreditCard size={16} className="text-slate-400" />
             <span className="text-sm font-medium text-slate-700">
-              {editingProjectId ? '名刺編集' : '新規名刺'}
+              {editingProjectId ? 'データ編集' : '新規データ'}
             </span>
             {editCount > 0 && (
               <span
