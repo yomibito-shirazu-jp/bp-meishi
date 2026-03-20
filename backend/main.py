@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 # ── Gemini Vision OCR ──
 GOOGLE_AI_KEY = os.environ.get("GOOGLE_AI_KEY", "")
-GEMINI_MODEL = "gemini-3-flash"
+GEMINI_MODEL = "gemini-2.0-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 app = FastAPI(title="名刺作成し太郎 API")
