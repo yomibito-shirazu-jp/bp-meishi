@@ -104,7 +104,7 @@ ${historyContext || '(なし)'}
 
   parts.push({ text: `${systemPrompt}\n\n## ユーザーの指示\n${instruction}` });
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${getConfig('VITE_GOOGLE_AI_KEY')}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${getConfig('VITE_GOOGLE_AI_KEY')}`;
 
   const res = await fetch(url, {
     method: 'POST',
