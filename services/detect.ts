@@ -122,6 +122,49 @@ const DETECT_PROMPT = `あなたはプロのDTPオペレーター兼自動組版
 - 推測が難しい場合は安全なデフォルト値（黒=#333333, 13Q等）を使用してください`;
 
 /**
+ * 大きな画像をリサイズしてトークン数を削減する
+ * Gemini Vision は長辺 1568px 以上でも精度が向上しないため、
+ * それ以下にリサイズすることでトークン数を大幅に削減できる
+ */
+async function resizeImageBase64(
+  base64: string,
+  mimeType: string,
+  maxLongSide: number = 1568,
+): Promise<{ data: string; mime: string }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const { width, height } = img;
+      const longSide = Math.max(width, height);
+
+      // リサイズ不要ならそのまま返す
+      if (longSide <= maxLongSide) {
+        resolve({ data: base64, mime: mimeType });
+        return;
+      }
+
+      const scale = maxLongSide / longSide;
+      const newW = Math.round(width * scale);
+      const newH = Math.round(height * scale);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = newW;
+      canvas.height = newH;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, newW, newH);
+
+      // JPEG に変換（PNG より軽量、レイアウト検出には十分）
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const resizedBase64 = dataUrl.split(',')[1];
+      console.log(`[detect] Image resized: ${width}x${height} → ${newW}x${newH} (${(resizedBase64.length / 1024).toFixed(0)}KB)`);
+      resolve({ data: resizedBase64, mime: 'image/jpeg' });
+    };
+    img.onerror = () => reject(new Error('画像の読み込みに失敗しました'));
+    img.src = `data:${mimeType};base64,${base64}`;
+  });
+}
+
+/**
  * フロントエンドからGemini APIを直接呼び出して検出（フォールバック用）
  */
 async function detectViaDirectGemini(
@@ -131,11 +174,14 @@ async function detectViaDirectGemini(
   const apiKey = getConfig('VITE_GOOGLE_AI_KEY');
   if (!apiKey) throw new Error('VITE_GOOGLE_AI_KEY が未設定です。「設定」から入力してください。');
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`;
+  // 画像をリサイズしてトークン数を削減
+  const resized = await resizeImageBase64(imageBase64, mimeType);
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`;
   const body = {
     contents: [{
       parts: [
-        { inlineData: { mimeType, data: imageBase64 } },
+        { inlineData: { mimeType: resized.mime, data: resized.data } },
         { text: DETECT_PROMPT },
       ],
     }],

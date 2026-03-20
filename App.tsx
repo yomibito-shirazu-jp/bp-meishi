@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent } from './types';
+import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent, ManuscriptChunk, ValidationReportResponse, ChunkDetail, FeedbackInput, FeedbackResponse, FeedbackActionType } from './types';
 import { analyzePdf, rebuildPdf, SpanOverride, vivliostyleBuild } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
@@ -7,6 +7,7 @@ import { runAgentInstruction, AgentMessage } from './services/agent';
 import { pickPdfFromDrive, pickFileFromDrive } from './services/gdrive';
 import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
 import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './services/detect';
+import { chunkManuscript, validateManuscript, submitFeedback } from './services/validate';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
@@ -132,6 +133,16 @@ const App: React.FC = () => {
   const [detectSaved, setDetectSaved] = useState(false);
   const detectFileRef = useRef<HTMLInputElement>(null);
 
+  // ── Manuscript Validation ──
+  const [msText, setMsText] = useState('');
+  const [msChunks, setMsChunks] = useState<ManuscriptChunk[]>([]);
+  const [msReport, setMsReport] = useState<ValidationReportResponse | null>(null);
+  const [msLoading, setMsLoading] = useState(false);
+  const [msCustomer, setMsCustomer] = useState('');
+  const [msPublication, setMsPublication] = useState('');
+  const [msFeedbackActions, setMsFeedbackActions] = useState<Record<string, { action: FeedbackActionType; editedText?: string }>>({});
+  const [msFeedbackSent, setMsFeedbackSent] = useState(false);
+  const [msFeedbackResult, setMsFeedbackResult] = useState<FeedbackResponse | null>(null);
 
   // ── Derived ──
   const flash = (text: string, type: 'info' | 'ok' | 'error' = 'info') => {
@@ -624,6 +635,7 @@ const App: React.FC = () => {
         title: '自動組版',
         items: [
           { icon: LayoutTemplate, label: 'レイアウト検出', badge: 0, state: AppState.TOOL_DETECT_LAYOUT },
+          { icon: ShieldCheck, label: '原稿検証', badge: 0, state: AppState.TOOL_VALIDATE_MS },
         ],
       },
     ];
@@ -769,6 +781,12 @@ const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <LayoutTemplate size={16} style={{ color: C.accent }} />
             <h2 className="text-base font-bold text-slate-800">レイアウト検出・プリセット化</h2>
+          </div>
+        )}
+        {view === AppState.TOOL_VALIDATE_MS && (
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={16} style={{ color: C.accent }} />
+            <h2 className="text-base font-bold text-slate-800">原稿検証・第一レポート</h2>
           </div>
         )}
         {view === AppState.EDIT && (
@@ -2828,6 +2846,417 @@ JSONのみ返してください。` },
             </div>
           )}
         </div>
+    );
+  };
+
+  // ── Manuscript Validation (原稿検証・第一レポート) ──
+  const handleChunkText = () => {
+    if (!msText.trim()) { flash('原稿テキストを入力してください', 'error'); return; }
+    const chunks = chunkManuscript(msText, []);
+    setMsChunks(chunks);
+    setMsReport(null);
+    setMsFeedbackActions({});
+    setMsFeedbackSent(false);
+    setMsFeedbackResult(null);
+    flash(`${chunks.length}チャンクに分解しました`, 'ok');
+  };
+
+  const handleRunValidation = async () => {
+    if (msChunks.length === 0) return;
+    if (!msCustomer.trim()) { flash('顧客名を入力してください', 'error'); return; }
+    setMsLoading(true);
+    setMsReport(null);
+    setMsFeedbackActions({});
+    setMsFeedbackSent(false);
+    flash('原稿検証中 — RAGルール検索 + Gemini検証...', 'info');
+    try {
+      const report = await validateManuscript({
+        customer_name: msCustomer,
+        publication_name: msPublication,
+        chunks: msChunks,
+      });
+      setMsReport(report);
+      const status = report.consensus.status;
+      if (status === 'ready') {
+        flash(`✅ 全${report.consensus.total_chunks}チャンクOK — 組版可能です！`, 'ok');
+      } else {
+        flash(`⚠ ${report.consensus.error_count_total}件のエラーを検出 — 修正が必要です`, 'error');
+      }
+    } catch (e: any) {
+      flash(`検証エラー: ${e.message}`, 'error');
+    } finally {
+      setMsLoading(false);
+    }
+  };
+
+  const handleSubmitFeedback = async () => {
+    if (!msReport) return;
+    const feedbacks: FeedbackInput[] = msReport.consensus.chunk_details
+      .filter(d => d.status === 'NG')
+      .map(d => {
+        const action = msFeedbackActions[d.chunk_id] || { action: 'no_change' as FeedbackActionType };
+        const firstError = d.validation_results[0];
+        return {
+          chunk_id: d.chunk_id,
+          component_type: d.component_type,
+          action_type: action.action,
+          original_text: firstError?.original_text || d.current_text,
+          ai_suggestion: firstError?.suggested_text,
+          user_final_text: action.action === 'manual_override' ? action.editedText : undefined,
+          error_type: firstError?.error_type,
+          customer_name: msCustomer,
+        };
+      });
+
+    if (feedbacks.length === 0) {
+      flash('フィードバック対象がありません', 'info');
+      return;
+    }
+
+    setMsLoading(true);
+    flash('PDCAフィードバック送信中...', 'info');
+    try {
+      const result = await submitFeedback({
+        report_id: msReport.report_id,
+        feedbacks,
+      });
+      setMsFeedbackSent(true);
+      setMsFeedbackResult(result);
+      flash(`PDCA完了: ${result.rules_created}件の新ルールをRAGに蓄積`, 'ok');
+    } catch (e: any) {
+      flash(`フィードバックエラー: ${e.message}`, 'error');
+    } finally {
+      setMsLoading(false);
+    }
+  };
+
+  const renderValidateManuscript = () => {
+    const consensus = msReport?.consensus;
+    const isReady = consensus?.status === 'ready';
+
+    return (
+      <div className="flex-1 overflow-auto p-6" style={{ background: C.bg }}>
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* Step 1: 原稿入力 & チャンク分解 */}
+          <div className="bg-white rounded-xl border shadow-sm p-6" style={{ borderColor: C.border }}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold" style={{ background: C.accent }}>1</div>
+              <h3 className="text-lg font-bold text-slate-800">原稿入力 & チャンク分解</h3>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">顧客名 <span className="text-red-400">*</span></label>
+                <input
+                  type="text"
+                  value={msCustomer}
+                  onChange={e => setMsCustomer(e.target.value)}
+                  placeholder="例: 酵母研究会"
+                  className="w-full px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                  style={{ borderColor: C.border }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">刊行物名</label>
+                <input
+                  type="text"
+                  value={msPublication}
+                  onChange={e => setMsPublication(e.target.value)}
+                  placeholder="例: 酵母通信 Vol.42"
+                  className="w-full px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                  style={{ borderColor: C.border }}
+                />
+              </div>
+              <div className="flex items-end">
+                <button
+                  onClick={handleChunkText}
+                  disabled={!msText.trim()}
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-white flex items-center gap-2 transition-colors hover:opacity-90 shadow-sm disabled:opacity-40"
+                  style={{ background: C.accent }}
+                >
+                  <Sparkles size={16} /> チャンク分解
+                </button>
+              </div>
+            </div>
+
+            <textarea
+              value={msText}
+              onChange={e => setMsText(e.target.value)}
+              placeholder="著者の原稿テキストをここに貼り付けてください。&#10;&#10;段落（空行区切り）ごとにコンポーネント単位に自動分解されます。&#10;Q. で始まるテキストは「Q&Aボックス」として認識されます。"
+              className="w-full h-48 px-4 py-3 rounded-lg border text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-teal-300"
+              style={{ borderColor: C.border }}
+            />
+
+            {/* チャンクプレビュー */}
+            {msChunks.length > 0 && (
+              <div className="mt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-slate-500">{msChunks.length}チャンクに分解済み</span>
+                  <button
+                    onClick={handleRunValidation}
+                    disabled={msLoading || !msCustomer.trim()}
+                    className={`px-5 py-2.5 rounded-lg text-sm font-bold text-white flex items-center gap-2 transition-all shadow-md ${!msLoading && msCustomer.trim() ? 'hover:opacity-90' : 'opacity-40 cursor-not-allowed'}`}
+                    style={{ background: 'linear-gradient(135deg, #0d9488, #06b6d4)' }}
+                  >
+                    <ShieldCheck size={16} />
+                    {msLoading ? '検証中...' : 'RAG + Gemini で原稿検証'}
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {msChunks.map((chunk, idx) => (
+                    <div key={idx} className="flex items-start gap-3 p-3 rounded-lg border" style={{ borderColor: C.border }}>
+                      <span className="shrink-0 text-[10px] font-mono font-bold px-2 py-0.5 rounded" style={{ background: C.accentBg, color: C.accent }}>
+                        {chunk.role}
+                      </span>
+                      <p className="text-xs text-slate-600 line-clamp-2">{chunk.text}</p>
+                      <span className="shrink-0 text-[10px] font-mono" style={{ color: C.muted }}>{chunk.text.length}字</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Step 2: 第一レポート（合議結果） */}
+          {consensus && (
+            <div className="bg-white rounded-xl border shadow-sm p-6" style={{ borderColor: C.border }}>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold" style={{ background: C.accent }}>2</div>
+                  <h3 className="text-lg font-bold text-slate-800">第一レポート（合議結果）</h3>
+                </div>
+                <div className={`px-4 py-2 rounded-full text-sm font-bold border-2 ${isReady ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-amber-50 text-amber-700 border-amber-300'}`}>
+                  {isReady ? '✅ READY — 組版可能' : '⚠ NEEDS REVISION — 修正必要'}
+                </div>
+              </div>
+
+              {/* サマリーカード */}
+              <div className="grid grid-cols-4 gap-4 mb-6">
+                <div className="text-center p-3 rounded-lg" style={{ background: C.surface }}>
+                  <div className="text-2xl font-bold" style={{ color: C.accent }}>{consensus.total_chunks}</div>
+                  <div className="text-[10px] font-medium" style={{ color: C.muted }}>総チャンク数</div>
+                </div>
+                <div className="text-center p-3 rounded-lg" style={{ background: C.surface }}>
+                  <div className="text-2xl font-bold text-emerald-600">{consensus.total_chunks - consensus.error_count_total}</div>
+                  <div className="text-[10px] font-medium" style={{ color: C.muted }}>OK</div>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-red-50">
+                  <div className="text-2xl font-bold text-red-600">{consensus.error_count_overflow}</div>
+                  <div className="text-[10px] font-medium text-red-400">文字あふれ</div>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-amber-50">
+                  <div className="text-2xl font-bold text-amber-600">{consensus.error_count_rule}</div>
+                  <div className="text-[10px] font-medium text-amber-400">ルール違反</div>
+                </div>
+              </div>
+
+              {/* RAGルール情報 */}
+              {msReport!.rag_rules_used > 0 && (
+                <div className="mb-4 p-3 rounded-lg border" style={{ borderColor: C.border, background: C.surface }}>
+                  <h4 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: C.muted }}>
+                    RAGから引き当てたルール ({msReport!.rag_rules_used}件)
+                  </h4>
+                  <div className="space-y-1">
+                    {msReport!.rag_rules.map((r, i) => (
+                      <div key={i} className="text-xs flex items-center gap-2">
+                        <span className={`font-mono px-1.5 py-0.5 rounded ${r.severity === 'error' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {r.rule_code}
+                        </span>
+                        <span className="text-slate-600">{r.text}</span>
+                        {r.similarity > 0 && (
+                          <span className="text-[10px] font-mono" style={{ color: C.muted }}>
+                            ({(r.similarity * 100).toFixed(0)}%)
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* チャンクごとの詳細 */}
+              <div className="space-y-3">
+                {consensus.chunk_details.map((detail, idx) => {
+                  const feedbackAction = msFeedbackActions[detail.chunk_id];
+                  const isNg = detail.status === 'NG';
+
+                  return (
+                    <div
+                      key={idx}
+                      className="border rounded-xl p-4 transition-all"
+                      style={{
+                        borderColor: isNg ? '#ef4444' : '#10b981',
+                        borderLeftWidth: 4,
+                        background: isNg ? '#fef2f2' : '#f0fdf4',
+                      }}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          {isNg ? (
+                            <XCircle size={16} className="text-red-500" />
+                          ) : (
+                            <CheckCircle2 size={16} className="text-emerald-500" />
+                          )}
+                          <span className="text-sm font-bold text-slate-800">{detail.chunk_id}</span>
+                          <span className="font-mono text-xs px-2 py-0.5 rounded" style={{ background: C.accentBg, color: C.accent }}>
+                            {detail.component_type}
+                          </span>
+                          <span className="text-[10px]" style={{ color: C.muted }}>{detail.text_length}字</span>
+                        </div>
+                        <span className={`text-xs font-bold px-3 py-1 rounded-full ${isNg ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                          {detail.status}
+                        </span>
+                      </div>
+
+                      {/* 原稿テキスト */}
+                      <p className="text-xs text-slate-600 mb-2 line-clamp-2">{detail.current_text}</p>
+
+                      {/* エラー詳細 & アクションボタン */}
+                      {isNg && detail.validation_results.length > 0 && (
+                        <div className="space-y-2">
+                          {detail.validation_results.map((err, ei) => (
+                            <div key={ei} className="bg-white rounded-lg p-3 border border-red-200">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${err.severity === 'error' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                                  {err.error_type}
+                                </span>
+                                <span className="text-[10px] font-mono" style={{ color: C.muted }}>({err.reason_ref})</span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div>
+                                  <span className="text-red-500 font-bold">元:</span>
+                                  <span className="ml-1 line-through text-red-400">{err.original_text}</span>
+                                </div>
+                                <div>
+                                  <span className="text-emerald-600 font-bold">提案:</span>
+                                  <span className="ml-1 text-emerald-700 font-medium">{err.suggested_text}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+
+                          {/* PDCA アクションボタン */}
+                          {!msFeedbackSent && (
+                            <div className="flex items-center gap-2 mt-2">
+                              <button
+                                onClick={() => setMsFeedbackActions(prev => ({ ...prev, [detail.chunk_id]: { action: 'accept' } }))}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${feedbackAction?.action === 'accept' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                              >
+                                ✓ 受入
+                              </button>
+                              <button
+                                onClick={() => setMsFeedbackActions(prev => ({ ...prev, [detail.chunk_id]: { action: 'reject' } }))}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${feedbackAction?.action === 'reject' ? 'bg-red-100 border-red-400 text-red-800' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                              >
+                                ✕ 棄却
+                              </button>
+                              <button
+                                onClick={() => setMsFeedbackActions(prev => ({
+                                  ...prev,
+                                  [detail.chunk_id]: { action: 'manual_override', editedText: detail.current_text }
+                                }))}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${feedbackAction?.action === 'manual_override' ? 'bg-blue-100 border-blue-400 text-blue-800' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                              >
+                                ✎ 手動修正
+                              </button>
+                            </div>
+                          )}
+
+                          {/* 手動修正テキストエリア */}
+                          {feedbackAction?.action === 'manual_override' && !msFeedbackSent && (
+                            <textarea
+                              value={feedbackAction.editedText || ''}
+                              onChange={e => setMsFeedbackActions(prev => ({
+                                ...prev,
+                                [detail.chunk_id]: { ...prev[detail.chunk_id], editedText: e.target.value }
+                              }))}
+                              className="w-full mt-2 px-3 py-2 rounded-lg border text-xs font-mono resize-y focus:outline-none focus:ring-2 focus:ring-blue-300"
+                              style={{ borderColor: '#93c5fd' }}
+                              rows={3}
+                            />
+                          )}
+
+                          {msFeedbackSent && feedbackAction && (
+                            <div className="text-[10px] font-medium mt-1" style={{ color: C.muted }}>
+                              📝 {feedbackAction.action === 'accept' ? 'AI提案を受入' : feedbackAction.action === 'reject' ? 'AI指摘を棄却' : '手動修正済み'}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Step 3: PDCAフィードバック送信 */}
+              {!isReady && !msFeedbackSent && (
+                <div className="mt-6 flex items-center justify-between p-4 rounded-lg border-2 border-dashed" style={{ borderColor: C.accentBorder }}>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">PDCA フィードバック送信</h4>
+                    <p className="text-xs mt-0.5" style={{ color: C.muted }}>
+                      上記の判断（受入/棄却/手動修正）をRAGに蓄積し、次回の検証精度を向上させます
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleSubmitFeedback}
+                    disabled={msLoading}
+                    className="px-5 py-2.5 rounded-lg text-sm font-bold text-white flex items-center gap-2 transition-all shadow-md hover:opacity-90"
+                    style={{ background: 'linear-gradient(135deg, #7c3aed, #a855f7)' }}
+                  >
+                    <RefreshCw size={16} /> フィードバック送信 & 学習
+                  </button>
+                </div>
+              )}
+
+              {/* PDCAフィードバック結果 */}
+              {msFeedbackSent && msFeedbackResult && (
+                <div className="mt-6 p-5 rounded-xl border-2 border-purple-300 bg-purple-50">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold bg-purple-600">P</div>
+                    <h3 className="text-base font-bold text-purple-900">PDCA サイクル完了</h3>
+                  </div>
+                  <div className="grid grid-cols-4 gap-3 mb-3">
+                    {(['plan', 'do', 'check', 'action'] as const).map(phase => (
+                      <div key={phase} className="text-center p-3 rounded-lg bg-white border border-purple-200">
+                        <div className="text-xs font-bold uppercase text-purple-600 mb-1">{phase.toUpperCase()}</div>
+                        <div className="text-[10px] text-slate-600">{msFeedbackResult.pdca_cycle[phase]}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-white border border-purple-200">
+                    <span className="text-xs text-slate-600">
+                      🧠 <strong>{msFeedbackResult.rules_created}件</strong>の新ルールをRAGベクトルDBに蓄積
+                    </span>
+                    <span className="text-[10px] font-mono" style={{ color: C.muted }}>
+                      Report: {msFeedbackResult.report_id.substring(0, 8)}...
+                    </span>
+                  </div>
+                  {msFeedbackResult.results.filter(r => r.rule_generated).map((r, i) => (
+                    <div key={i} className="mt-2 p-2 rounded-lg bg-white border border-emerald-200 text-xs">
+                      <span className="font-mono font-bold text-emerald-600">{r.chunk_id}</span>: {r.generated_rule_text}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* 組版エンジンへの送信ボタン（全OK時のみ） */}
+              {isReady && (
+                <div className="mt-6 text-center p-6 rounded-xl border-2 border-emerald-300 bg-emerald-50">
+                  <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-600" />
+                  <h3 className="text-lg font-bold text-emerald-800">全チャンク検証OK</h3>
+                  <p className="text-sm mt-1 text-emerald-600">Vivliostyle 組版エンジンに安全に送信できます</p>
+                  <button
+                    className="mt-4 px-8 py-3 rounded-lg text-base font-bold text-white shadow-lg transition-all hover:opacity-90"
+                    style={{ background: 'linear-gradient(135deg, #059669, #10b981)' }}
+                    onClick={() => flash('組版エンジン連携は次のフェーズで実装されます', 'info')}
+                  >
+                    📄 Vivliostyle で PDF生成
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -3197,6 +3626,7 @@ JSONのみ返してください。` },
         {view === AppState.TOOL_PROOFREAD && renderToolWorkspace('proofread')}
         {view === AppState.TOOL_TYPESET_SPEC && renderToolWorkspace('typeset_spec')}
         {view === AppState.TOOL_DETECT_LAYOUT && renderDetectLayout()}
+        {view === AppState.TOOL_VALIDATE_MS && renderValidateManuscript()}
         {view === AppState.EDIT && (
           <div className="flex-1 flex overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0">

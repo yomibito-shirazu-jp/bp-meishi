@@ -150,7 +150,7 @@ async function validateViaDirectGemini(params: {
   const apiKey = getConfig('VITE_GOOGLE_AI_KEY');
   if (!apiKey) throw new Error('VITE_GOOGLE_AI_KEY が未設定です');
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`;
 
   const chunksText = params.chunks.map(c =>
     `--- chunk_id: ${c.chunk_id} | role: ${c.role} | text_length: ${c.text.length}文字 ---\n${c.text}`
