@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction } from './types';
+import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent } from './types';
 import { analyzePdf, rebuildPdf, SpanOverride, vivliostyleBuild } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
 import { pickPdfFromDrive, pickFileFromDrive } from './services/gdrive';
 import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
+import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './services/detect';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
@@ -120,7 +121,16 @@ const App: React.FC = () => {
   const [settingsTestStatus, setSettingsTestStatus] = useState<Partial<Record<ConfigKey, { ok: boolean; msg: string } | null>>>({});
   const [settingsTesting, setSettingsTesting] = useState<Partial<Record<ConfigKey, boolean>>>({});
 
-
+  // ── Layout Detection ──
+  const [detectPages, setDetectPages] = useState<Array<{ page_number: number; png_b64: string; page_mm: [number, number] }>>([]);
+  const [detectResults, setDetectResults] = useState<DetectionSessionResult[]>([]);
+  const [detectLoading, setDetectLoading] = useState(false);
+  const [detectProgress, setDetectProgress] = useState<{ current: number; total: number } | null>(null);
+  const [detectCustomerName, setDetectCustomerName] = useState('');
+  const [detectProjectName, setDetectProjectName] = useState('');
+  const [detectSelectedPage, setDetectSelectedPage] = useState(0);
+  const [detectSaved, setDetectSaved] = useState(false);
+  const detectFileRef = useRef<HTMLInputElement>(null);
 
 
   // ── Derived ──
@@ -610,6 +620,12 @@ const App: React.FC = () => {
           { icon: BookType, label: '組版指示書', badge: 0, state: AppState.TOOL_TYPESET_SPEC },
         ],
       },
+      {
+        title: '自動組版',
+        items: [
+          { icon: LayoutTemplate, label: 'レイアウト検出', badge: 0, state: AppState.TOOL_DETECT_LAYOUT },
+        ],
+      },
     ];
 
     const isActive = (state: AppState) =>
@@ -749,6 +765,12 @@ const App: React.FC = () => {
         {view === AppState.TOOL_PDF_COMPARE && <h2 className="text-base font-bold text-slate-800">PDF比較</h2>}
         {view === AppState.TOOL_PROOFREAD && <h2 className="text-base font-bold text-slate-800">校閲・校正・ファクトチェック</h2>}
         {view === AppState.TOOL_TYPESET_SPEC && <h2 className="text-base font-bold text-slate-800">組版指示書</h2>}
+        {view === AppState.TOOL_DETECT_LAYOUT && (
+          <div className="flex items-center gap-2">
+            <LayoutTemplate size={16} style={{ color: C.accent }} />
+            <h2 className="text-base font-bold text-slate-800">レイアウト検出・プリセット化</h2>
+          </div>
+        )}
         {view === AppState.EDIT && (
           <div className="flex items-center gap-2">
             <CreditCard size={16} className="text-slate-400" />
@@ -2810,6 +2832,351 @@ JSONのみ返してください。` },
     );
   };
 
+  // ── Detect Layout (自動組版 検出ワークフロー) ──
+  const handleDetectUpload = async (file: File) => {
+    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
+      flash('PDFファイルを選択してください', 'error');
+      return;
+    }
+    setDetectLoading(true);
+    setDetectResults([]);
+    setDetectSaved(false);
+    setDetectSelectedPage(0);
+    flash('PDF分析中 — ページ画像を抽出しています...', 'info');
+    try {
+      const apiUrl = getConfig('VITE_API_URL');
+      const pages = await extractPagesFromPdf(file, apiUrl);
+      setDetectPages(pages);
+      flash(`${pages.length}ページを抽出しました`, 'ok');
+    } catch (e: any) {
+      flash(`PDF分析エラー: ${e.message}`, 'error');
+    } finally {
+      setDetectLoading(false);
+    }
+  };
+
+  const handleRunDetection = async () => {
+    if (detectPages.length === 0) return;
+    if (!detectCustomerName.trim()) { flash('顧客名を入力してください', 'error'); return; }
+    if (!detectProjectName.trim()) { flash('刊行物名を入力してください', 'error'); return; }
+    setDetectLoading(true);
+    setDetectResults([]);
+    setDetectSaved(false);
+    setDetectProgress({ current: 0, total: detectPages.length });
+    flash(`検出開始 — ${detectPages.length}ページをGemini 2.5 Pro で解析中...`, 'info');
+    try {
+      const results = await detectAllPages({
+        pages: detectPages,
+        customer_name: detectCustomerName,
+        project_name: detectProjectName,
+        onProgress: (current, total, result) => {
+          setDetectProgress({ current, total });
+          setDetectResults(prev => [...prev, result]);
+          flash(`ページ ${current}/${total} 検出完了 — ${result.detection.components_count}コンポーネント`, 'ok');
+        },
+      });
+      flash(`全${results.length}ページの検出が完了しました！`, 'ok');
+      setDetectSaved(true);
+    } catch (e: any) {
+      flash(`検出エラー: ${e.message}`, 'error');
+    } finally {
+      setDetectLoading(false);
+      setDetectProgress(null);
+    }
+  };
+
+  const renderDetectLayout = () => {
+    const currentResult = detectResults[detectSelectedPage];
+
+    return (
+      <div className="flex-1 overflow-auto p-6" style={{ background: C.bg }}>
+        <input
+          ref={detectFileRef}
+          type="file"
+          accept=".pdf"
+          className="hidden"
+          onChange={e => {
+            const f = e.target.files?.[0];
+            if (f) handleDetectUpload(f);
+            e.target.value = '';
+          }}
+        />
+
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* Step 1: アップロード & 設定 */}
+          <div className="bg-white rounded-xl border shadow-sm p-6" style={{ borderColor: C.border }}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold" style={{ background: C.accent }}>1</div>
+              <h3 className="text-lg font-bold text-slate-800">PDFアップロード & プロジェクト設定</h3>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">顧客名 <span className="text-red-400">*</span></label>
+                <input
+                  type="text"
+                  value={detectCustomerName}
+                  onChange={e => setDetectCustomerName(e.target.value)}
+                  placeholder="例: 酵母研究会"
+                  className="w-full px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                  style={{ borderColor: C.border }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">刊行物名 <span className="text-red-400">*</span></label>
+                <input
+                  type="text"
+                  value={detectProjectName}
+                  onChange={e => setDetectProjectName(e.target.value)}
+                  placeholder="例: 酵母通信 Vol.42"
+                  className="w-full px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                  style={{ borderColor: C.border }}
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                <button
+                  onClick={() => detectFileRef.current?.click()}
+                  disabled={detectLoading}
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-white flex items-center gap-2 transition-colors hover:opacity-90 shadow-sm"
+                  style={{ background: C.accent }}
+                >
+                  <Upload size={16} /> PDFを選択
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      const file = await pickPdfFromDrive();
+                      if (file) handleDetectUpload(file);
+                    } catch (e: any) {
+                      flash(e.message || 'Google Drive接続エラー', 'error');
+                    }
+                  }}
+                  disabled={detectLoading}
+                  className="px-4 py-2 rounded-lg text-sm font-medium border flex items-center gap-2 transition-colors hover:bg-slate-50"
+                  style={{ borderColor: C.border, color: C.textSec }}
+                >
+                  <HardDrive size={16} /> Drive
+                </button>
+              </div>
+            </div>
+
+            {/* ページサムネイル */}
+            {detectPages.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-slate-500">{detectPages.length}ページ検出</span>
+                  <button
+                    onClick={handleRunDetection}
+                    disabled={detectLoading || !detectCustomerName.trim() || !detectProjectName.trim()}
+                    className={`px-5 py-2.5 rounded-lg text-sm font-bold text-white flex items-center gap-2 transition-all shadow-md ${!detectLoading && detectCustomerName.trim() && detectProjectName.trim() ? 'hover:opacity-90' : 'opacity-40 cursor-not-allowed'}`}
+                    style={{ background: 'linear-gradient(135deg, #0d9488, #06b6d4)' }}
+                  >
+                    <Sparkles size={16} />
+                    {detectLoading ? `検出中 ${detectProgress ? `(${detectProgress.current}/${detectProgress.total})` : '...'}` : 'Gemini 2.5 Pro でレイアウト検出'}
+                  </button>
+                </div>
+                <div className="flex gap-3 overflow-x-auto pb-2">
+                  {detectPages.map((page, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => setDetectSelectedPage(idx)}
+                      className={`shrink-0 cursor-pointer rounded-lg border-2 overflow-hidden transition-all ${detectSelectedPage === idx ? 'ring-2 ring-teal-400 border-teal-400 shadow-lg' : 'border-slate-200 hover:border-slate-300'}`}
+                      style={{ width: 100 }}
+                    >
+                      <img
+                        src={`data:image/png;base64,${page.png_b64}`}
+                        alt={`Page ${page.page_number}`}
+                        className="w-full h-auto"
+                      />
+                      <div className="text-center text-[10px] py-1 font-medium" style={{ color: C.textSec }}>
+                        P{page.page_number}
+                        {detectResults[idx] && (
+                          <span className="ml-1" style={{ color: C.accent }}>✓ {detectResults[idx].detection.components_count}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 進捗バー */}
+            {detectProgress && (
+              <div className="mt-3">
+                <div className="w-full bg-slate-100 rounded-full h-2.5">
+                  <div
+                    className="h-2.5 rounded-full transition-all duration-500"
+                    style={{ background: 'linear-gradient(90deg, #0d9488, #06b6d4)', width: `${(detectProgress.current / detectProgress.total) * 100}%` }}
+                  />
+                </div>
+                <p className="text-xs mt-1 text-center" style={{ color: C.muted }}>
+                  {detectProgress.current} / {detectProgress.total} ページ解析中...
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Step 2: 検出結果プレビュー */}
+          {currentResult && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* 左: ページ画像 + 検出オーバーレイ */}
+              <div className="bg-white rounded-xl border shadow-sm p-5" style={{ borderColor: C.border }}>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold" style={{ background: C.accent }}>2</div>
+                  <h3 className="text-base font-bold text-slate-800">ページ {detectSelectedPage + 1} プレビュー</h3>
+                </div>
+                <div className="relative rounded-lg overflow-hidden border" style={{ borderColor: C.border }}>
+                  <img
+                    src={`data:image/png;base64,${detectPages[detectSelectedPage]?.png_b64}`}
+                    alt="Page preview"
+                    className="w-full h-auto"
+                  />
+                </div>
+
+                {/* ページジオメトリ */}
+                {currentResult.detection.page_geometry && (
+                  <div className="mt-4 p-3 rounded-lg" style={{ background: C.surface }}>
+                    <h4 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: C.muted }}>ページジオメトリ</h4>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div><span style={{ color: C.muted }}>天:</span> <span className="font-mono font-bold">{currentResult.detection.page_geometry.margins.top_mm}mm</span></div>
+                      <div><span style={{ color: C.muted }}>地:</span> <span className="font-mono font-bold">{currentResult.detection.page_geometry.margins.bottom_mm}mm</span></div>
+                      <div><span style={{ color: C.muted }}>のど:</span> <span className="font-mono font-bold">{currentResult.detection.page_geometry.margins.inside_mm}mm</span></div>
+                      <div><span style={{ color: C.muted }}>小口:</span> <span className="font-mono font-bold">{currentResult.detection.page_geometry.margins.outside_mm}mm</span></div>
+                      <div><span style={{ color: C.muted }}>段数:</span> <span className="font-mono font-bold">{currentResult.detection.page_geometry.base_column_count}段</span></div>
+                      <div><span style={{ color: C.muted }}>組方向:</span> <span className="font-mono font-bold">{currentResult.detection.page_geometry.base_writing_mode === 'vertical-rl' ? '縦組み' : '横組み'}</span></div>
+                    </div>
+                  </div>
+                )}
+
+                {/* デザイントークン */}
+                {currentResult.detection.design_tokens && (
+                  <div className="mt-3 p-3 rounded-lg" style={{ background: C.surface }}>
+                    <h4 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: C.muted }}>デザイントークン</h4>
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 rounded border" style={{ background: currentResult.detection.design_tokens.primary_color, borderColor: C.border }} />
+                        <span style={{ color: C.muted }}>Primary:</span>
+                        <span className="font-mono font-bold">{currentResult.detection.design_tokens.primary_color}</span>
+                      </div>
+                      {currentResult.detection.design_tokens.secondary_color && (
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 rounded border" style={{ background: currentResult.detection.design_tokens.secondary_color, borderColor: C.border }} />
+                          <span style={{ color: C.muted }}>Secondary:</span>
+                          <span className="font-mono font-bold">{currentResult.detection.design_tokens.secondary_color}</span>
+                        </div>
+                      )}
+                      <div><span style={{ color: C.muted }}>本文:</span> <span className="font-bold">{currentResult.detection.design_tokens.base_font_family}</span> <span className="font-mono">{currentResult.detection.design_tokens.base_font_size_q}Q / {currentResult.detection.design_tokens.base_line_height_q}Q</span></div>
+                      {currentResult.detection.design_tokens.heading_font_family && (
+                        <div><span style={{ color: C.muted }}>見出し:</span> <span className="font-bold">{currentResult.detection.design_tokens.heading_font_family}</span></div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 右: 検出コンポーネント一覧 */}
+              <div className="bg-white rounded-xl border shadow-sm p-5" style={{ borderColor: C.border }}>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold" style={{ background: C.accent }}>3</div>
+                    <h3 className="text-base font-bold text-slate-800">検出コンポーネント</h3>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ color: C.accent, background: C.accentBg }}>
+                      {currentResult.detection.components_count}個
+                    </span>
+                  </div>
+                  {currentResult.validation.errors_count > 0 && (
+                    <span className="text-xs font-medium px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                      ⚠ {currentResult.validation.errors_count}件の警告
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-3 max-h-[calc(100vh-340px)] overflow-y-auto pr-1">
+                  {currentResult.detection.components.map((comp, idx) => (
+                    <div
+                      key={idx}
+                      className="border rounded-xl p-4 transition-all hover:shadow-md"
+                      style={{ borderColor: C.border, borderLeftWidth: 4, borderLeftColor: comp.id ? C.accent : '#ef4444' }}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-bold px-2 py-0.5 rounded" style={{ background: C.accentBg, color: C.accent }}>
+                            {comp.code}
+                          </span>
+                          <span className="text-sm font-bold text-slate-800">{comp.name || comp.code}</span>
+                        </div>
+                        {comp.id && (
+                          <CheckCircle2 size={16} style={{ color: C.accent }} />
+                        )}
+                        {comp.error && (
+                          <span className="text-xs text-red-500 flex items-center gap-1">
+                            <XCircle size={14} /> {comp.error}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* バリデーションエラー */}
+                {currentResult.validation.errors.length > 0 && (
+                  <div className="mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
+                    <h4 className="text-xs font-bold text-amber-800 mb-2">バリデーション警告</h4>
+                    <div className="space-y-1">
+                      {currentResult.validation.errors.map((err, i) => (
+                        <div key={i} className="text-xs text-amber-700">
+                          <span className="font-mono font-bold">{err.field}</span>: {err.message}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 保存済みバッジ */}
+                {detectSaved && (
+                  <div className="mt-4 p-4 rounded-lg border-2 border-teal-300 bg-teal-50 text-center">
+                    <CheckCircle2 size={24} className="mx-auto mb-2" style={{ color: C.accent }} />
+                    <p className="text-sm font-bold" style={{ color: C.accent }}>
+                      コンポーネントDBに保存完了
+                    </p>
+                    <p className="text-xs mt-1" style={{ color: C.textSec }}>
+                      <span className="font-bold">{detectCustomerName}</span> / <span className="font-bold">{detectProjectName}</span>
+                    </p>
+                    <p className="text-[10px] mt-1 font-mono" style={{ color: C.muted }}>
+                      Session: {currentResult.session_id?.substring(0, 8)}... | Globals: {currentResult.globals_id?.substring(0, 8)}...
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 全ページ概要 */}
+          {detectResults.length > 1 && (
+            <div className="bg-white rounded-xl border shadow-sm p-5" style={{ borderColor: C.border }}>
+              <h3 className="text-base font-bold text-slate-800 mb-3">全ページ検出サマリー</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                {detectResults.map((r, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setDetectSelectedPage(idx)}
+                    className={`p-3 rounded-lg border text-center transition-all ${detectSelectedPage === idx ? 'ring-2 ring-teal-400 border-teal-400' : 'border-slate-200 hover:border-slate-300'}`}
+                  >
+                    <div className="text-lg font-bold" style={{ color: C.accent }}>{r.detection.components_count}</div>
+                    <div className="text-[10px] font-medium" style={{ color: C.muted }}>P{idx + 1} コンポーネント</div>
+                    <div className={`text-[10px] mt-1 font-medium ${r.validation.status === 'approved' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                      {r.validation.status === 'approved' ? '✓ 承認済み' : `⚠ ${r.validation.errors_count}件`}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="h-screen flex text-slate-900 font-sans overflow-hidden" style={{ background: C.bg }}>
       {renderToast()}
@@ -2829,6 +3196,7 @@ JSONのみ返してください。` },
         {view === AppState.TOOL_PDF_COMPARE && renderToolWorkspace('pdf_compare')}
         {view === AppState.TOOL_PROOFREAD && renderToolWorkspace('proofread')}
         {view === AppState.TOOL_TYPESET_SPEC && renderToolWorkspace('typeset_spec')}
+        {view === AppState.TOOL_DETECT_LAYOUT && renderDetectLayout()}
         {view === AppState.EDIT && (
           <div className="flex-1 flex overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0">

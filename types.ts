@@ -114,6 +114,157 @@ export enum AppState {
   TOOL_PDF_COMPARE = 'TOOL_PDF_COMPARE',   // PDF比較
   TOOL_PROOFREAD = 'TOOL_PROOFREAD',       // 校閲・校正・ファクトチェック
   TOOL_TYPESET_SPEC = 'TOOL_TYPESET_SPEC', // 組版指示書作成・読み取り
+  // 自動組版
+  TOOL_DETECT_LAYOUT = 'TOOL_DETECT_LAYOUT', // レイアウト検出・プリセット化
+  TOOL_VALIDATE_MS = 'TOOL_VALIDATE_MS',     // 原稿検証・第一レポート
+}
+
+// ── 原稿検証 & 第一レポート ──
+
+export interface ManuscriptChunk {
+  chunk_id: string;
+  role: string;
+  text: string;
+  max_chars?: number;
+}
+
+export interface ValidationError {
+  error_type: string;
+  original_text: string;
+  suggested_text: string;
+  reason_ref: string;
+  severity: 'error' | 'warning';
+}
+
+export interface ChunkDetail {
+  chunk_id: string;
+  component_type: string;
+  status: 'OK' | 'NG';
+  current_text: string;
+  text_length: number;
+  layout_constraint: any;
+  validation_results: ValidationError[];
+}
+
+export interface ConsensusReport {
+  status: 'pending' | 'needs_revision' | 'ready' | 'user_approved';
+  total_chunks: number;
+  error_count_overflow: number;
+  error_count_rule: number;
+  error_count_total: number;
+  chunk_details: ChunkDetail[];
+}
+
+export interface ValidationReportResponse {
+  success: boolean;
+  report_id: string;
+  consensus: ConsensusReport;
+  rag_rules_used: number;
+  rag_rules: Array<{
+    rule_code: string;
+    category: string;
+    text: string;
+    severity: string;
+    similarity: number;
+  }>;
+}
+
+export type FeedbackActionType = 'accept' | 'manual_override' | 'reject' | 'no_change';
+
+export interface FeedbackInput {
+  chunk_id: string;
+  component_type?: string;
+  action_type: FeedbackActionType;
+  original_text?: string;
+  ai_suggestion?: string;
+  user_final_text?: string;
+  error_type?: string;
+  customer_name: string;
+}
+
+export interface FeedbackResponse {
+  success: boolean;
+  report_id: string;
+  feedbacks_processed: number;
+  rules_created: number;
+  pdca_cycle: {
+    plan: string;
+    do: string;
+    check: string;
+    action: string;
+  };
+  results: Array<{
+    chunk_id: string;
+    action_type: string;
+    rule_generated: boolean;
+    generated_rule_text: string | null;
+  }>;
+}
+
+// ── 自動組版 検出ワークフロー ──
+
+export interface DetectedMargins {
+  top_mm: number;
+  bottom_mm: number;
+  inside_mm: number;
+  outside_mm: number;
+}
+
+export interface DetectedPageGeometry {
+  margins: DetectedMargins;
+  base_column_count: number;
+  base_writing_mode: string;
+}
+
+export interface DetectedDesignTokens {
+  primary_color: string;
+  secondary_color?: string;
+  base_font_family: string;
+  heading_font_family?: string;
+  base_font_size_q: number;
+  base_line_height_q: number;
+}
+
+export interface DetectedComponent {
+  component_code: string;
+  component_name: string;
+  semantic_tag: string;
+  writing_mode: string;
+  font_size_q: number;
+  line_height_q: number;
+  has_border: boolean;
+  border_color?: string;
+  border_radius?: string;
+  has_background: boolean;
+  background_color?: string;
+  heading_font_size_q?: number;
+  heading_color?: string;
+  column_count: number;
+  estimated_area_pct: number;
+}
+
+export interface DetectionResult {
+  page_geometry: DetectedPageGeometry;
+  design_tokens: DetectedDesignTokens;
+  components: DetectedComponent[];
+}
+
+export interface DetectionSessionResult {
+  success: boolean;
+  session_id: string;
+  globals_id: string;
+  page_number: number;
+  detection: {
+    components_count: number;
+    components: Array<{ code: string; id?: string; name?: string; error?: string }>;
+    page_geometry: DetectedPageGeometry;
+    design_tokens: DetectedDesignTokens;
+  };
+  validation: {
+    errors_count: number;
+    errors: Array<{ field: string; message: string; value: unknown }>;
+    status: string;
+  };
 }
 
 export interface TranscribeProject {
