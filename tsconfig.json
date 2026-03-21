@@ -26,5 +26,6 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": ["mcp/**", "node_modules", "dist", "ccpm/**", "indesign-mcp/**", "mcp-bridge/**"]
 }

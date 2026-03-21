@@ -3,23 +3,59 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>アプリ作成し太郎</title>
+    <title>AIクラウド組版 — 文唱堂印刷</title>
+    <meta name="description" content="印刷・組版の事前準備をAIが自動化。PDF入稿から組版指示書の作成まで、ワンストップで効率化するクラウドSaaS。" />
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Serif+JP:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+      :root {
+        --sidebar-w: 260px;
+        --header-h: 56px;
+        --accent: #6366f1;
+        --accent-light: #818cf8;
+        --accent-dark: #4f46e5;
+        --accent-glow: rgba(99,102,241,.15);
+        --bg: #0f0f14;
+        --bg-card: #1a1a24;
+        --bg-surface: #13131b;
+        --bg-content: #f8f9fc;
+        --text-primary: #f1f5f9;
+        --text-secondary: #94a3b8;
+        --border-dark: rgba(255,255,255,.06);
+        --border-light: #e5e7eb;
+      }
+      * { box-sizing: border-box; }
       body {
-        font-family: 'Noto Sans JP', sans-serif;
-        background-color: #f3f4f6;
+        font-family: 'Inter', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, sans-serif;
+        background-color: var(--bg-content);
+        margin: 0;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }
-      .no-scrollbar::-webkit-scrollbar {
-        display: none;
-      }
-      .no-scrollbar {
-        -ms-overflow-style: none;
-        scrollbar-width: none;
-      }
+      
+      /* Scrollbar styling */
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: rgba(99,102,241,.3); border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,.5); }
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+      /* Animations */
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+      @keyframes slideIn { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+      @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); } 50% { box-shadow: 0 0 20px 4px var(--accent-glow); } }
+      @keyframes gradient-shift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+      .animate-fadeIn { animation: fadeIn .4s ease-out; }
+      .animate-slideIn { animation: slideIn .3s ease-out; }
+      .animate-pulse-glow { animation: pulse-glow 2s infinite; }
+      .animate-gradient { background-size: 200% 200%; animation: gradient-shift 8s ease infinite; }
+
+      /* Glassmorphism */
+      .glass { background: rgba(255,255,255,.7); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,.8); }
+      .glass-dark { background: rgba(15,15,20,.92); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
     </style>
   </head>
   <body>

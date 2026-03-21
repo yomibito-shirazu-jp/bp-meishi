@@ -16,8 +16,8 @@ import {
 } from '../types';
 import { getConfig } from './config';
 
-const TYPESETTING_URL = 'https://avakiygdyafqjrhlvbjg.supabase.co';
-const TYPESETTING_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF2YWtpeWdkeWFmcWpyaGx2YmpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODAzOTIsImV4cCI6MjA4OTU1NjM5Mn0.6X_9qlsrQSXx9eSKZQ3k0bqT2CM083L_NDsiSLaolOI';
+const getTypesettingUrl = () => getConfig('VITE_TYPESETTING_URL') || 'https://avakiygdyafqjrhlvbjg.supabase.co';
+const getTypesettingKey = () => getConfig('VITE_TYPESETTING_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF2YWtpeWdkeWFmcWpyaGx2YmpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODAzOTIsImV4cCI6MjA4OTU1NjM5Mn0.6X_9qlsrQSXx9eSKZQ3k0bqT2CM083L_NDsiSLaolOI';
 
 // ── Gemini直接呼び出し用のスキーマ（フォールバック） ──
 const VALIDATION_SCHEMA = {
@@ -109,12 +109,12 @@ export async function validateManuscript(params: {
 }): Promise<ValidationReportResponse> {
   // Try Edge Function first
   try {
-    const url = `${TYPESETTING_URL}/functions/v1/validate-manuscript`;
+    const url = `${getTypesettingUrl()}/functions/v1/validate-manuscript`;
     const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${TYPESETTING_ANON_KEY}`,
+        'Authorization': `Bearer ${getTypesettingKey()}`,
       },
       body: JSON.stringify({
         customer_name: params.customer_name,
@@ -252,12 +252,12 @@ export async function submitFeedback(params: {
 }): Promise<FeedbackResponse> {
   // Try Edge Function first
   try {
-    const url = `${TYPESETTING_URL}/functions/v1/feedback-loop`;
+    const url = `${getTypesettingUrl()}/functions/v1/feedback-loop`;
     const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${TYPESETTING_ANON_KEY}`,
+        'Authorization': `Bearer ${getTypesettingKey()}`,
       },
       body: JSON.stringify({
         report_id: params.report_id,

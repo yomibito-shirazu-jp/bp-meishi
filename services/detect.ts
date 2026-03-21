@@ -9,8 +9,8 @@
 import { DetectionSessionResult } from '../types';
 import { getConfig } from './config';
 
-const TYPESETTING_URL = 'https://avakiygdyafqjrhlvbjg.supabase.co';
-const TYPESETTING_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF2YWtpeWdkeWFmcWpyaGx2YmpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODAzOTIsImV4cCI6MjA4OTU1NjM5Mn0.6X_9qlsrQSXx9eSKZQ3k0bqT2CM083L_NDsiSLaolOI';
+const getTypesettingUrl = () => getConfig('VITE_TYPESETTING_URL') || 'https://avakiygdyafqjrhlvbjg.supabase.co';
+const getTypesettingKey = () => getConfig('VITE_TYPESETTING_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF2YWtpeWdkeWFmcWpyaGx2YmpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODAzOTIsImV4cCI6MjA4OTU1NjM5Mn0.6X_9qlsrQSXx9eSKZQ3k0bqT2CM083L_NDsiSLaolOI';
 
 /**
  * PDFファイルをページ画像に変換
@@ -177,7 +177,7 @@ async function detectViaDirectGemini(
   // 画像をリサイズしてトークン数を削減
   const resized = await resizeImageBase64(imageBase64, mimeType);
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`;
   const body = {
     contents: [{
       parts: [
@@ -259,12 +259,12 @@ export async function detectPageLayout(params: {
 }): Promise<DetectionSessionResult> {
   // Try Edge Function first
   try {
-    const url = `${TYPESETTING_URL}/functions/v1/detect-layout`;
+    const url = `${getTypesettingUrl()}/functions/v1/detect-layout`;
     const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${TYPESETTING_ANON_KEY}`,
+        'Authorization': `Bearer ${getTypesettingKey()}`,
       },
       body: JSON.stringify({
         image_base64: params.image_base64,

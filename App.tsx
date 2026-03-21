@@ -30,18 +30,34 @@ const FONT_LABELS: Record<string, string> = {
   gothic_bold: 'ゴシック太',
 };
 
-// Teal theme (FXGT-inspired)
+// Premium SaaS theme — Dark sidebar + Indigo accent
 const C = {
-  bg: '#f1f5f9',
+  // Content area (light)
+  bg: '#f8f9fc',
   card: '#ffffff',
-  surface: '#f8fafc',
-  border: '#e2e8f0',
-  text: '#0f172a',
-  textSec: '#475569',
-  muted: '#94a3b8',
-  accent: '#0d9488',
-  accentBg: '#f0fdfa',
-  accentBorder: '#99f6e4',
+  surface: '#f1f3f9',
+  border: '#e5e7eb',
+  text: '#111827',
+  textSec: '#6b7280',
+  muted: '#9ca3af',
+  // Accent (Indigo)
+  accent: '#6366f1',
+  accentHover: '#4f46e5',
+  accentBg: 'rgba(99,102,241,.08)',
+  accentBorder: 'rgba(99,102,241,.2)',
+  accentGlow: 'rgba(99,102,241,.15)',
+  // Sidebar (dark)
+  sidebarBg: '#0f0f14',
+  sidebarCard: '#1a1a24',
+  sidebarBorder: 'rgba(255,255,255,.06)',
+  sidebarText: '#e2e8f0',
+  sidebarTextSec: '#64748b',
+  sidebarMuted: '#475569',
+  // Gradients
+  gradientPrimary: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%)',
+  gradientAccent: 'linear-gradient(135deg, #6366f1 0%, #06b6d4 100%)',
+  gradientDark: 'linear-gradient(180deg, #13131b 0%, #0f0f14 100%)',
+  gradientCard: 'linear-gradient(135deg, rgba(99,102,241,.04) 0%, rgba(139,92,246,.04) 100%)',
 };
 
 /* ═══════════════════════════════════════════
@@ -588,14 +604,19 @@ const App: React.FC = () => {
   // ── Toast ──
   const renderToast = () => {
     if (!toast) return null;
-    const colors = {
-      ok: 'bg-emerald-900/90 border-emerald-700 text-emerald-100',
-      error: 'bg-red-900/90 border-red-700 text-red-100',
-      info: 'bg-slate-800/90 border-slate-600 text-slate-100',
+    const styles = {
+      ok: { bg: 'rgba(16,185,129,.95)', border: 'rgba(52,211,153,.5)', icon: '✓' },
+      error: { bg: 'rgba(239,68,68,.95)', border: 'rgba(248,113,113,.5)', icon: '✕' },
+      info: { bg: 'rgba(99,102,241,.95)', border: 'rgba(129,140,248,.5)', icon: '' },
     };
+    const s = styles[toast.type];
     return (
-      <div className={`fixed top-4 right-4 z-[100] px-4 py-2.5 rounded-lg border text-sm font-medium flex items-center gap-2 shadow-xl backdrop-blur-sm ${colors[toast.type]}`}>
-        {toast.type === 'info' && <div className="w-4 h-4 border-2 border-slate-400 border-t-white rounded-full animate-spin" />}
+      <div
+        className="fixed top-4 right-4 z-[100] px-5 py-3 rounded-xl text-[13px] font-semibold text-white flex items-center gap-3 shadow-2xl animate-fadeIn"
+        style={{ background: s.bg, backdropFilter: 'blur(12px)', border: `1px solid ${s.border}` }}
+      >
+        {toast.type === 'info' && <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+        {toast.type !== 'info' && <span className="text-sm">{s.icon}</span>}
         {toast.text}
       </div>
     );
@@ -647,30 +668,44 @@ const App: React.FC = () => {
 
     return (
       <div
-        className={`${sidebarCollapsed ? 'w-16' : 'w-56'} flex flex-col transition-all duration-200 shrink-0 border-r`}
-        style={{ background: C.card, borderColor: C.border }}
+        className={`${sidebarCollapsed ? 'w-[68px]' : 'w-[260px]'} flex flex-col transition-all duration-300 shrink-0 relative`}
+        style={{ background: C.gradientDark }}
       >
+        {/* Subtle glow line on right edge */}
+        <div className="absolute right-0 top-0 bottom-0 w-px" style={{ background: 'linear-gradient(180deg, rgba(99,102,241,.3) 0%, rgba(99,102,241,.05) 50%, rgba(99,102,241,.3) 100%)' }} />
+
         {/* Logo */}
-        <div className="px-4 py-5 flex items-center gap-3 border-b" style={{ borderColor: C.border }}>
+        <div className="px-5 py-5 flex items-center gap-3">
           <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 text-white"
-            style={{ background: C.accent }}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-extrabold text-white shrink-0 shadow-lg animate-pulse-glow"
+            style={{ background: C.gradientPrimary }}
           >
-            印
+            P
           </div>
           {!sidebarCollapsed && (
-            <span className="text-sm font-bold tracking-tight leading-tight" style={{ color: C.text }}>
-              印刷ツールボックス
-            </span>
+            <div className="animate-slideIn">
+              <span className="text-[15px] font-bold tracking-tight" style={{ color: C.sidebarText }}>
+                AIクラウド
+              </span>
+              <span className="text-[15px] font-light tracking-tight ml-1" style={{ color: C.accent }}>
+                組版
+              </span>
+              <p className="text-[10px] font-medium tracking-wider" style={{ color: C.sidebarMuted }}>
+                文唱堂印刷
+              </p>
+            </div>
           )}
         </div>
 
         {/* Nav sections */}
-        <nav className="flex-1 py-3 px-2 space-y-4 overflow-y-auto">
+        <nav className="flex-1 py-2 px-3 space-y-5 overflow-y-auto no-scrollbar">
           {sections.map(section => (
             <div key={section.title}>
               {!sidebarCollapsed && (
-                <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: C.muted }}>
+                <div
+                  className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[.12em]"
+                  style={{ color: C.sidebarMuted }}
+                >
                   {section.title}
                 </div>
               )}
@@ -685,17 +720,27 @@ const App: React.FC = () => {
                         else if (item.state === AppState.AI_CHAT) { setView(AppState.AI_CHAT); setShowChatInEditor(false); }
                         else setView(item.state);
                       }}
-                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-200 group relative ${sidebarCollapsed ? 'justify-center' : ''}`}
                       style={active
-                        ? { background: C.accentBg, color: C.accent, borderLeft: `3px solid ${C.accent}` }
-                        : { color: C.textSec, borderLeft: '3px solid transparent' }}
+                        ? { background: 'rgba(99,102,241,.15)', color: '#a5b4fc' }
+                        : { color: C.sidebarTextSec }}
                     >
-                      <item.icon size={18} className="shrink-0" />
-                      {!sidebarCollapsed && <span className="flex-1 text-left">{item.label}</span>}
+                      {active && (
+                        <div
+                          className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full"
+                          style={{ background: C.accent }}
+                        />
+                      )}
+                      <item.icon size={17} className={`shrink-0 transition-colors ${active ? '' : 'group-hover:text-slate-300'}`} />
+                      {!sidebarCollapsed && (
+                        <span className={`flex-1 text-left truncate transition-colors ${active ? '' : 'group-hover:text-slate-300'}`}>
+                          {item.label}
+                        </span>
+                      )}
                       {!sidebarCollapsed && item.badge > 0 && (
                         <span
-                          className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-white"
-                          style={{ background: C.accent }}
+                          className="text-[10px] font-bold min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-white"
+                          style={{ background: C.gradientPrimary }}
                         >
                           {item.badge}
                         </span>
@@ -708,28 +753,24 @@ const App: React.FC = () => {
           ))}
         </nav>
 
-        {/* Settings */}
-        <div className="px-2 border-t pt-2" style={{ borderColor: C.border }}>
+        {/* Bottom section */}
+        <div className="px-3 pb-3 space-y-1" style={{ borderTop: `1px solid ${C.sidebarBorder}` }}>
           <button
             onClick={() => setView(AppState.SETTINGS)}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors"
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-all duration-200 mt-2 ${sidebarCollapsed ? 'justify-center' : ''}`}
             style={view === AppState.SETTINGS
-              ? { background: C.accentBg, color: C.accent, borderLeft: `3px solid ${C.accent}` }
-              : { color: C.textSec, borderLeft: '3px solid transparent' }}
+              ? { background: 'rgba(99,102,241,.15)', color: '#a5b4fc' }
+              : { color: C.sidebarTextSec }}
           >
-            <Settings size={18} className="shrink-0" />
+            <Settings size={17} className="shrink-0" />
             {!sidebarCollapsed && <span className="flex-1 text-left">設定</span>}
           </button>
-        </div>
-
-        {/* Collapse toggle */}
-        <div className="px-2 pb-4">
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors hover:bg-slate-50"
-            style={{ color: C.muted }}
+            className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] transition-all duration-200 hover:bg-white/[.04] ${sidebarCollapsed ? 'justify-center' : ''}`}
+            style={{ color: C.sidebarMuted }}
           >
-            <ChevronLeft size={16} className={`transition-transform ${sidebarCollapsed ? 'rotate-180' : ''}`} />
+            <ChevronLeft size={14} className={`transition-transform duration-300 ${sidebarCollapsed ? 'rotate-180' : ''}`} />
             {!sidebarCollapsed && '折りたたむ'}
           </button>
         </div>
@@ -739,66 +780,71 @@ const App: React.FC = () => {
 
   // ── Header ──
   const renderHeader = () => (
-    <div className="h-14 bg-white border-b px-6 flex items-center justify-between shrink-0" style={{ borderColor: C.border }}>
+    <div
+      className="h-14 px-6 flex items-center justify-between shrink-0"
+      style={{ background: 'rgba(255,255,255,.85)', backdropFilter: 'blur(12px)', borderBottom: `1px solid ${C.border}` }}
+    >
       <div className="flex items-center gap-4">
         {view === AppState.EDIT && (
           <button
             onClick={resetAll}
-            className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors"
+            className="flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm font-medium transition-colors"
           >
             <ArrowLeft size={16} /> 一覧へ戻る
           </button>
         )}
-        {view === AppState.DASHBOARD && <h2 className="text-base font-bold text-slate-800">名刺データ一覧</h2>}
-        {view === AppState.INBOX && <h2 className="text-base font-bold text-slate-800">受信トレイ</h2>}
+        {view === AppState.DASHBOARD && <h2 className="text-[15px] font-bold text-gray-900">ダッシュボード</h2>}
+        {view === AppState.INBOX && <h2 className="text-[15px] font-bold text-gray-900">受信トレイ</h2>}
         {view === AppState.AI_CHAT && (
           <div className="flex items-center gap-2">
-            <Sparkles size={16} style={{ color: C.accent }} />
-            <h2 className="text-base font-bold text-slate-800">AI作成モード</h2>
+            <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background: C.accentBg }}>
+              <Sparkles size={13} style={{ color: C.accent }} />
+            </div>
+            <h2 className="text-[15px] font-bold text-gray-900">AI作成モード</h2>
           </div>
         )}
         {view === AppState.SETTINGS && (
           <div className="flex items-center gap-2">
-            <Settings size={16} className="text-slate-400" />
-            <h2 className="text-base font-bold text-slate-800">設定</h2>
+            <Settings size={15} className="text-gray-400" />
+            <h2 className="text-[15px] font-bold text-gray-900">設定</h2>
           </div>
         )}
-        {view === AppState.TRANSCRIBE_LIST && <h2 className="text-base font-bold text-slate-800">文字起こし一覧</h2>}
-        {view === AppState.TRANSCRIBE_HISTORY && <h2 className="text-base font-bold text-slate-800">文字起こし履歴</h2>}
+        {view === AppState.TRANSCRIBE_LIST && <h2 className="text-[15px] font-bold text-gray-900">文字起こし一覧</h2>}
+        {view === AppState.TRANSCRIBE_HISTORY && <h2 className="text-[15px] font-bold text-gray-900">文字起こし履歴</h2>}
         {view === AppState.TRANSCRIBE_AI && (
           <div className="flex items-center gap-2">
-            <FileAudio size={16} style={{ color: C.accent }} />
-            <h2 className="text-base font-bold text-slate-800">AI文字起こし</h2>
+            <FileAudio size={15} style={{ color: C.accent }} />
+            <h2 className="text-[15px] font-bold text-gray-900">AI文字起こし</h2>
           </div>
         )}
-        {view === AppState.TOOL_WRITING && <h2 className="text-base font-bold text-slate-800">文章作成</h2>}
-        {view === AppState.TOOL_OCR && <h2 className="text-base font-bold text-slate-800">OCR・文字起こし</h2>}
-        {view === AppState.TOOL_PDF_EDIT && <h2 className="text-base font-bold text-slate-800">PDF加工・修正・編集</h2>}
-        {view === AppState.TOOL_PDF_COMPARE && <h2 className="text-base font-bold text-slate-800">PDF比較</h2>}
-        {view === AppState.TOOL_PROOFREAD && <h2 className="text-base font-bold text-slate-800">校閲・校正・ファクトチェック</h2>}
-        {view === AppState.TOOL_TYPESET_SPEC && <h2 className="text-base font-bold text-slate-800">組版指示書</h2>}
+        {view === AppState.TOOL_WRITING && <h2 className="text-[15px] font-bold text-gray-900">文章作成</h2>}
+        {view === AppState.TOOL_OCR && <h2 className="text-[15px] font-bold text-gray-900">OCR・文字起こし</h2>}
+        {view === AppState.TOOL_PDF_EDIT && <h2 className="text-[15px] font-bold text-gray-900">PDF加工・修正・編集</h2>}
+        {view === AppState.TOOL_PDF_COMPARE && <h2 className="text-[15px] font-bold text-gray-900">PDF比較</h2>}
+        {view === AppState.TOOL_PROOFREAD && <h2 className="text-[15px] font-bold text-gray-900">校閲・校正</h2>}
+        {view === AppState.TOOL_TYPESET_SPEC && <h2 className="text-[15px] font-bold text-gray-900">組版指示書</h2>}
         {view === AppState.TOOL_DETECT_LAYOUT && (
           <div className="flex items-center gap-2">
-            <LayoutTemplate size={16} style={{ color: C.accent }} />
-            <h2 className="text-base font-bold text-slate-800">レイアウト検出・プリセット化</h2>
+            <LayoutTemplate size={15} style={{ color: C.accent }} />
+            <h2 className="text-[15px] font-bold text-gray-900">レイアウト検出</h2>
           </div>
         )}
         {view === AppState.TOOL_VALIDATE_MS && (
           <div className="flex items-center gap-2">
-            <ShieldCheck size={16} style={{ color: C.accent }} />
-            <h2 className="text-base font-bold text-slate-800">原稿検証・第一レポート</h2>
+            <ShieldCheck size={15} style={{ color: C.accent }} />
+            <h2 className="text-[15px] font-bold text-gray-900">原稿検証</h2>
           </div>
         )}
         {view === AppState.EDIT && (
           <div className="flex items-center gap-2">
-            <CreditCard size={16} className="text-slate-400" />
-            <span className="text-sm font-medium text-slate-700">
+            <CreditCard size={15} className="text-gray-400" />
+            <span className="text-sm font-medium text-gray-600">
               {editingProjectId ? 'データ編集' : '新規データ'}
             </span>
             {editCount > 0 && (
               <span
-                className="text-[11px] font-semibold px-2 py-0.5 rounded-full border"
-                style={{ color: C.accent, background: C.accentBg, borderColor: C.accentBorder }}
+                className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                style={{ color: C.accent, background: C.accentBg, border: `1px solid ${C.accentBorder}` }}
               >
                 {editCount}件変更
               </span>
@@ -811,10 +857,10 @@ const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               onClick={() => { setView(AppState.AI_CHAT); setShowChatInEditor(false); }}
-              className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90 border"
-              style={{ background: 'linear-gradient(135deg, #0d9488, #06b6d4)', color: 'white' }}
+              className="px-4 py-2 rounded-xl text-[13px] font-semibold flex items-center gap-2 transition-all shadow-md hover:shadow-lg hover:scale-[1.02] text-white animate-gradient"
+              style={{ background: C.gradientPrimary }}
             >
-              <Wand2 size={16} /> AIで作成
+              <Wand2 size={15} /> AIで作成
             </button>
             <button
               onClick={async () => {
@@ -825,10 +871,10 @@ const App: React.FC = () => {
                   flash(e.message || 'Google Drive接続エラー', 'error');
                 }
               }}
-              className="text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm hover:opacity-90"
-              style={{ background: C.accent }}
+              className="px-4 py-2 rounded-xl text-[13px] font-semibold flex items-center gap-2 transition-all hover:bg-gray-100 border"
+              style={{ borderColor: C.border, color: C.textSec }}
             >
-              <HardDrive size={16} /> Google Drive
+              <HardDrive size={15} /> Google Drive
             </button>
           </div>
         )}
@@ -836,31 +882,30 @@ const App: React.FC = () => {
           <>
             <button
               onClick={() => setShowChatInEditor(!showChatInEditor)}
-              className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-lg border transition-colors"
+              className="flex items-center gap-1.5 text-[13px] font-medium px-3 py-2 rounded-xl border transition-all"
               style={{
                 borderColor: showChatInEditor ? C.accentBorder : C.border,
                 background: showChatInEditor ? C.accentBg : 'transparent',
                 color: showChatInEditor ? C.accent : C.textSec,
               }}
             >
-              <MessageSquare size={15} /> AI指示
+              <MessageSquare size={14} /> AI指示
             </button>
             <button
               onClick={handleSave}
-              className="flex items-center gap-1.5 text-slate-600 hover:text-slate-800 text-sm font-medium px-3 py-2 rounded-lg hover:bg-slate-50 border transition-colors"
-              style={{ borderColor: C.border }}
+              className="flex items-center gap-1.5 text-[13px] font-medium px-3 py-2 rounded-xl border transition-all hover:bg-gray-50"
+              style={{ borderColor: C.border, color: C.textSec }}
             >
-              <Save size={15} /> 保存
+              <Save size={14} /> 保存
             </button>
             <button
               onClick={handleRebuild}
               disabled={!pdfB64 || editCount === 0}
-              className={`text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all shadow-sm
-                ${pdfB64 && editCount > 0 ? 'hover:opacity-90' : 'opacity-40 cursor-not-allowed'}`}
-              style={{ background: pdfB64 && editCount > 0 ? C.accent : '#94a3b8' }}
-              title={!pdfB64 ? '元PDFがありません' : editCount === 0 ? '変更がありません' : '再構築してPDFをダウンロード'}
+              className={`text-white px-4 py-2 rounded-xl text-[13px] font-semibold flex items-center gap-2 transition-all shadow-md
+                ${pdfB64 && editCount > 0 ? 'hover:shadow-lg hover:scale-[1.02]' : 'opacity-40 cursor-not-allowed'}`}
+              style={{ background: pdfB64 && editCount > 0 ? C.gradientPrimary : '#d1d5db' }}
             >
-              <Download size={15} /> 再構築 & PDF出力
+              <Download size={14} /> 再構築 & PDF出力
             </button>
           </>
         )}
@@ -990,41 +1035,65 @@ const App: React.FC = () => {
 
         {/* Empty state */}
         {projects.length === 0 && !loading && (
-          <div className="bg-white rounded-xl border border-dashed p-12" style={{ borderColor: '#d4d2cc' }}>
-            <div
-              className={`max-w-md mx-auto text-center cursor-pointer transition-all ${dragOver ? 'scale-[1.02]' : ''}`}
-              onClick={() => fileRef.current?.click()}
-              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files[0]) handleUpload(e.dataTransfer.files[0]); }}
-            >
-              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-5" style={{ background: C.surface }}>
-                <Upload size={28} style={{ color: C.muted }} />
-              </div>
-              <p className="text-lg font-bold text-slate-700">名刺PDFをアップロード</p>
-              <p className="text-sm mt-2 leading-relaxed" style={{ color: C.muted }}>
-                PDFをドラッグ&ドロップ、またはクリックして選択
-              </p>
-              <div className="mt-6 flex items-center justify-center gap-2">
-                <span className="text-[11px] px-2.5 py-1 rounded-full font-medium" style={{ background: C.surface, color: C.muted }}>PDF</span>
-                <span className="text-[11px] px-2.5 py-1 rounded-full font-medium" style={{ background: C.surface, color: C.muted }}>Cloud Run</span>
-                <span className="text-[11px] px-2.5 py-1 rounded-full font-medium" style={{ background: C.surface, color: C.muted }}>Supabase</span>
-              </div>
-              <button
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  try {
-                    const file = await pickPdfFromDrive();
-                    if (file) handleUpload(file);
-                  } catch (err: any) {
-                    flash(err.message || 'Google Drive接続エラー', 'error');
-                  }
-                }}
-                className="mt-4 text-white px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 mx-auto transition-colors hover:opacity-90 shadow-sm"
-                style={{ background: C.accent }}
+          <div
+            className="rounded-2xl p-1 animate-fadeIn"
+            style={{ background: C.gradientPrimary }}
+          >
+            <div className="bg-white rounded-[14px] p-12">
+              <div
+                className={`max-w-lg mx-auto text-center cursor-pointer transition-all duration-300 ${dragOver ? 'scale-[1.03]' : ''}`}
+                onClick={() => fileRef.current?.click()}
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files[0]) handleUpload(e.dataTransfer.files[0]); }}
               >
-                <HardDrive size={16} /> Google Driveから選択
-              </button>
+                <div
+                  className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg"
+                  style={{ background: C.gradientPrimary }}
+                >
+                  <Upload size={32} className="text-white" />
+                </div>
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">PDFをアップロード</h3>
+                <p className="text-[15px] text-gray-500 leading-relaxed mb-8">
+                  ドラッグ&ドロップ、またはクリックしてPDFファイルを選択<br />
+                  AI が自動で構造解析・テキスト抽出を行います
+                </p>
+
+                {/* Feature badges */}
+                <div className="flex items-center justify-center gap-3 mb-8">
+                  {[
+                    { icon: '⚡', label: 'AI 構造解析' },
+                    { icon: '🔤', label: 'OCR 自動補正' },
+                    { icon: '📋', label: '組版指示書' },
+                  ].map(f => (
+                    <div
+                      key={f.label}
+                      className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-medium"
+                      style={{ background: C.surface, color: C.textSec }}
+                    >
+                      <span>{f.icon}</span> {f.label}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      try {
+                        const file = await pickPdfFromDrive();
+                        if (file) handleUpload(file);
+                      } catch (err: any) {
+                        flash(err.message || 'Google Drive接続エラー', 'error');
+                      }
+                    }}
+                    className="px-6 py-3 rounded-xl text-[13px] font-semibold flex items-center gap-2 transition-all hover:bg-gray-100 border shadow-sm"
+                    style={{ borderColor: C.border, color: C.textSec }}
+                  >
+                    <HardDrive size={16} /> Google Driveから選択
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1686,7 +1755,7 @@ const App: React.FC = () => {
           const apiKey = settingsDraft['VITE_GOOGLE_AI_KEY'] ?? getConfig('VITE_GOOGLE_AI_KEY');
           if (!apiKey) throw new Error('API キーを入力してください');
           const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -2112,8 +2181,8 @@ const App: React.FC = () => {
 
       // 合議: 複数モデルで同時実行
       const [result1, result2] = await Promise.all([
-        callGemini('gemini-3.1-flash-lite-preview', prompt),
-        callGemini('gemini-3.1-flash-lite-preview', prompt),
+        callGemini('gemini-3.1-pro-preview', prompt),
+        callGemini('gemini-3.1-pro-preview', prompt),
       ]);
 
       // 合議結果をマージ（長い方を基準に）
@@ -2125,8 +2194,8 @@ const App: React.FC = () => {
         source_type: 'upload',
         text: consensus,
         ai_results: [
-          { model: 'gemini-3.1-flash-lite-preview', text: result1 },
-          { model: 'gemini-3.1-flash-lite-preview', text: result2 },
+          { model: 'gemini-3.1-pro-preview', text: result1 },
+          { model: 'gemini-3.1-pro-preview', text: result2 },
         ],
         consensus_text: consensus,
         created_at: new Date().toISOString(),
@@ -2299,7 +2368,7 @@ const App: React.FC = () => {
 
       // Geminiで文書構造を解析 → 組版指示を生成
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2630,6 +2699,7 @@ JSONのみ返してください。` },
   const [toolOutput, setToolOutput] = useState('');
   const [toolLoading, setToolLoading] = useState(false);
   const [toolFile, setToolFile] = useState<File | null>(null);
+  const [toolFile2, setToolFile2] = useState<File | null>(null);
 
   const TOOL_DEFS: Record<string, {
     title: string; description: string; placeholder: string;
@@ -2726,7 +2796,7 @@ JSONのみ返してください。` },
       }
 
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2773,39 +2843,86 @@ JSONのみ返してください。` },
 
           {/* Input area */}
           <div className="bg-white rounded-2xl border shadow-sm p-6" style={{ borderColor: C.border }}>
-            <h4 className="text-sm font-bold text-slate-700 mb-3">入力</h4>
-            <textarea
-              className="w-full border rounded-xl p-4 text-sm min-h-[160px] resize-y focus:outline-none focus:ring-2 focus:ring-teal-300 transition-all"
-              style={{ borderColor: C.border }}
-              placeholder={def.placeholder}
-              value={toolInput}
-              onChange={e => setToolInput(e.target.value)}
-            />
-            
-            {/* File upload */}
-            <div className="mt-3 flex items-center gap-3">
-              <label className="cursor-pointer flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors hover:bg-slate-50" style={{ borderColor: C.border, color: C.textSec }}>
-                <Upload size={16} />
-                ファイルを添付
-                <input
-                  type="file"
-                  className="hidden"
-                  accept=".txt,.csv,.pdf,.png,.jpg,.jpeg"
-                  onChange={e => setToolFile(e.target.files?.[0] || null)}
+            {toolId === 'pdf_compare' ? (
+              /* === PDF比較: 2ファイル専用UI === */
+              <>
+                <h4 className="text-sm font-bold text-slate-700 mb-4">初校と再校を選択</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  {/* 初校 */}
+                  <div className="border-2 border-dashed rounded-xl p-5 text-center transition-all hover:border-pink-300" style={{ borderColor: toolFile ? '#10b981' : C.border }}>
+                    <p className="text-xs font-bold text-slate-500 mb-2">📄 初校（基点）</p>
+                    <button
+                      onClick={async () => { try { const f = await pickPdfFromDrive(); if (f) setToolFile(f); } catch (e: any) { flash(e.message, 'error'); } }}
+                      className="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-80 text-white"
+                      style={{ background: def.gradient }}
+                    >
+                      <HardDrive size={14} className="inline mr-1" /> Google Driveから選択
+                    </button>
+                    {toolFile && <p className="mt-2 text-xs text-emerald-600 font-medium">✓ {toolFile.name}</p>}
+                  </div>
+                  {/* 再校 */}
+                  <div className="border-2 border-dashed rounded-xl p-5 text-center transition-all hover:border-pink-300" style={{ borderColor: toolFile2 ? '#10b981' : C.border }}>
+                    <p className="text-xs font-bold text-slate-500 mb-2">📄 再校（比較対象）</p>
+                    <button
+                      onClick={async () => { try { const f = await pickPdfFromDrive(); if (f) setToolFile2(f); } catch (e: any) { flash(e.message, 'error'); } }}
+                      className="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-80 text-white"
+                      style={{ background: def.gradient }}
+                    >
+                      <HardDrive size={14} className="inline mr-1" /> Google Driveから選択
+                    </button>
+                    {toolFile2 && <p className="mt-2 text-xs text-emerald-600 font-medium">✓ {toolFile2.name}</p>}
+                  </div>
+                </div>
+                <textarea
+                  className="w-full border rounded-xl p-4 text-sm min-h-[100px] resize-y focus:outline-none focus:ring-2 focus:ring-pink-300 transition-all"
+                  style={{ borderColor: C.border }}
+                  placeholder="補足指示（任意）: 特に注意して比較してほしい箇所があれば記入..."
+                  value={toolInput}
+                  onChange={e => setToolInput(e.target.value)}
                 />
-              </label>
-              {toolFile && (
-                <span className="text-xs text-slate-500 flex items-center gap-1">
-                  <FileText size={14} /> {toolFile.name}
-                  <button onClick={() => setToolFile(null)} className="text-red-400 hover:text-red-600 ml-1">×</button>
-                </span>
-              )}
-            </div>
+              </>
+            ) : (
+              /* === 通常ツールUI === */
+              <>
+                <h4 className="text-sm font-bold text-slate-700 mb-3">入力</h4>
+                <textarea
+                  className="w-full border rounded-xl p-4 text-sm min-h-[160px] resize-y focus:outline-none focus:ring-2 focus:ring-teal-300 transition-all"
+                  style={{ borderColor: C.border }}
+                  placeholder={def.placeholder}
+                  value={toolInput}
+                  onChange={e => setToolInput(e.target.value)}
+                />
+                
+                {/* Google Drive file picker */}
+                <div className="mt-3 flex items-center gap-3">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const file = await pickPdfFromDrive();
+                        if (file) setToolFile(file);
+                      } catch (err: any) {
+                        flash(err.message || 'Google Drive接続エラー', 'error');
+                      }
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl border text-[13px] font-medium transition-all hover:bg-gray-50"
+                    style={{ borderColor: C.border, color: C.textSec }}
+                  >
+                    <HardDrive size={16} /> Google Driveから選択
+                  </button>
+                  {toolFile && (
+                    <span className="text-xs text-gray-500 flex items-center gap-1">
+                      <FileText size={14} /> {toolFile.name}
+                      <button onClick={() => setToolFile(null)} className="text-red-400 hover:text-red-600 ml-1">×</button>
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
 
             <div className="mt-4 flex justify-end">
               <button
                 onClick={() => handleToolSubmit(toolId)}
-                disabled={toolLoading || (!toolInput.trim() && !toolFile)}
+                disabled={toolLoading || (toolId === 'pdf_compare' ? (!toolFile || !toolFile2) : (!toolInput.trim() && !toolFile))}
                 className="px-6 py-2.5 rounded-xl text-sm font-bold text-white shadow-md transition-all hover:opacity-90 disabled:opacity-40 flex items-center gap-2"
                 style={{ background: def.gradient }}
               >
