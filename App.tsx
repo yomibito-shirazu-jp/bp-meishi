@@ -16,6 +16,7 @@ import {
   Settings, CheckCircle2, XCircle, Key, RefreshCw,
   FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
   PenTool, ScanText, FileEdit, FileDiff, ShieldCheck, BookType,
+  Newspaper, BookMarked, Monitor,
 } from 'lucide-react';
 
 
@@ -626,35 +627,30 @@ const App: React.FC = () => {
   const renderSidebar = () => {
     const sections = [
       {
-        title: '入稿・管理',
+        title: 'クラウド組版',
         items: [
-          { icon: LayoutDashboard, label: 'ダッシュボード', badge: 0, state: AppState.DASHBOARD },
-          { icon: Inbox, label: '受信トレイ', badge: inboxProjects.length, state: AppState.INBOX },
+          { icon: CreditCard, label: '名刺', badge: 0, state: AppState.KUMIHAN_MEISHI },
+          { icon: Newspaper, label: '新聞', badge: 0, state: AppState.KUMIHAN_NEWSPAPER },
+          { icon: BookMarked, label: '商業出版', badge: 0, state: AppState.KUMIHAN_COMMERCIAL },
         ],
       },
       {
-        title: '原稿処理',
+        title: 'ツール',
         items: [
-          { icon: ScanText, label: 'OCR・文字起こし', badge: 0, state: AppState.TOOL_OCR },
-          { icon: FileAudio, label: 'AI文字起こし', badge: 0, state: AppState.TRANSCRIBE_AI },
           { icon: PenTool, label: '文章作成・リライト', badge: 0, state: AppState.TOOL_WRITING },
-        ],
-      },
-      {
-        title: 'AI構造解析',
-        items: [
-          { icon: LayoutTemplate, label: 'レイアウト検出', badge: 0, state: AppState.TOOL_DETECT_LAYOUT },
-          { icon: BookType, label: '組版指示書', badge: 0, state: AppState.TOOL_TYPESET_SPEC },
-          { icon: Wand2, label: 'AI組版エージェント', badge: 0, state: AppState.AI_CHAT },
-        ],
-      },
-      {
-        title: '校正・品質管理',
-        items: [
+          { icon: ScanText, label: 'OCR・文字起こし', badge: 0, state: AppState.TOOL_OCR },
           { icon: ShieldCheck, label: '校閲・校正', badge: 0, state: AppState.TOOL_PROOFREAD },
-          { icon: ShieldCheck, label: '原稿検証', badge: 0, state: AppState.TOOL_VALIDATE_MS },
           { icon: FileDiff, label: 'PDF比較（初校⇔再校）', badge: 0, state: AppState.TOOL_PDF_COMPARE },
           { icon: FileEdit, label: 'PDF加工・編集', badge: 0, state: AppState.TOOL_PDF_EDIT },
+          { icon: BookType, label: '組版指示書', badge: 0, state: AppState.TOOL_TYPESET_SPEC },
+          { icon: LayoutTemplate, label: 'レイアウト検出', badge: 0, state: AppState.TOOL_DETECT_LAYOUT },
+          { icon: ShieldCheck, label: '原稿検証', badge: 0, state: AppState.TOOL_VALIDATE_MS },
+        ],
+      },
+      {
+        title: 'AIインデザイン',
+        items: [
+          { icon: Monitor, label: 'InDesign連携', badge: 0, state: AppState.AI_INDESIGN },
         ],
       },
     ];
@@ -844,6 +840,10 @@ const App: React.FC = () => {
             <h2 className="text-[15px] font-bold text-gray-900">原稿検証</h2>
           </div>
         )}
+        {view === AppState.KUMIHAN_MEISHI && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜名刺</h2>}
+        {view === AppState.KUMIHAN_NEWSPAPER && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜新聞</h2>}
+        {view === AppState.KUMIHAN_COMMERCIAL && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜商業出版</h2>}
+        {view === AppState.AI_INDESIGN && <h2 className="text-[15px] font-bold text-gray-900">AIインデザイン</h2>}
         {view === AppState.EDIT && (
           <div className="flex items-center gap-2">
             <CreditCard size={15} className="text-gray-400" />
@@ -3719,6 +3719,82 @@ JSONのみ返してください。` },
         {view === AppState.TOOL_TYPESET_SPEC && renderToolWorkspace('typeset_spec')}
         {view === AppState.TOOL_DETECT_LAYOUT && renderDetectLayout()}
         {view === AppState.TOOL_VALIDATE_MS && renderValidateManuscript()}
+        {/* クラウド組版カテゴリ */}
+        {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL) && (
+          <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
+            <div className="max-w-5xl mx-auto">
+              <div className="rounded-2xl p-1" style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : view === AppState.KUMIHAN_NEWSPAPER ? 'linear-gradient(135deg, #3b82f6, #60a5fa)' : C.gradientPrimary }}>
+                <div className="bg-white rounded-[14px] p-10">
+                  <div className="text-center mb-8">
+                    <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '新聞' : '商業出版'}
+                    </h2>
+                    <p className="text-gray-500">
+                      {view === AppState.KUMIHAN_MEISHI && 'Google Driveから名刺PDFを入稿。AI構造解析→自動組版→校了PDFまでワンストップ。'}
+                      {view === AppState.KUMIHAN_NEWSPAPER && 'Google Driveから新聞原稿を入稿。段組み・見出し・写真配置をAIが自動レイアウト。'}
+                      {view === AppState.KUMIHAN_COMMERCIAL && 'Google Driveから書籍原稿を入稿。章立て・目次・索引をAIが構造解析し自動組版。'}
+                    </p>
+                  </div>
+                  <div className="flex justify-center">
+                    <button
+                      onClick={async () => {
+                        try {
+                          const file = await pickPdfFromDrive();
+                          if (file) handleUpload(file);
+                        } catch (err: any) { flash(err.message, 'error'); }
+                      }}
+                      className="px-8 py-4 rounded-xl text-[15px] font-bold flex items-center gap-3 text-white shadow-lg transition-all hover:opacity-90"
+                      style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : view === AppState.KUMIHAN_NEWSPAPER ? 'linear-gradient(135deg, #3b82f6, #60a5fa)' : C.gradientPrimary }}
+                    >
+                      <HardDrive size={20} /> Google Driveから入稿
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* AIインデザイン */}
+        {view === AppState.AI_INDESIGN && (
+          <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
+            <div className="max-w-4xl mx-auto space-y-6">
+              <div className="rounded-2xl p-1" style={{ background: 'linear-gradient(135deg, #f59e0b, #fbbf24)' }}>
+                <div className="bg-white rounded-[14px] p-8">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #f59e0b, #fbbf24)' }}>
+                      <Monitor size={24} className="text-white" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-bold text-gray-900">AIインデザイン連携</h2>
+                      <p className="text-sm text-gray-500">ローカルのInDesignをMCPで制御</p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-600 mb-6 leading-relaxed">
+                    ローカルPCにインストールされたAdobe InDesignに接続し、<br/>
+                    組版指示書に基づいて自動でドキュメント生成・テキスト流し込み・スタイル適用を実行します。
+                  </p>
+                  <div className="grid grid-cols-2 gap-3 mb-6">
+                    {[
+                      { label: 'ドキュメント新規作成', desc: '判型・マージン・段組みを自動設定' },
+                      { label: 'テキスト流し込み', desc: '原稿テキストをフレームに自動配置' },
+                      { label: 'スタイル適用', desc: '見出し・本文・キャプションのスタイル' },
+                      { label: 'PDF書き出し', desc: 'PDF/X-4入稿用データを自動生成' },
+                    ].map(cmd => (
+                      <div key={cmd.label} className="border rounded-xl p-4 hover:border-amber-300 transition-all cursor-pointer" style={{ borderColor: C.border }}>
+                        <p className="text-sm font-bold text-gray-800">{cmd.label}</p>
+                        <p className="text-xs text-gray-500 mt-1">{cmd.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200">
+                    <div className="w-3 h-3 rounded-full bg-red-400 animate-pulse" />
+                    <span className="text-sm text-amber-800 font-medium">InDesign未接続 — ローカルMCPサーバーを起動してください</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {view === AppState.EDIT && (
           <div className="flex-1 flex overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0">
