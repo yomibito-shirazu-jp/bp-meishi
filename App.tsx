@@ -17,6 +17,7 @@ import {
   FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
   PenTool, ScanText, FileEdit, FileDiff, ShieldCheck, BookType,
   Newspaper, BookMarked, Monitor,
+  DownloadCloud, Network, Map, FileCode2, Zap, ShieldAlert, Printer, CheckSquare,
 } from 'lucide-react';
 
 
@@ -635,16 +636,15 @@ const App: React.FC = () => {
         ],
       },
       {
-        title: 'ツール',
+        title: '神ツール軍（課題解決）',
         items: [
-          { icon: PenTool, label: '文章作成・リライト', badge: 0, state: AppState.TOOL_WRITING },
-          { icon: ScanText, label: 'OCR・文字起こし', badge: 0, state: AppState.TOOL_OCR },
-          { icon: ShieldCheck, label: '校閲・校正', badge: 0, state: AppState.TOOL_PROOFREAD },
-          { icon: FileDiff, label: 'PDF比較（初校⇔再校）', badge: 0, state: AppState.TOOL_PDF_COMPARE },
-          { icon: FileEdit, label: 'PDF加工・編集', badge: 0, state: AppState.TOOL_PDF_EDIT },
-          { icon: BookType, label: '組版指示書', badge: 0, state: AppState.TOOL_TYPESET_SPEC },
-          { icon: LayoutTemplate, label: 'レイアウト検出', badge: 0, state: AppState.TOOL_DETECT_LAYOUT },
-          { icon: ShieldCheck, label: '原稿検証', badge: 0, state: AppState.TOOL_VALIDATE_MS },
+          { icon: DownloadCloud, label: 'Step 1: 原稿受領', badge: 0, state: AppState.TOOL_STEP1_RECEIVE },
+          { icon: Network, label: 'Step 2: 三者合議① (正規化)', badge: 0, state: AppState.TOOL_STEP2_NORMALIZE },
+          { icon: Map, label: 'Step 3: 意味地図生成', badge: 0, state: AppState.TOOL_STEP3_MAP },
+          { icon: FileCode2, label: 'Step 4: 組版ルール確定', badge: 0, state: AppState.TOOL_STEP4_RULES },
+          { icon: Zap, label: 'Step 5: 全ページ一括生成', badge: 0, state: AppState.TOOL_STEP5_GENERATE },
+          { icon: ShieldAlert, label: 'Step 6: 三者合議② (品質検証)', badge: 0, state: AppState.TOOL_STEP6_QA },
+          { icon: Printer, label: 'Step 7: 印刷用PDF出力', badge: 0, state: AppState.TOOL_STEP7_EXPORT },
         ],
       },
       {
@@ -822,24 +822,13 @@ const App: React.FC = () => {
             <h2 className="text-[15px] font-bold text-gray-900">AI文字起こし</h2>
           </div>
         )}
-        {view === AppState.TOOL_WRITING && <h2 className="text-[15px] font-bold text-gray-900">文章作成</h2>}
-        {view === AppState.TOOL_OCR && <h2 className="text-[15px] font-bold text-gray-900">OCR・文字起こし</h2>}
-        {view === AppState.TOOL_PDF_EDIT && <h2 className="text-[15px] font-bold text-gray-900">PDF加工・修正・編集</h2>}
-        {view === AppState.TOOL_PDF_COMPARE && <h2 className="text-[15px] font-bold text-gray-900">PDF比較</h2>}
-        {view === AppState.TOOL_PROOFREAD && <h2 className="text-[15px] font-bold text-gray-900">校閲・校正</h2>}
-        {view === AppState.TOOL_TYPESET_SPEC && <h2 className="text-[15px] font-bold text-gray-900">組版指示書</h2>}
-        {view === AppState.TOOL_DETECT_LAYOUT && (
-          <div className="flex items-center gap-2">
-            <LayoutTemplate size={15} style={{ color: C.accent }} />
-            <h2 className="text-[15px] font-bold text-gray-900">レイアウト検出</h2>
-          </div>
-        )}
-        {view === AppState.TOOL_VALIDATE_MS && (
-          <div className="flex items-center gap-2">
-            <ShieldCheck size={15} style={{ color: C.accent }} />
-            <h2 className="text-[15px] font-bold text-gray-900">原稿検証</h2>
-          </div>
-        )}
+        {view === AppState.TOOL_STEP1_RECEIVE && <h2 className="text-[15px] font-bold text-gray-900">Step 1: 原稿受領</h2>}
+        {view === AppState.TOOL_STEP2_NORMALIZE && <h2 className="text-[15px] font-bold text-gray-900">Step 2: 三者合議① (原稿正規化)</h2>}
+        {view === AppState.TOOL_STEP3_MAP && <h2 className="text-[15px] font-bold text-gray-900">Step 3: 意味地図生成</h2>}
+        {view === AppState.TOOL_STEP4_RULES && <h2 className="text-[15px] font-bold text-gray-900">Step 4: 組版ルール確定</h2>}
+        {view === AppState.TOOL_STEP5_GENERATE && <h2 className="text-[15px] font-bold text-gray-900">Step 5: 全ページ一括生成</h2>}
+        {view === AppState.TOOL_STEP6_QA && <h2 className="text-[15px] font-bold text-gray-900">Step 6: 三者合議② (品質検証)</h2>}
+        {view === AppState.TOOL_STEP7_EXPORT && <h2 className="text-[15px] font-bold text-gray-900">Step 7: 印刷用PDF出力</h2>}
         {view === AppState.KUMIHAN_MEISHI && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜名刺</h2>}
         {view === AppState.KUMIHAN_NEWSPAPER && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜新聞</h2>}
         {view === AppState.KUMIHAN_COMMERCIAL && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜商業出版</h2>}
@@ -2691,59 +2680,68 @@ JSONのみ返してください。` },
     systemPrompt: string; color: string; gradient: string;
     features: string[];
   }> = {
-    writing: {
-      title: '文章作成・リライト',
-      description: '商業出版向けの文章をAIで作成・リライトします。書籍本文、帯文、目次、奥付、まえがき・あとがきなどに対応。',
-      placeholder: '例: 以下の原稿テキストを出版品質にリライトしてください。ターゲット読者は経営層。文体は敬体統一...',
-      systemPrompt: 'あなたは商業出版の編集者兼ライターです。書籍・雑誌・専門誌の原稿作成・リライトが専門です。以下を意識してください：\n・読者層を意識した文体の統一\n・見出し階層の適切な構成\n・組版を前提とした改行・段落設計\n・ルビが必要な語句の指示\n・JIS X 4051組版ルールに基づく約物処理',
+    step1: {
+      title: 'Step 1: 原稿受領',
+      description: 'Word / Google Docs / Markdown等の形式を問わず、原稿を一括で受け取りシステムに取り込みます。複数著者でも入口を統一。',
+      placeholder: '入稿する原稿のURL（Google Docs等）を入力するか、参照ボタンからファイルを選択してください...',
+      systemPrompt: 'あなたは入稿ファイルの受付担当エージェントです。与えられたテキストまたはファイルの形式を判別し、次のステップ(原稿正規化)へ渡すためのプレーンテキストを抽出してください。',
+      color: '#3b82f6',
+      gradient: 'linear-gradient(135deg, #3b82f6, #60a5fa)',
+      features: ['複数形式対応', 'Google Docs対応', 'Markdown対応', '形式一元化'],
+    },
+    step2: {
+      title: 'Step 2: 三者合議① (原稿正規化)',
+      description: '顧客別ルールベースエンジンを参照し、3つのAgent（表記検証・構造照合・意味検証）が合議で表記揺れを排除しVFMを生成します。',
+      placeholder: '正規化するテキストを入力してください...',
+      systemPrompt: 'あなたは原稿正規化の三者合議システムを統括するエージェントです。1.表記検証(表記揺れや禁止ワードの除去) 2.構造照合(見出しや階層の整理) 3.意味検証(正規化によって意味が壊れていないか) を行い、Vivliostyle Flavored Markdown (VFM) を出力します。地雷をゼロにしてください。',
       color: '#8b5cf6',
       gradient: 'linear-gradient(135deg, #8b5cf6, #a78bfa)',
-      features: ['原稿リライト', '見出し構成', '文体統一', '出版品質'],
+      features: ['表記検証', '構造照合', '意味検証', '地雷ゼロのVFM生成'],
     },
-    ocr: {
-      title: 'OCR・文字起こし',
-      description: '画像やPDFからテキストを抽出します。手書き原稿、FAX、スキャン画像のデジタル化に。',
-      placeholder: '画像をアップロードしてOCR処理を実行するか、テキストを入力して整形してください...',
-      systemPrompt: 'あなたはOCR・文字起こしの専門家です。入力されたテキストの誤字脱字を修正し、適切な改行・段落分けを行ってください。原稿の意図を汲み取り、印刷品質のテキストに仕上げてください。',
-      color: '#06b6d4',
-      gradient: 'linear-gradient(135deg, #06b6d4, #22d3ee)',
-      features: ['画像→テキスト変換', '手書き原稿対応', '誤字脱字修正', 'テキスト整形'],
-    },
-    pdf_edit: {
-      title: 'PDF加工・修正・編集',
-      description: 'PDFの内容確認やテキスト修正案を作成します。修正指示の整理や差し替え内容の準備に。',
-      placeholder: '例: 以下のテキストの誤りを修正してください。「株式回社○○ 代表取締駅 山田太朗」→...',
-      systemPrompt: 'あなたは印刷物のPDF校正の専門家です。テキストの誤字・脱字・表記揺れを発見し、修正案を提示してください。修正箇所は【修正前】→【修正後】の形式で明示してください。',
-      color: '#f59e0b',
-      gradient: 'linear-gradient(135deg, #f59e0b, #fbbf24)',
-      features: ['テキスト修正案', '表記揺れチェック', '修正指示整理', '差し替え準備'],
-    },
-    pdf_compare: {
-      title: 'PDF比較（初校⇔再校）',
-      description: '初校と再校の差分を検出。赤字修正の反映漏れ、意図しない変更を一括チェック。',
-      placeholder: '比較するテキストを入力してください。\n\n--- 初校 ---\n（初校テキストをここに）\n\n--- 再校 ---\n（再校テキストをここに）',
-      systemPrompt: 'あなたは印刷校正の差分チェック専門家です。2つのテキストを比較し、変更箇所を全て漏れなくリストアップしてください。追加・削除・変更をそれぞれ明示し、見落としがないか確認してください。変更箇所は行番号と共に報告してください。',
-      color: '#ec4899',
-      gradient: 'linear-gradient(135deg, #ec4899, #f472b6)',
-      features: ['テキスト差分検出', '初校⇔再校比較', '変更箇所一覧', '修正漏れチェック'],
-    },
-    proofread: {
-      title: '校閲・校正・ファクトチェック',
-      description: '商業出版原稿の校閲・校正。誤字脱字、表記統一、事実確認、JIS表記、法的リスクを一括チェック。',
-      placeholder: '校閲・校正対象のテキストを入力してください...',
-      systemPrompt: 'あなたは出版・印刷業界の校閲・校正の専門家です。以下の観点でテキストをチェックしてください：\n1. 誤字・脱字・変換ミス\n2. 表記の統一性（数字、単位、敬称）\n3. 事実関係の確認（電話番号、住所、日付、金額）\n4. 法的リスク（景品表示法、薬機法、著作権）\n5. 差別表現・不適切表現\n各指摘は【種別】【箇所】【指摘内容】【修正案】の形式で報告してください。',
+    step3: {
+      title: 'Step 3: 意味地図生成',
+      description: '正規化済みテキスト全文をベクトル化し、段落間の関係・意味の粒度・濃度・階層構造などの「意味地図」を一括確定します。',
+      placeholder: '意味地図を生成するVFMテキストを入力してください...',
+      systemPrompt: '全文のベクトル化とセマンティック解析を行う専門エージェントです。入力されたVFMの全体像を俯瞰し、各段落の濃度や関係を示す「意味地図(セマンティック・マップ)」として分析・出力してください。',
       color: '#10b981',
       gradient: 'linear-gradient(135deg, #10b981, #34d399)',
-      features: ['誤字脱字チェック', '事実確認', '表記統一', '法的リスク確認'],
+      features: ['全文ベクトル化', '構造分析', '粒度測定', 'マップ生成'],
     },
-    typeset_spec: {
-      title: '組版指示書作成・読み取り',
-      description: '組版指示書の作成や既存指示書の読み取り・解析を行います。フォント、級数、行送りなどの指定を整理。',
-      placeholder: '例: 以下の条件で組版指示書を作成してください。\n仕上がりサイズ: A4\n本文: 明朝体 13Q\n行送り: 22H\n段組み: 2段...',
-      systemPrompt: 'あなたは日本の印刷・組版の専門家です。組版指示書の作成・読み取りを行います。以下の項目を必ず含めてください：\n・仕上がりサイズ（判型）\n・本文書体・級数（Q/pt）・行送り（H）\n・見出し書体・級数\n・段組み・段間\n・マージン（天地左右ノド小口）\n・ノンブル位置・書体\n・柱の位置・書体\nJIS X 4051に準拠した日本語組版ルールを適用してください。',
+    step4: {
+      title: 'Step 4: 組版ルール確定',
+      description: '意味地図（JSON）を元に、最適なCSS（判型・段組・グリッド・マージン・フォント指定等）を数学的に全自動生成します。',
+      placeholder: '組版ルールを確定するための条件や意味地図情報を入力してください...',
+      systemPrompt: 'あなたは組版設計エージェントです。意味地図の実体に基づき、出力用の最適化されたCSSを数学的に確定してください。判型、フォント指定、行送り、マージン、段組の指定を網羅したCSSを出力してください。',
+      color: '#f59e0b',
+      gradient: 'linear-gradient(135deg, #f59e0b, #fbbf24)',
+      features: ['CSS自動生成', 'グリッド確定', 'フォント指定', '行送り計算'],
+    },
+    step5: {
+      title: 'Step 5: 全ページ一括生成',
+      description: 'Vivliostyle CLIにVFMとCSSを渡し、合議不要の機械的処理で全ページを同時に一瞬で生成します。',
+      placeholder: '生成・プレビューするコンテンツ情報を入力してください...',
+      systemPrompt: '組版エンジンを制御するシステムエージェントです。VFMとCSSを受け取り、Vivliostyleで処理して全ページを一括生成します。ここでは人間の合議や介入を排除し、処理の実行結果のログを出力してください。',
+      color: '#ec4899',
+      gradient: 'linear-gradient(135deg, #ec4899, #f472b6)',
+      features: ['Vivliostyle連携', '全ページ一斉生成', '合議不要・即時処理', 'PDF自動生成'],
+    },
+    step6: {
+      title: 'Step 6: 三者合議② (品質検証)',
+      description: '3つのAgentが、構造検証（ノンブル・柱）・マッピング照合・差分検証の合議で、生成PDFと元原稿の完全な整合性をチェック（プリフライト等19項目）。',
+      placeholder: '検証対象の組版データおよび元原稿等を入力してください...',
+      systemPrompt: '品質保証(QA)を統括するプロセスエージェントです。1.構造検証(奇数・偶数ページ、ノンブル) 2.マッピング検証(座標・フォントサイズと意味地図の照合) 3.差分検証(生成PDFテキストと入力原稿の完全一致) を行い、詳細なレポートを出力してください。',
+      color: '#ef4444',
+      gradient: 'linear-gradient(135deg, #ef4444, #f87171)',
+      features: ['19項目チェック', '構造検証', 'マッピング照合', '完全差分検証'],
+    },
+    step7: {
+      title: 'Step 7: 印刷用PDF出力',
+      description: '最終的なPDF/X-1a形式の入稿データを書き出し、印刷所への手配を完了。これにて校正サイクルは消滅します。',
+      placeholder: '出力対象のプロジェクト名等の情報を入力してください...',
+      systemPrompt: 'あなたはプリプレス出力エージェントです。最終検証をパスした完全なデータから、印刷トラブルのない安全な出力データ(PDF/X-1a等)の書き出し処理シミュレーションを実行し、処理完了のレポートを返してください。',
       color: '#6366f1',
       gradient: 'linear-gradient(135deg, #6366f1, #818cf8)',
-      features: ['指示書自動生成', '既存指示書解析', 'Q数/H数計算', '組版ルール適用'],
+      features: ['PDF/X-1a出力', '安全な入稿データ', '校正サイクル消滅', '手配完了'],
     },
   };
 
@@ -3711,14 +3709,13 @@ JSONのみ返してください。` },
         {view === AppState.TRANSCRIBE_LIST && renderTranscribeList()}
         {view === AppState.TRANSCRIBE_HISTORY && renderTranscribeHistory()}
         {view === AppState.TRANSCRIBE_AI && renderTranscribeAI()}
-        {view === AppState.TOOL_WRITING && renderToolWorkspace('writing')}
-        {view === AppState.TOOL_OCR && renderToolWorkspace('ocr')}
-        {view === AppState.TOOL_PDF_EDIT && renderToolWorkspace('pdf_edit')}
-        {view === AppState.TOOL_PDF_COMPARE && renderToolWorkspace('pdf_compare')}
-        {view === AppState.TOOL_PROOFREAD && renderToolWorkspace('proofread')}
-        {view === AppState.TOOL_TYPESET_SPEC && renderToolWorkspace('typeset_spec')}
-        {view === AppState.TOOL_DETECT_LAYOUT && renderDetectLayout()}
-        {view === AppState.TOOL_VALIDATE_MS && renderValidateManuscript()}
+        {view === AppState.TOOL_STEP1_RECEIVE && renderToolWorkspace('step1')}
+        {view === AppState.TOOL_STEP2_NORMALIZE && renderToolWorkspace('step2')}
+        {view === AppState.TOOL_STEP3_MAP && renderToolWorkspace('step3')}
+        {view === AppState.TOOL_STEP4_RULES && renderToolWorkspace('step4')}
+        {view === AppState.TOOL_STEP5_GENERATE && renderToolWorkspace('step5')}
+        {view === AppState.TOOL_STEP6_QA && renderToolWorkspace('step6')}
+        {view === AppState.TOOL_STEP7_EXPORT && renderToolWorkspace('step7')}
         {/* クラウド組版カテゴリ */}
         {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL) && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
