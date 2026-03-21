@@ -147,7 +147,7 @@ async function pickFromDrive(mimeTypes: string, title: string): Promise<File | n
 
 /** 名刺PDF用 Picker */
 export async function pickPdfFromDrive(): Promise<File | null> {
-  return pickFromDrive(MIME_PDF, '名刺PDFを選択');
+  return pickFromDrive(MIME_PDF, 'PDFファイルを選択');
 }
 
 /** 文字起こし用 Picker（音声・画像・PDF全対応）*/
