@@ -695,8 +695,11 @@ const App: React.FC = () => {
                 <span className="text-[9px] px-2 py-0.5 rounded-full font-bold text-white" style={{ background: C.gradientPrimary }}>
                   商業出版
                 </span>
-                <span className="text-[9px] px-1.5 py-0.5 rounded-full font-medium border opacity-40" style={{ borderColor: C.sidebarMuted, color: C.sidebarMuted }}>
+                <span className="text-[9px] px-2 py-0.5 rounded-full font-bold text-white" style={{ background: 'linear-gradient(135deg, #10b981, #34d399)' }}>
                   名刺
+                </span>
+                <span className="text-[8px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: 'rgba(251,191,36,.2)', color: '#fbbf24' }}>
+                  DEMO
                 </span>
               </div>
             </div>
