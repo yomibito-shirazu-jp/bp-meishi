@@ -995,17 +995,9 @@ const App: React.FC = () => {
     </div>
   );
 
-  // ── Dashboard ──
   const renderDashboard = () => (
     <div className="flex-1 overflow-auto" style={{ background: C.bg }}>
       <div className="max-w-6xl mx-auto p-8">
-        <input
-          type="file"
-          ref={fileRef}
-          className="hidden"
-          accept=".pdf,application/pdf"
-          onChange={e => { if (e.target.files?.[0]) handleUpload(e.target.files[0]); e.target.value = ''; }}
-        />
 
         {/* Search bar */}
         <div className="mb-6">
@@ -1015,7 +1007,7 @@ const App: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="会社名・名前・テキストで検索..."
+              placeholder="案件名・顧客名で検索..."
               className="w-full pl-11 pr-4 py-2.5 rounded-xl border text-sm font-medium focus:outline-none focus:ring-2 bg-white"
               style={{ borderColor: C.border }}
             />
@@ -1033,29 +1025,23 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* Empty state */}
+        {/* Empty state — URL入稿 */}
         {projects.length === 0 && !loading && (
           <div
             className="rounded-2xl p-1 animate-fadeIn"
             style={{ background: C.gradientPrimary }}
           >
             <div className="bg-white rounded-[14px] p-12">
-              <div
-                className={`max-w-lg mx-auto text-center cursor-pointer transition-all duration-300 ${dragOver ? 'scale-[1.03]' : ''}`}
-                onClick={() => fileRef.current?.click()}
-                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files[0]) handleUpload(e.dataTransfer.files[0]); }}
-              >
+              <div className="max-w-lg mx-auto text-center">
                 <div
                   className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg"
                   style={{ background: C.gradientPrimary }}
                 >
-                  <Upload size={32} className="text-white" />
+                  <HardDrive size={32} className="text-white" />
                 </div>
-                <h3 className="text-2xl font-bold text-gray-900 mb-2">PDFをアップロード</h3>
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">Google Driveから入稿</h3>
                 <p className="text-[15px] text-gray-500 leading-relaxed mb-8">
-                  ドラッグ&ドロップ、またはクリックしてPDFファイルを選択<br />
+                  Google Drive上のPDFを選択してください<br />
                   AI が自動で構造解析・テキスト抽出を行います
                 </p>
 
@@ -1076,23 +1062,20 @@ const App: React.FC = () => {
                   ))}
                 </div>
 
-                <div className="flex items-center justify-center gap-3">
-                  <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      try {
-                        const file = await pickPdfFromDrive();
-                        if (file) handleUpload(file);
-                      } catch (err: any) {
-                        flash(err.message || 'Google Drive接続エラー', 'error');
-                      }
-                    }}
-                    className="px-6 py-3 rounded-xl text-[13px] font-semibold flex items-center gap-2 transition-all hover:bg-gray-100 border shadow-sm"
-                    style={{ borderColor: C.border, color: C.textSec }}
-                  >
-                    <HardDrive size={16} /> Google Driveから選択
-                  </button>
-                </div>
+                <button
+                  onClick={async () => {
+                    try {
+                      const file = await pickPdfFromDrive();
+                      if (file) handleUpload(file);
+                    } catch (err: any) {
+                      flash(err.message || 'Google Drive接続エラー', 'error');
+                    }
+                  }}
+                  className="px-8 py-3.5 rounded-xl text-[14px] font-bold flex items-center gap-2 mx-auto transition-all hover:opacity-90 text-white shadow-lg"
+                  style={{ background: C.gradientPrimary }}
+                >
+                  <HardDrive size={18} /> Google Driveから選択
+                </button>
               </div>
             </div>
           </div>
@@ -1135,13 +1118,6 @@ const App: React.FC = () => {
   const renderInbox = () => (
     <div className="flex-1 overflow-auto" style={{ background: C.bg }}>
       <div className="max-w-6xl mx-auto p-8">
-        <input
-          type="file"
-          ref={fileRef}
-          className="hidden"
-          accept=".pdf,application/pdf"
-          onChange={e => { if (e.target.files?.[0]) handleUpload(e.target.files[0]); e.target.value = ''; }}
-        />
 
         {inboxProjects.length === 0 ? (
           <div className="bg-white rounded-xl border p-12 text-center" style={{ borderColor: C.border }}>
@@ -3437,17 +3413,6 @@ JSONのみ返してください。` },
 
     return (
       <div className="flex-1 overflow-auto p-6" style={{ background: C.bg }}>
-        <input
-          ref={detectFileRef}
-          type="file"
-          accept=".pdf"
-          className="hidden"
-          onChange={e => {
-            const f = e.target.files?.[0];
-            if (f) handleDetectUpload(f);
-            e.target.value = '';
-          }}
-        />
 
         <div className="max-w-7xl mx-auto space-y-6">
           {/* Step 1: アップロード & 設定 */}
