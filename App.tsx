@@ -626,37 +626,35 @@ const App: React.FC = () => {
   const renderSidebar = () => {
     const sections = [
       {
-        title: '名刺データ管理',
+        title: '入稿・管理',
         items: [
-          { icon: LayoutDashboard, label: '一覧', badge: 0, state: AppState.DASHBOARD },
-          { icon: Inbox, label: '受信', badge: inboxProjects.length, state: AppState.INBOX },
-          { icon: Wand2, label: 'AI作成', badge: 0, state: AppState.AI_CHAT },
+          { icon: LayoutDashboard, label: 'ダッシュボード', badge: 0, state: AppState.DASHBOARD },
+          { icon: Inbox, label: '受信トレイ', badge: inboxProjects.length, state: AppState.INBOX },
         ],
       },
       {
-        title: 'AI文字起こし',
+        title: '原稿処理',
         items: [
-          { icon: List, label: '一覧', badge: 0, state: AppState.TRANSCRIBE_LIST },
-          { icon: Clock, label: '履歴', badge: 0, state: AppState.TRANSCRIBE_HISTORY },
-          { icon: FileAudio, label: 'AI作成', badge: 0, state: AppState.TRANSCRIBE_AI },
-        ],
-      },
-      {
-        title: '印刷ツール',
-        items: [
-          { icon: PenTool, label: '文章作成', badge: 0, state: AppState.TOOL_WRITING },
           { icon: ScanText, label: 'OCR・文字起こし', badge: 0, state: AppState.TOOL_OCR },
-          { icon: FileEdit, label: 'PDF加工・編集', badge: 0, state: AppState.TOOL_PDF_EDIT },
-          { icon: FileDiff, label: 'PDF比較', badge: 0, state: AppState.TOOL_PDF_COMPARE },
-          { icon: ShieldCheck, label: '校閲・校正', badge: 0, state: AppState.TOOL_PROOFREAD },
-          { icon: BookType, label: '組版指示書', badge: 0, state: AppState.TOOL_TYPESET_SPEC },
+          { icon: FileAudio, label: 'AI文字起こし', badge: 0, state: AppState.TRANSCRIBE_AI },
+          { icon: PenTool, label: '文章作成・リライト', badge: 0, state: AppState.TOOL_WRITING },
         ],
       },
       {
-        title: '自動組版',
+        title: 'AI構造解析',
         items: [
           { icon: LayoutTemplate, label: 'レイアウト検出', badge: 0, state: AppState.TOOL_DETECT_LAYOUT },
+          { icon: BookType, label: '組版指示書', badge: 0, state: AppState.TOOL_TYPESET_SPEC },
+          { icon: Wand2, label: 'AI組版エージェント', badge: 0, state: AppState.AI_CHAT },
+        ],
+      },
+      {
+        title: '校正・品質管理',
+        items: [
+          { icon: ShieldCheck, label: '校閲・校正', badge: 0, state: AppState.TOOL_PROOFREAD },
           { icon: ShieldCheck, label: '原稿検証', badge: 0, state: AppState.TOOL_VALIDATE_MS },
+          { icon: FileDiff, label: 'PDF比較（初校⇔再校）', badge: 0, state: AppState.TOOL_PDF_COMPARE },
+          { icon: FileEdit, label: 'PDF加工・編集', badge: 0, state: AppState.TOOL_PDF_EDIT },
         ],
       },
     ];
@@ -693,6 +691,14 @@ const App: React.FC = () => {
               <p className="text-[10px] font-medium tracking-wider" style={{ color: C.sidebarMuted }}>
                 文唱堂印刷
               </p>
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="text-[9px] px-2 py-0.5 rounded-full font-bold text-white" style={{ background: C.gradientPrimary }}>
+                  商業出版
+                </span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full font-medium border opacity-40" style={{ borderColor: C.sidebarMuted, color: C.sidebarMuted }}>
+                  名刺
+                </span>
+              </div>
             </div>
           )}
         </div>
@@ -2683,13 +2689,13 @@ JSONのみ返してください。` },
     features: string[];
   }> = {
     writing: {
-      title: '文章作成',
-      description: '印刷物向けの文章をAIで作成します。チラシ、パンフレット、DM、社内報など、用途に応じた文章を生成。',
-      placeholder: '例: A4チラシ用の新商品紹介文を300文字で作成してください。商品名は「極上抹茶ラテ」、ターゲットは30代女性...',
-      systemPrompt: 'あなたは印刷会社の熟練コピーライターです。チラシ・パンフレット・DM・社内報・ポスターなど印刷物向けの文章作成が専門です。文字数制限を厳守し、視覚的に読みやすい構成を意識してください。改行位置や文字組みにも配慮した文章を出力してください。',
+      title: '文章作成・リライト',
+      description: '商業出版向けの文章をAIで作成・リライトします。書籍本文、帯文、目次、奥付、まえがき・あとがきなどに対応。',
+      placeholder: '例: 以下の原稿テキストを出版品質にリライトしてください。ターゲット読者は経営層。文体は敬体統一...',
+      systemPrompt: 'あなたは商業出版の編集者兼ライターです。書籍・雑誌・専門誌の原稿作成・リライトが専門です。以下を意識してください：\n・読者層を意識した文体の統一\n・見出し階層の適切な構成\n・組版を前提とした改行・段落設計\n・ルビが必要な語句の指示\n・JIS X 4051組版ルールに基づく約物処理',
       color: '#8b5cf6',
       gradient: 'linear-gradient(135deg, #8b5cf6, #a78bfa)',
-      features: ['チラシ・パンフ文章', 'DM・社内報', 'キャッチコピー', '文字数指定対応'],
+      features: ['原稿リライト', '見出し構成', '文体統一', '出版品質'],
     },
     ocr: {
       title: 'OCR・文字起こし',
@@ -2710,8 +2716,8 @@ JSONのみ返してください。` },
       features: ['テキスト修正案', '表記揺れチェック', '修正指示整理', '差し替え準備'],
     },
     pdf_compare: {
-      title: 'PDF比較',
-      description: '2つのテキストの差分を検出します。初校と再校の違い、修正反映の確認に。',
+      title: 'PDF比較（初校⇔再校）',
+      description: '初校と再校の差分を検出。赤字修正の反映漏れ、意図しない変更を一括チェック。',
       placeholder: '比較するテキストを入力してください。\n\n--- 初校 ---\n（初校テキストをここに）\n\n--- 再校 ---\n（再校テキストをここに）',
       systemPrompt: 'あなたは印刷校正の差分チェック専門家です。2つのテキストを比較し、変更箇所を全て漏れなくリストアップしてください。追加・削除・変更をそれぞれ明示し、見落としがないか確認してください。変更箇所は行番号と共に報告してください。',
       color: '#ec4899',
@@ -2720,7 +2726,7 @@ JSONのみ返してください。` },
     },
     proofread: {
       title: '校閲・校正・ファクトチェック',
-      description: '印刷原稿の校閲・校正を行います。誤字脱字、事実確認、表記統一、法的リスクのチェックに。',
+      description: '商業出版原稿の校閲・校正。誤字脱字、表記統一、事実確認、JIS表記、法的リスクを一括チェック。',
       placeholder: '校閲・校正対象のテキストを入力してください...',
       systemPrompt: 'あなたは出版・印刷業界の校閲・校正の専門家です。以下の観点でテキストをチェックしてください：\n1. 誤字・脱字・変換ミス\n2. 表記の統一性（数字、単位、敬称）\n3. 事実関係の確認（電話番号、住所、日付、金額）\n4. 法的リスク（景品表示法、薬機法、著作権）\n5. 差別表現・不適切表現\n各指摘は【種別】【箇所】【指摘内容】【修正案】の形式で報告してください。',
       color: '#10b981',
