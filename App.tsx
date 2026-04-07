@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent, ManuscriptChunk, ValidationReportResponse, ChunkDetail, FeedbackInput, FeedbackResponse, FeedbackActionType } from './types';
 import { analyzePdf, rebuildPdf, SpanOverride, vivliostyleBuild } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
@@ -3068,8 +3069,8 @@ JSONのみ返してください。` },
                   📋 コピー
                 </button>
               </div>
-              <div className="prose prose-sm max-w-none text-slate-700 whitespace-pre-wrap leading-relaxed bg-slate-50 rounded-xl p-4 border" style={{ borderColor: C.border }}>
-                {toolOutput}
+              <div className="prose prose-sm max-w-none text-slate-700 leading-relaxed bg-slate-50 rounded-xl p-4 border" style={{ borderColor: C.border }}>
+                <ReactMarkdown>{toolOutput}</ReactMarkdown>
               </div>
             </div>
           )}

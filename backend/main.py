@@ -170,90 +170,106 @@ def _extract_spans_gemini(
     return spans
 
 
-def _extract_spans_documentai(pdf_bytes: bytes, project_id: str, location: str, processor_id: str, version_id: Optional[str] = None) -> list[list[dict[str, Any]]]:
-    """Document AI Layout Parser で PDF 全体から Span 抽出"""
-    # エンドポイントをリージョンごとに指定
+def _extract_spans_documentai(pdf_bytes: bytes,
+                              project_id: str,
+                              location: str,
+                              processor_id: str,
+                              version_id: Optional[str] = None) -> list[list[dict[str,
+                                                                                  Any]]]:
+    """Document AI で PDF 全体から Span 抽出 (チャンク処理対応)"""
     opts = ClientOptions(api_endpoint=f"{location}-documentai.googleapis.com")
     client = documentai.DocumentProcessorServiceClient(client_options=opts)
-    
+
     if version_id:
         name = client.processor_version_path(
-            project_id, location, processor_id, version_id
-        )
+            project_id, location, processor_id, version_id)
     else:
         name = client.processor_path(project_id, location, processor_id)
-    
-    # プロセスオプションの設定 (OCR 高度な設定)
-    process_options = documentai.ProcessOptions(
-        ocr_config=documentai.OcrConfig(
-            enable_native_pdf_parsing=True,
-            premium_features=documentai.OcrConfig.PremiumFeatures(
-                compute_style_info=True
-            )
-        )
-    )
-    
-    raw_document = documentai.RawDocument(
-        content=pdf_bytes, mime_type="application/pdf"
-    )
-    request = documentai.ProcessRequest(
-        name=name, 
-        raw_document=raw_document,
-        process_options=process_options
-    )
-    
-    try:
-        result = client.process_document(request=request)
-        document = result.document
-    except Exception as e:
-        print(f"Document AI API Error: {e}")
-        return []
+
+    # チャンク分割 (15ページ単位)
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total_pages = len(doc)
+    chunk_size = 15
 
     all_pages_spans = []
-    for page in document.pages:
-        page_spans = []
-        for i, token in enumerate(page.tokens):
-            text = ""
-            for segment in token.layout.text_anchor.text_segments:
-                start = int(segment.start_index)
-                end = int(segment.end_index)
-                text += document.text[start:end]
-            
-            if not text.strip():
-                continue
 
-            # スタイル情報の取得 (明朝/ゴシック判定のヒント)
-            font_class = "gothic"
-            if hasattr(token, "style_info") and token.style_info:
-                # token.style_info.font_family は存在する場合があるが API のバージョンや言語により異なる
-                # ここでは簡易的に serif/mincho が含まれていれば mincho と判定
-                family = getattr(token.style_info, "font_family", "").lower()
-                if "mincho" in family or "serif" in family:
-                    font_class = "mincho"
+    for start_idx in range(0, total_pages, chunk_size):
+        end_idx = min(start_idx + chunk_size, total_pages)
+        # サブドキュメントの作成
+        doc_chunk = fitz.open()
+        doc_chunk.insert_pdf(doc, from_page=start_idx, to_page=end_idx - 1)
+        chunk_pdf_bytes = doc_chunk.write()
+        doc_chunk.close()
 
-            # 座標取得
-            v = token.layout.bounding_poly.normalized_vertices
-            if len(v) < 4:
-                continue
-            
-            x_min = min(v[0].x, v[1].x, v[2].x, v[3].x)
-            y_min = min(v[0].y, v[1].y, v[2].y, v[3].y)
-            x_max = max(v[0].x, v[1].x, v[2].x, v[3].x)
-            y_max = max(v[0].y, v[1].y, v[2].y, v[3].y)
+        raw_document = documentai.RawDocument(
+            content=chunk_pdf_bytes, mime_type="application/pdf"
+        )
+        request = documentai.ProcessRequest(
+            name=name,
+            raw_document=raw_document
+        )
 
-            # pct 0-100
-            page_spans.append({
-                "id": f"dai_{int(time.time() * 1000)}_{i}",
-                "text": text.strip(),
-                "font_class": font_class,
-                "size_pt": 9.0,         # デフォルト
-                "x_pct": x_min * 100,
-                "y_pct": y_min * 100,
-                "w_pct": (x_max - x_min) * 100,
-                "h_pct": (y_max - y_min) * 100,
-            })
-        all_pages_spans.append(page_spans)
-        
+        try:
+            result = client.process_document(request=request)
+            document = result.document
+        except Exception as e:
+            print(f"Document AI API Error: {e}")
+            # エラー時は空枠を詰める
+            for _ in range(end_idx - start_idx):
+                all_pages_spans.append([])
+            continue
+
+        for page in document.pages:
+            page_spans = []
+            # tokenではなく、lineベースで抽出する
+            for i, line in enumerate(page.lines):
+                text = ""
+                for segment in line.layout.text_anchor.text_segments:
+                    try:
+                        start = int(
+                            segment.start_index) if segment.start_index else 0
+                    except (AttributeError, ValueError, TypeError):
+                        start = 0
+                    try:
+                        end = int(
+                            segment.end_index) if segment.end_index else 0
+                    except (AttributeError, ValueError, TypeError):
+                        end = 0
+                    text += document.text[start:end]
+
+                if not text.strip():
+                    continue
+
+                font_class = "gothic"
+                # tokenからスタイル情報を見る
+                if hasattr(line, "style_info") and line.style_info:
+                    family = getattr(
+                        line.style_info, "font_family", "").lower()
+                    if "mincho" in family or "serif" in family:
+                        font_class = "mincho"
+
+                v = line.layout.bounding_poly.normalized_vertices
+                if len(v) < 4:
+                    continue
+
+                x_min = min(v[0].x, v[1].x, v[2].x, v[3].x)
+                y_min = min(v[0].y, v[1].y, v[2].y, v[3].y)
+                x_max = max(v[0].x, v[1].x, v[2].x, v[3].x)
+                y_max = max(v[0].y, v[1].y, v[2].y, v[3].y)
+
+                page_spans.append({
+                    "id": f"dai_{int(time.time() * 1000)}_{i}",
+                    "text": text.strip(),
+                    "font_class": font_class,
+                    "size_pt": 9.0,
+                    "x_pct": x_min * 100,
+                    "y_pct": y_min * 100,
+                    "w_pct": (x_max - x_min) * 100,
+                    "h_pct": (y_max - y_min) * 100,
+                })
+            all_pages_spans.append(page_spans)
+
+    doc.close()
     return all_pages_spans
 
 
@@ -280,15 +296,16 @@ async def analyze_pdf(
 
         # モード選択
         use_docai = (x_use_documentai == "true")
-        
+
         docai_results = []
         if use_docai:
             prj = x_project_id or "270124753853"
-            loc = x_location or "us"
-            proc = x_processor_id or "f7dfb9c3bd1d0663"
+            loc = x_location or "asia-southeast1"
+            proc = x_processor_id or "120a21840002e525"
             ver = x_version_id
-            print(f"Using Document AI Layout Parser ({prj}, {loc}, {proc}, {ver})...")
-            docai_results = _extract_spans_documentai(pdf_bytes, prj, loc, proc, ver)
+            print(f"Using Document AI ({prj}, {loc}, {proc}, {ver})...")
+            docai_results = _extract_spans_documentai(
+                pdf_bytes, prj, loc, proc, ver)
 
         for i in range(len(pdf_doc)):
             page = pdf_doc.load_page(i)
