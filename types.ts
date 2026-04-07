@@ -289,3 +289,122 @@ export interface AiResult {
   text: string;
   confidence?: number;
 }
+
+// ── Preset (箱の座標・基本ルール) Schema ──
+
+export interface DocumentMetadata {
+  trim_size: string;
+  binding_direction: 'right_to_left' | 'left_to_right';
+  coordinate_origin: 'top_left' | 'bottom_left';
+  unit: 'mm' | 'pt';
+}
+
+export interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CmykColor {
+  C: number;
+  M: number;
+  Y: number;
+  K: number;
+}
+
+export interface StyleConstraints {
+  font_family: string;
+  font_size_Q: number;
+  line_spacing_H: number;
+  letter_spacing_em: number;
+  text_indent_em: number;
+  writing_mode: 'horizontal-tb' | 'vertical-rl';
+  text_align: 'left' | 'center' | 'right' | 'justify';
+  tate_chu_yoko: boolean;
+  text_color_cmyk: CmykColor;
+  column_settings?: {
+    column_count: number;
+    column_gap_mm: number;
+  };
+}
+
+export interface CapacityConstraints {
+  max_characters: number;
+  chars_per_line: number;
+  max_lines: number;
+}
+
+export interface FontDeformation {
+  scale_x: number;
+  scale_y: number;
+}
+
+export interface PresetComponent {
+  component_id: string;
+  role: string;
+  bounding_box: BoundingBox;
+  style_constraints: StyleConstraints;
+  capacity_constraints: CapacityConstraints;
+  font_deformation?: FontDeformation;
+  has_ruby: boolean;
+  z_index: number;
+}
+
+export interface PresetPage {
+  page_type: string;
+  page_geometry: {
+    width_mm: number;
+    height_mm: number;
+    margin_top: number;
+    margin_bottom: number;
+    margin_inside: number;
+    margin_outside: number;
+  };
+  components: PresetComponent[];
+}
+
+export interface KinsokuSettings {
+  enabled: boolean;
+  rule: 'JIS_X_4051' | 'custom';
+  custom_chars?: string;
+}
+
+export interface PresetBase {
+  preset_id: string;
+  document_metadata: DocumentMetadata;
+  kinsoku: KinsokuSettings;
+  pages: PresetPage[];
+  plugins?: string[];
+}
+
+// Plugin Schemas
+export interface PresetNewspaperPlugin {
+  plugin_name: 'newspaper';
+  options: {
+    allow_column_span: boolean;      // 段抜き見出し許可
+    mixed_writing_mode: boolean;     // 縦横混在
+    column_rule_style_mm?: number;   // 罫線の太さ
+  };
+}
+
+export interface PresetPamphletPlugin {
+  plugin_name: 'pamphlet';
+  options: {
+    folding_type: 'tri_fold' | 'gate_fold' | 'none'; // 折り加工
+    imposition_order: number[];                      // 面付け順序
+    duplex: boolean;                                 // 両面印刷
+  };
+}
+
+export interface PresetAcademicPlugin {
+  plugin_name: 'academic';
+  options: {
+    require_footnotes: boolean;
+    require_references: boolean;
+    require_figure_numbers: boolean;
+    require_doi: boolean;
+    disable_ruby_in_vertical: boolean; // ルビなし縦組み
+  };
+}
+

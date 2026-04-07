@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fontconfig wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Download Google Fonts (Noto Sans JP / Noto Serif JP) — variable weight TTF
+# Download Google Fonts (Noto Sans JP / Noto Serif JP)
 RUN mkdir -p /usr/share/fonts/google \
     && wget -q "https://github.com/google/fonts/raw/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf" \
        -O /usr/share/fonts/google/NotoSansJP.ttf \
@@ -16,8 +16,9 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ローカルフォント (欧文34ファミリ + 和文モリサワPro主要19書体)
-COPY fonts/ /app/fonts/
+# ローカルフォント用ディレクトリ (商用フォントは手動でコピー)
+# fonts/ がローカルに存在しないことがあるため、ディレクトリのみ作成
+RUN mkdir -p /app/fonts
 
 COPY backend/main.py .
 

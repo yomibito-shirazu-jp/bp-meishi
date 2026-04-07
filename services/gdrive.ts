@@ -123,7 +123,8 @@ async function pickFromDrive(mimeTypes: string, title: string): Promise<File | n
       .addView(view)
       .setOAuthToken(token)
       .setDeveloperKey(getApiKey())
-      .setAppId('270124753853')
+      .setOrigin(window.location.origin)
+      .setAppId(getConfig('VITE_GOOGLE_PROJECT_NUMBER') || '270124753853')
       .setTitle(title)
       .setCallback(async (data: any) => {
         if (data.action === window.google.picker.Action.PICKED) {

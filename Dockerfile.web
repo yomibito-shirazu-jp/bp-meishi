@@ -5,8 +5,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY index.html index.tsx App.tsx types.ts tsconfig.json vite.config.ts ./
-COPY services/ ./services/
+# ソースコードをすべてコピー
+COPY . .
 
 # Build-time env vars — injected by cloudbuild.yaml substitutions
 ARG VITE_API_URL

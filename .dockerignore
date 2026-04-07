@@ -9,4 +9,5 @@ dist
 .claude
 *.md
 .env*
+backend/__pycache__
 ERROR

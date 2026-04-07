@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>読み人知らず — PDCA内蔵 自己進化型・自動組版システム v3</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --bg: #f0efe9;
+  --paper: #faf9f6;
+  --ink: #161614;
+  --ink2: #3a3a36;
+  --ink3: #7a7a72;
+  --rule: #d4d3cc;
+
+  --s1c: #1a2f72; --s1b: #edf2fc; --s1d: #6a8fdb;
+  --s2c: #0f4520; --s2b: #e8f5ea; --s2d: #4aaa68;
+  --s3c: #6a3800; --s3b: #fff4e0; --s3d: #d4933a;
+
+  --pc: #6a1010; --pb: #fef0f0; --pd: #c05858; --pa: #e07070;
+  --dbc: #2e1070; --dbb: #f0ebff; --dbd: #8a6ad0;
+
+  --gb: #e8f4e8; --gd: #7aab88; --gc: #1a5a30;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--ink);padding:36px 20px 56px}
+
+.canvas{max-width:1000px;margin:0 auto;background:var(--paper);border:1px solid var(--rule);border-radius:4px;padding:36px 40px 44px;position:relative}
+
+/* HEADER */
+.header{text-align:center;margin-bottom:32px;padding-bottom:20px;border-bottom:2px solid var(--s1d)}
+.header h1{font-size:20px;font-weight:900;letter-spacing:.04em}
+.header h1 em{font-style:normal;color:var(--pd)}
+.header p{font-size:10.5px;color:var(--ink3);margin-top:5px;letter-spacing:.12em;font-family:'IBM Plex Mono',monospace}
+
+/* MAIN GRID: pipeline | pdca */
+.main-grid{display:grid;grid-template-columns:1fr 240px;gap:20px;align-items:start}
+
+/* INPUT ROW */
+.input-row{display:flex;gap:8px;margin-bottom:12px}
+.ibox{flex:1;border:1px solid var(--rule);border-radius:5px;padding:8px 10px;font-size:10.5px;background:#fff;text-align:center}
+.ibox b{display:block;font-size:12px;color:var(--ink2)}
+.ibox span{font-size:9.5px;color:var(--ink3)}
+.iplus{display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--ink3);width:20px;flex-shrink:0}
+
+/* STEP */
+.step{border-radius:7px;padding:14px 16px;margin-bottom:0}
+.step .snum{font-family:'IBM Plex Mono',monospace;font-size:9.5px;font-weight:600;letter-spacing:.14em;opacity:.65;margin-bottom:3px}
+.step .stitle{font-size:14px;font-weight:700;margin-bottom:5px;line-height:1.3}
+.step .sbody{font-size:10.5px;line-height:1.7;opacity:.88}
+.step .stags{display:flex;flex-wrap:wrap;gap:3px;margin-top:7px}
+.tag{font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 6px;border-radius:3px;background:rgba(255,255,255,.5);border:1px solid rgba(0,0,0,.11)}
+.s1{background:var(--s1b);border:1.5px solid var(--s1d);color:var(--s1c)}
+.s2{background:var(--s2b);border:2px solid var(--s2d);color:var(--s2c)}
+.s3{background:var(--s3b);border:1.5px solid var(--s3d);color:var(--s3c)}
+
+.conn{display:flex;flex-direction:column;align-items:center;height:22px;justify-content:center}
+.conn::before{content:'';display:block;width:1.5px;height:10px;background:var(--ink3)}
+.conn::after{content:'▼';font-size:10px;color:var(--ink3);line-height:1}
+
+.s2note{font-size:9px;font-family:'IBM Plex Mono',monospace;color:var(--s2c);background:rgba(74,170,104,.1);border:1px dashed var(--s2d);border-radius:3px;padding:3px 7px;margin-top:5px;text-align:center}
+
+/* OUTPUT */
+.outbox{margin-top:12px;border:2px solid var(--s3d);border-radius:6px;padding:10px 14px;background:#fffdf8;display:flex;align-items:center;gap:10px}
+.outbox .oicon{font-size:20px;flex-shrink:0}
+.outbox .otitle{font-weight:700;font-size:12.5px;color:var(--s3c)}
+.outbox .osub{font-size:9.5px;color:var(--ink3);margin-top:1px}
+
+/* PDCA COL */
+.pdca-col{display:flex;flex-direction:column;gap:8px}
+
+.callout{background:#fffbe8;border:1px solid #c8b84a;border-radius:5px;padding:8px 10px;font-size:10px;line-height:1.65;color:#4a3a00}
+.callout::before{content:attr(data-l);display:block;font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:#8a6a00;font-weight:600;margin-bottom:2px;letter-spacing:.08em}
+
+.pdca-box{border:2px solid var(--pd);border-radius:8px;background:var(--pb);padding:14px 12px;color:var(--pc)}
+.pdca-title{font-size:12.5px;font-weight:900;text-align:center;margin-bottom:10px;letter-spacing:.04em;color:var(--pd)}
+
+.ci{display:flex;gap:7px;align-items:flex-start;padding:6px 0;border-bottom:1px solid rgba(192,88,88,.17)}
+.ci:last-child{border-bottom:none}
+.ci-badge{flex-shrink:0;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:8.5px;font-weight:700;background:var(--pd);color:#fff;flex-direction:column;line-height:1.1;text-align:center}
+.ci-body .cil{font-size:10px;font-weight:700}
+.ci-body .cid{font-size:9.5px;color:var(--pd);line-height:1.55;margin-top:1px;opacity:.9}
+
+.loop-msg{margin-top:10px;text-align:center;font-size:9.5px;line-height:1.65;color:var(--pd);background:rgba(255,255,255,.5);border-radius:4px;padding:7px 8px;border:1px dashed var(--pa)}
+
+.dbbox{border:1.5px solid var(--dbd);border-radius:5px;background:var(--dbb);padding:8px 10px;color:var(--dbc)}
+.dbbox .dbt{font-size:10.5px;font-weight:700;margin-bottom:3px}
+.dbrow{font-size:9.5px;line-height:1.65;font-family:'IBM Plex Mono',monospace;display:flex;align-items:center;gap:4px}
+.dot{width:5px;height:5px;border-radius:50%;background:var(--dbd);flex-shrink:0}
+
+.ret{text-align:center;font-size:9px;font-family:'IBM Plex Mono',monospace;color:var(--pd);background:rgba(192,88,88,.08);border-radius:4px;border:1px dashed var(--pa);padding:4px 7px}
+
+/* INFRA LAYER */
+.infra-layer{margin-top:20px;padding-top:16px;border-top:1px dashed var(--rule)}
+.infra-label{font-size:9.5px;font-family:'IBM Plex Mono',monospace;color:var(--ink3);margin-bottom:10px;letter-spacing:.06em}
+.infra-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.inode{border-radius:5px;padding:9px 10px;font-size:10px;text-align:center;border:1px solid}
+.inode .it{font-weight:700;font-size:11px;margin-bottom:3px}
+.inode .is{font-size:9px;line-height:1.55}
+.ig{background:var(--gb);border-color:var(--gd);color:var(--gc)}
+.is1{background:var(--s1b);border-color:var(--s1d);color:var(--s1c)}
+.is2{background:var(--s2b);border-color:var(--s2d);color:var(--s2c)}
+.idb{background:var(--dbb);border-color:var(--dbd);color:var(--dbc)}
+
+/* VERSION NOTE */
+.vernote{position:absolute;top:14px;right:18px;font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:var(--ink3);letter-spacing:.08em}
+
+/* FOOTER */
+.footer{margin-top:18px;padding-top:14px;border-top:1px solid var(--rule);display:flex;justify-content:space-between;font-size:9.5px;color:var(--ink3);font-family:'IBM Plex Mono',monospace;line-height:1.7}
+
+strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="canvas">
+  <div class="vernote">v3 — 2026.03.21</div>
+
+  <div class="header">
+    <h1>読み人知らず — <em>「PDCA内蔵」</em>自己進化型・自動組版システム</h1>
+    <p>InDesignゼロ　／　校正サイクル消滅　／　属人化の完全排除</p>
+  </div>
+
+  <div class="main-grid">
+
+    <!-- ═══ LEFT: PIPELINE ═══ -->
+    <div>
+      <!-- Input -->
+      <div class="input-row">
+        <div class="ibox"><b>著者原稿</b><span>Word / Markdown / GDoc</span></div>
+        <div class="iplus">＋</div>
+        <div class="ibox"><b>既存PDF</b><span>gs:// URL参照渡し（バイナリ非送信）</span></div>
+      </div>
+
+      <!-- STEP 1 -->
+      <div class="step s1">
+        <div class="snum">STEP 1</div>
+        <div class="stitle">物理的コンポーネント分解（チャンキング）</div>
+        <div class="sbody">PDFの「箱の座標・サイズ」を物理測定し、原稿テキストを意味のある塊に分解・タグ付けする。<br>
+        <strong>AIにはさせない：</strong>座標はPDF物理値のみを正とする（グラウンドトゥルース）</div>
+        <div class="stags">
+          <span class="tag">Document AI · Layout Parser</span>
+          <span class="tag">PyMuPDF · get_text("rawdict")</span>
+          <span class="tag">[Role: QA_Box]</span>
+          <span class="tag">bbox逆算（Q数・行送り・余白）</span>
+          <span class="tag">Fallback L1/L2/L3</span>
+        </div>
+      </div>
+
+      <div class="conn"></div>
+
+      <!-- STEP 2 -->
+      <div class="step s2">
+        <div class="snum">STEP 2 — システムの頭脳</div>
+        <div class="stitle">RAG検査 ＆ JSON強制整形</div>
+        <div class="sbody">
+          チャンクごとに Supabase から<strong>顧客専用ルールのみ</strong>をベクトル検索（RAG）で引き当て、Gemini Agent が「合否＋修正案」を厳格な responseSchema で出力。<br>
+          <strong>AIにデザインはさせない。ルール（事実）に基づく検査・採点のみ。</strong>
+        </div>
+        <div class="stags">
+          <span class="tag">Supabase pgvector</span>
+          <span class="tag">RAG（顧客別ルール）</span>
+          <span class="tag">responseSchema 強制</span>
+          <span class="tag">Enum値縛り</span>
+          <span class="tag">文字あふれ事前検知</span>
+          <span class="tag">Gemini Agent（推論禁止）</span>
+        </div>
+        <div class="s2note">← PDCAループの新ルールが即時フィードバック</div>
+      </div>
+
+      <div class="conn"></div>
+
+      <!-- STEP 3 -->
+      <div class="step s3">
+        <div class="snum">STEP 3</div>
+        <div class="stitle">機械的コンパイル（Vivliostyle レンダリング）</div>
+        <div class="sbody">
+          100%検証済みJSON → HTML + CSS（Paged Media）バインド → Vivliostyle 全ページ一括生成。<br>
+          <strong>人間の介入・AIの推論：ゼロ。</strong><br>
+          InDesign流し込み作業によるデグレ（ズレ）が数学的に発生しない。
+        </div>
+        <div class="stags">
+          <span class="tag">合議不要・機械的実行のみ</span>
+          <span class="tag">HTML / CSS Paged Media</span>
+          <span class="tag">Vivliostyle</span>
+          <span class="tag">数秒で全ページPDF/X-1a</span>
+        </div>
+      </div>
+
+      <!-- Output -->
+      <div class="outbox">
+        <div class="oicon">🖨</div>
+        <div>
+          <div class="otitle">印刷用PDF/X-1a 出力</div>
+          <div class="osub">初校〜念校まるごと消滅　／　版ズレ・表記ゆれ・文字あふれ：ゼロ保証</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ RIGHT: PDCA ═══ -->
+    <div class="pdca-col">
+
+      <div class="callout" data-l="POINT_01">AIにデザインはさせない。<br>ルール（事実）に基づく<br>検査・採点のみを強制する。</div>
+
+      <div class="pdca-box">
+        <div class="pdca-title">自己進化 PDCAループ</div>
+        <div class="ci">
+          <div class="ci-badge">C<br><span style="font-size:7px">heck</span></div>
+          <div class="ci-body"><div class="cil">人間が修正・上書き</div><div class="cid">確認画面でAI提案を修正した瞬間が起点</div></div>
+        </div>
+        <div class="ci">
+          <div class="ci-badge">A<br><span style="font-size:7px">ction</span></div>
+          <div class="ci-body"><div class="cil">Edge Function 起動</div><div class="cid">3差分から暗黙知を1文で自動抽出</div></div>
+        </div>
+        <div class="ci">
+          <div class="ci-badge" style="font-size:8px">DB</div>
+          <div class="ci-body"><div class="cil">ベクトル化 ＆ 格納</div><div class="cid">text-embedding-004<br>client_rules テーブルへ</div></div>
+        </div>
+        <div class="ci">
+          <div class="ci-badge">P<br><span style="font-size:7px">lan</span></div>
+          <div class="ci-body"><div class="cil">STEP 2 RAG に即時還流</div><div class="cid">最新ルールが次回から自動適用</div></div>
+        </div>
+        <div class="loop-msg">運用するほどベクトルDBが分厚くなり、<br>人間の修正（赤字）がゼロに近づく<br><strong>自己進化ループ</strong></div>
+      </div>
+
+      <div class="dbbox">
+        <div class="dbt">🗄 Supabase pgvector</div>
+        <div class="dbrow"><span class="dot"></span>client_rules — 顧客別ルールDB</div>
+        <div class="dbrow"><span class="dot"></span>10〜20パターン/顧客（自動蓄積）</div>
+        <div class="dbrow"><span class="dot"></span>text-embedding-004 ベクトル検索</div>
+      </div>
+
+      <div class="ret">↑ 新ルールが即座に<br>STEP 2 の RAG 知識ベースへ</div>
+
+      <div class="callout" data-l="POINT_02">流し込み作業による<br>デグレ（ズレ）が<br>数学的に発生しない。</div>
+
+    </div>
+  </div>
+
+  <!-- ═══ INFRA LAYER ═══ -->
+  <div class="infra-layer">
+    <div class="infra-label">INFRA LAYER — GitHub Team + GCP（$12/月〜・スケール後にGHES移行）</div>
+    <div class="infra-grid">
+      <div class="inode ig">
+        <div class="it">GitHub Team</div>
+        <div class="is">yomibito-core<br>yomibito-presets<br>Actions → Cloud Build trigger</div>
+      </div>
+      <div class="inode is1">
+        <div class="it">GCP Cloud Build</div>
+        <div class="is">CI/CD本体（重処理）<br>原稿push → Dry Run<br>PDF Artifact → PR返却</div>
+      </div>
+      <div class="inode is1">
+        <div class="it">Cloud Run + GCS</div>
+        <div class="is">api-extractor<br>api-validator<br>api-renderer / api-learning</div>
+      </div>
+      <div class="inode idb">
+        <div class="it">Supabase</div>
+        <div class="is">pgvector (RAG)<br>client_rules<br>preset バックアップ</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div>STEP 1: 物理測定（Document AI + PyMuPDF）<br>STEP 2: 検査（Supabase RAG + Gemini Agent）<br>STEP 3: 描画（Vivliostyle · HTML/CSS Paged Media）</div>
+    <div style="text-align:right">Before: 複数AIが合議して「頑張って作る」<br>After:　決定論的パイプライン ＋ 自動学習フィルター<br>抽出・検証・描画の完全分離</div>
+  </div>
+
+</div>
+</body>
+</html>

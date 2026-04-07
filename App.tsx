@@ -317,7 +317,8 @@ const App: React.FC = () => {
     setLoading(true);
     flash('PDF分析中...', 'info');
     try {
-      const data = await analyzePdf(file);
+      const useDocAI = getConfig('VITE_USE_DOCUMENT_AI') === 'true';
+      const data = await analyzePdf(file, useDocAI);
       const pages = data.pages;
       setAllPages(pages);
       setPdfB64(data.pdf_b64);
@@ -1740,7 +1741,7 @@ const App: React.FC = () => {
           const apiKey = settingsDraft['VITE_GOOGLE_AI_KEY'] ?? getConfig('VITE_GOOGLE_AI_KEY');
           if (!apiKey) throw new Error('API キーを入力してください');
           const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1757,6 +1758,45 @@ const App: React.FC = () => {
           }
           return 'Gemini API 接続成功 ✓';
         },
+      },
+    ];
+    
+    // Document AI fields
+    const docaiFields: FieldDef[] = [
+      {
+        key: 'VITE_USE_DOCUMENT_AI',
+        label: 'Document AI (Layout Parser) を使用',
+        description: '高精度なレイアウト解析（文字位置検出）に Document AI を使用します。"true" で有効、空または "false" で無効。',
+        placeholder: 'true / false',
+        sensitive: false,
+      },
+      {
+        key: 'VITE_GOOGLE_PROJECT_ID',
+        label: 'GCP プロジェクト ID',
+        description: 'Google Cloud プロジェクトの英数字 ID (例: my-project-123)',
+        placeholder: 'my-project-123',
+        sensitive: false,
+      },
+      {
+        key: 'VITE_DOCUMENT_AI_LOCATION',
+        label: 'Document AI リージョン',
+        description: 'us または eu',
+        placeholder: 'us',
+        sensitive: false,
+      },
+      {
+        key: 'VITE_DOCUMENT_AI_PROCESSOR_ID',
+        label: 'Document AI プロセッサ ID',
+        description: 'Layout Parser のプロセッサ ID (プロジェクト番号ではなく ID のみ)',
+        placeholder: 'f7dfb9c3bd1d0663',
+        sensitive: false,
+      },
+      {
+        key: 'VITE_DOCUMENT_AI_VERSION_ID',
+        label: 'プロセッサ バージョン ID (任意)',
+        description: '特定のバージョンを使用する場合に入力 (例: pretrained-layout-parser-v1.5-2025-08-25)。空の場合はデフォルト。',
+        placeholder: 'pretrained-layout-parser-v1.5-2025-08-25',
+        sensitive: false,
       },
     ];
 
@@ -1779,8 +1819,29 @@ const App: React.FC = () => {
       {
         key: 'VITE_GOOGLE_API_KEY',
         label: 'Google API Key (Picker)',
-        description: 'Picker API / Drive API 用の API キー',
+        description: 'Picker API / Drive API 用の API キー。GCP コンソールで「Google Drive API」と「Google Picker API」を有効にする必要があります。',
         placeholder: 'AIzaSy...',
+        sensitive: false,
+        testFn: async () => {
+          const apiKey = settingsDraft['VITE_GOOGLE_API_KEY'] ?? getConfig('VITE_GOOGLE_API_KEY');
+          if (!apiKey) throw new Error('API キーを入力してください');
+          // Discovery API を使って API キーの有効性をテスト
+          const res = await fetch(
+            `https://www.googleapis.com/discovery/v1/apis/drive/v3/rest?key=${apiKey}`,
+            { signal: AbortSignal.timeout(10000) }
+          );
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error?.message || `HTTP ${res.status} — APIキーが不正か、Drive APIが有効ではありません`);
+          }
+          return 'Picker API 認証成功 ✓';
+        },
+      },
+      {
+        key: 'VITE_GOOGLE_PROJECT_NUMBER',
+        label: 'GCP プロジェクト番号',
+        description: 'Google Cloud コンソールのダッシュボードに表示される「プロジェクト番号」を入力してください。API キーとプロジェクトが一致しないと Picker がエラーになります。',
+        placeholder: '270124753853',
         sensitive: false,
       },
     ];
@@ -1973,6 +2034,66 @@ const App: React.FC = () => {
 
             <div className="space-y-4">
               {oauthFields.map(({ key, label, description, placeholder, sensitive }) => {
+                const draftVal = settingsDraft[key] ?? '';
+                const savedVal = getConfig(key);
+                const isOverridden = getAllOverrides()[key] !== undefined;
+
+                return (
+                  <div
+                    key={key}
+                    className="bg-white rounded-2xl border p-5 space-y-3 transition-shadow hover:shadow-sm"
+                    style={{ borderColor: draftVal ? C.accentBorder : C.border }}
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Key size={12} style={{ color: C.accent }} />
+                      <span className="text-sm font-bold text-slate-800">{label}</span>
+                      {isOverridden && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                          style={{ background: C.accentBg, color: C.accent }}>
+                          上書き中
+                        </span>
+                      )}
+                      {savedVal && !isOverridden && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">
+                          .env から読込済
+                        </span>
+                      )}
+                      {savedVal ? (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">有効</span>
+                      ) : (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">未設定</span>
+                      )}
+                    </div>
+                    <p className="text-xs" style={{ color: C.muted }}>{description}</p>
+                    <input
+                      type={sensitive ? 'password' : 'text'}
+                      value={draftVal}
+                      onChange={e => setSettingsDraft(prev => ({ ...prev, [key]: e.target.value }))}
+                      placeholder={
+                        savedVal
+                          ? (sensitive ? '••••••••（設定済み — 変更する場合のみ入力）' : savedVal)
+                          : placeholder
+                      }
+                      className="w-full px-3 py-2.5 rounded-xl border text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-300 bg-white transition-colors"
+                      style={{ borderColor: draftVal ? C.accent : C.border }}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Document AI section */}
+          <div className="mt-8 border-t pt-8" style={{ borderColor: C.border }}>
+            <h3 className="text-sm font-bold text-slate-800 mb-1">Document AI (Layout Parser)</h3>
+            <p className="text-xs mb-4" style={{ color: C.muted }}>
+              複雑なレイアウトの名刺で、文字の位置検出精度を向上させる場合に有効にします。
+            </p>
+
+            <div className="space-y-4">
+              {docaiFields.map(({ key, label, description, placeholder, sensitive }) => {
                 const draftVal = settingsDraft[key] ?? '';
                 const savedVal = getConfig(key);
                 const isOverridden = getAllOverrides()[key] !== undefined;
@@ -2550,7 +2671,12 @@ JSONのみ返してください。` },
       setPhaseProgress(4);
       flash("Vivliostyle エンジンでPDF生成中...", "info");
 
-      const result = await vivliostyleBuild(spans, pageMM, titleSpan?.text?.trim() || '名刺');
+      const result = await vivliostyleBuild(
+        spans, 
+        pageMM, 
+        titleSpan?.text?.trim() || '名刺', 
+        originalPng || undefined
+      );
 
       // Phase 5: 完了
       setPhaseProgress(5);

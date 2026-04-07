@@ -1,0 +1,345 @@
+{
+  "preset_id": "beauty_newsletter_v1",
+  "schema_version": "2.1.0",
+  "document_metadata": {
+    "trim_size": "A4",
+    "width_mm": 210.0,
+    "height_mm": 297.0,
+    "binding_direction": "right_to_left",
+    "coordinate_origin": "top_left",
+    "unit": "mm",
+    "color_space": "CMYK"
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "custom_page",
+      "page_geometry": {
+        "width_mm": 210.0,
+        "height_mm": 297.0,
+        "margin_top": 15.0,
+        "margin_bottom": 25.0,
+        "margin_inside": 20.0,
+        "margin_outside": 15.0
+      },
+      "components": [
+        {
+          "component_id": "title_main_left",
+          "role": "Title_Main",
+          "bounding_box": {
+            "x": 15.0,
+            "y": 15.0,
+            "width": 180.0,
+            "height": 25.0
+          },
+          "style_constraints": {
+            "font_family": "UDDigiKyokashoN-B",
+            "font_size_Q": 36,
+            "line_spacing_H": 40,
+            "letter_spacing_em": -0.05,
+            "text_indent_em": 0,
+            "writing_mode": "horizontal-tb",
+            "text_align": "left",
+            "tate_chu_yoko": false,
+            "text_color_cmyk": { "C": 0, "M": 100, "Y": 100, "K": 0 },
+            "kinsoku": {
+              "enabled": true,
+              "rule": "JIS_X_4051"
+            }
+          },
+          "capacity_constraints": {
+            "max_characters": 35,
+            "chars_per_line": 18,
+            "max_lines": 2
+          },
+          "font_deformation": {
+            "scale_x": 0.9,
+            "scale_y": 1.0
+          },
+          "has_ruby": false,
+          "z_index": 2
+        },
+        {
+          "component_id": "lead_text_left",
+          "role": "BodyText",
+          "bounding_box": {
+            "x": 15.0,
+            "y": 45.0,
+            "width": 120.0,
+            "height": 20.0
+          },
+          "style_constraints": {
+            "font_family": "HiraMinProN-W3",
+            "font_size_Q": 14,
+            "line_spacing_H": 22,
+            "letter_spacing_em": 0,
+            "text_indent_em": 0,
+            "writing_mode": "horizontal-tb",
+            "text_align": "justify",
+            "tate_chu_yoko": false,
+            "text_color_cmyk": { "C": 0, "M": 0, "Y": 0, "K": 100 },
+            "kinsoku": {
+              "enabled": true,
+              "rule": "JIS_X_4051"
+            }
+          },
+          "capacity_constraints": {
+            "max_characters": 110,
+            "chars_per_line": 34,
+            "max_lines": 3
+          },
+          "font_deformation": {
+            "scale_x": 1.0,
+            "scale_y": 1.0
+          },
+          "has_ruby": false,
+          "z_index": 1
+        },
+        {
+          "component_id": "profile_block_01",
+          "role": "Profile_Block",
+          "bounding_box": {
+            "x": 145.0,
+            "y": 45.0,
+            "width": 50.0,
+            "height": 20.0
+          },
+          "style_constraints": {
+            "font_family": "HiraMinProN-W3",
+            "font_size_Q": 13,
+            "line_spacing_H": 18,
+            "letter_spacing_em": 0,
+            "text_indent_em": 0,
+            "writing_mode": "horizontal-tb",
+            "text_align": "right",
+            "tate_chu_yoko": false,
+            "text_color_cmyk": { "C": 0, "M": 0, "Y": 0, "K": 100 },
+            "kinsoku": {
+              "enabled": true,
+              "rule": "JIS_X_4051"
+            }
+          },
+          "capacity_constraints": {
+            "max_characters": 30,
+            "chars_per_line": 15,
+            "max_lines": 2
+          },
+          "has_ruby": true,
+          "ruby_settings": {
+            "font_family": "HiraMinProN-W3",
+            "font_size_Q": 6,
+            "position": "over"
+          },
+          "z_index": 2
+        },
+        {
+          "component_id": "body_text_vertical_left",
+          "role": "BodyText",
+          "bounding_box": {
+            "x": 15.0,
+            "y": 70.0,
+            "width": 180.0,
+            "height": 100.0
+          },
+          "style_constraints": {
+            "font_family": "HiraMinProN-W3",
+            "font_size_Q": 13,
+            "line_spacing_H": 22,
+            "letter_spacing_em": 0,
+            "text_indent_em": 1,
+            "writing_mode": "vertical-rl",
+            "text_align": "justify",
+            "tate_chu_yoko": true,
+            "column_settings": {
+              "column_count": 3,
+              "column_gap_mm": 5.0
+            },
+            "text_color_cmyk": { "C": 0, "M": 0, "Y": 0, "K": 100 },
+            "kinsoku": {
+              "enabled": true,
+              "rule": "JIS_X_4051"
+            }
+          },
+          "capacity_constraints": {
+            "max_characters": 850,
+            "chars_per_line": 30,
+            "max_lines": 28
+          },
+          "font_deformation": {
+            "scale_x": 1.0,
+            "scale_y": 1.0
+          },
+          "has_ruby": false,
+          "z_index": 1
+        },
+        {
+          "component_id": "table_cell_price_01",
+          "role": "Table_Cell",
+          "bounding_box": {
+            "x": 100.0,
+            "y": 255.0,
+            "width": 40.0,
+            "height": 8.0
+          },
+          "style_constraints": {
+            "font_family": "HiraKakuProN-W6",
+            "font_size_Q": 14,
+            "line_spacing_H": 14,
+            "letter_spacing_em": 0,
+            "text_indent_em": 0,
+            "writing_mode": "horizontal-tb",
+            "text_align": "center",
+            "tate_chu_yoko": false,
+            "text_color_cmyk": { "C": 0, "M": 100, "Y": 100, "K": 0 },
+            "kinsoku": {
+              "enabled": false,
+              "rule": null
+            }
+          },
+          "capacity_constraints": {
+            "max_characters": 12,
+            "chars_per_line": 12,
+            "max_lines": 1
+          },
+          "font_deformation": {
+            "scale_x": 0.85,
+            "scale_y": 1.0
+          },
+          "has_ruby": false,
+          "z_index": 3
+        }
+      ]
+    },
+    {
+      "page_number": 2,
+      "page_type": "custom_page",
+      "page_geometry": {
+        "width_mm": 210.0,
+        "height_mm": 297.0,
+        "margin_top": 15.0,
+        "margin_bottom": 25.0,
+        "margin_inside": 15.0,
+        "margin_outside": 20.0
+      },
+      "components": [
+        {
+          "component_id": "title_sub_right",
+          "role": "Title_Sub",
+          "bounding_box": {
+            "x": 160.0,
+            "y": 20.0,
+            "width": 30.0,
+            "height": 150.0
+          },
+          "style_constraints": {
+            "font_family": "UDDigiKyokashoN-B",
+            "font_size_Q": 24,
+            "line_spacing_H": 30,
+            "letter_spacing_em": 0.1,
+            "text_indent_em": 0,
+            "writing_mode": "vertical-rl",
+            "text_align": "left",
+            "tate_chu_yoko": true,
+            "text_color_cmyk": { "C": 100, "M": 50, "Y": 0, "K": 0 },
+            "kinsoku": {
+              "enabled": true,
+              "rule": "JIS_X_4051"
+            }
+          },
+          "capacity_constraints": {
+            "max_characters": 45,
+            "chars_per_line": 45,
+            "max_lines": 2
+          },
+          "font_deformation": {
+            "scale_x": 1.0,
+            "scale_y": 1.0
+          },
+          "has_ruby": false,
+          "z_index": 1
+        },
+        {
+          "component_id": "body_text_vertical_right",
+          "role": "BodyText",
+          "bounding_box": {
+            "x": 20.0,
+            "y": 20.0,
+            "width": 130.0,
+            "height": 150.0
+          },
+          "style_constraints": {
+            "font_family": "HiraMinProN-W3",
+            "font_size_Q": 13,
+            "line_spacing_H": 22,
+            "letter_spacing_em": 0,
+            "text_indent_em": 1,
+            "writing_mode": "vertical-rl",
+            "text_align": "justify",
+            "tate_chu_yoko": true,
+            "column_settings": {
+              "column_count": 2,
+              "column_gap_mm": 6.0
+            },
+            "text_color_cmyk": { "C": 0, "M": 0, "Y": 0, "K": 100 },
+            "kinsoku": {
+              "enabled": true,
+              "rule": "JIS_X_4051"
+            }
+          },
+          "capacity_constraints": {
+            "max_characters": 800,
+            "chars_per_line": 45,
+            "max_lines": 18
+          },
+          "font_deformation": {
+            "scale_x": 1.0,
+            "scale_y": 1.0
+          },
+          "has_ruby": true,
+          "ruby_settings": {
+            "font_family": "HiraMinProN-W3",
+            "font_size_Q": 6,
+            "position": "right"
+          },
+          "z_index": 1
+        },
+        {
+          "component_id": "footer_phone_number",
+          "role": "Callout_Badge",
+          "bounding_box": {
+            "x": 40.0,
+            "y": 275.0,
+            "width": 80.0,
+            "height": 15.0
+          },
+          "style_constraints": {
+            "font_family": "HiraKakuProN-W8",
+            "font_size_Q": 32,
+            "line_spacing_H": 32,
+            "letter_spacing_em": 0.05,
+            "text_indent_em": 0,
+            "writing_mode": "horizontal-tb",
+            "text_align": "center",
+            "tate_chu_yoko": false,
+            "text_color_cmyk": { "C": 0, "M": 0, "Y": 0, "K": 0 },
+            "kinsoku": {
+              "enabled": false,
+              "rule": null
+            }
+          },
+          "capacity_constraints": {
+            "max_characters": 12,
+            "chars_per_line": 12,
+            "max_lines": 1
+          },
+          "font_deformation": {
+            "scale_x": 1.0,
+            "scale_y": 1.0
+          },
+          "has_ruby": false,
+          "z_index": 5
+        }
+      ]
+    }
+  ]
+}

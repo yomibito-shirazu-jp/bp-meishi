@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>読み人知らず — 自動組版アーキテクチャ v2</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #f7f6f2;
+    --text: #1a1a1a;
+    --text-muted: #666;
+    --border: #ccc;
+    --border-light: #ddd;
+
+    --phase-label: #444;
+    --phase-line: #999;
+
+    /* Component colors */
+    --blue-bg: #e8edf7;
+    --blue-border: #8090c0;
+    --blue-text: #2a3a7a;
+
+    --green-bg: #e8f2ec;
+    --green-border: #7aab88;
+    --green-text: #1a5a30;
+
+    --orange-bg: #fdf0e0;
+    --orange-border: #d4924a;
+    --orange-text: #7a4010;
+
+    --gray-bg: #ebebeb;
+    --gray-border: #aaa;
+    --gray-text: #444;
+
+    --red-bg: #fde8e8;
+    --red-border: #c07878;
+    --red-text: #7a1a1a;
+
+    --teal-bg: #e0f0f0;
+    --teal-border: #6aadad;
+    --teal-text: #1a5a5a;
+
+    --scan-bg: #f0eaf8;
+    --scan-border: #9a7ac0;
+    --scan-text: #3a1a7a;
+
+    --arrow: #888;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Noto Sans JP', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 40px 20px 60px;
+  }
+
+  .page {
+    max-width: 880px;
+    margin: 0 auto;
+  }
+
+  /* ── Header ── */
+  .header {
+    text-align: center;
+    margin-bottom: 36px;
+  }
+  .header h1 {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  .header p {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    letter-spacing: 0.1em;
+  }
+
+  /* ── Phase rows ── */
+  .phase-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    margin-bottom: 0;
+    position: relative;
+  }
+
+  .phase-label {
+    width: 180px;
+    min-width: 180px;
+    padding-top: 14px;
+    padding-right: 16px;
+    font-size: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--phase-label);
+    letter-spacing: 0.05em;
+    text-align: right;
+    line-height: 1.5;
+  }
+  .phase-label span {
+    font-size: 9px;
+    color: var(--text-muted);
+    display: block;
+    margin-top: 2px;
+  }
+
+  .phase-body {
+    flex: 1;
+    padding-left: 20px;
+    border-left: 1px solid var(--phase-line);
+    padding-bottom: 28px;
+    position: relative;
+  }
+
+  /* connector dot on the left border */
+  .phase-body::before {
+    content: '';
+    position: absolute;
+    left: -4px;
+    top: 20px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--phase-line);
+  }
+
+  /* ── Arrow between phases ── */
+  .v-arrow {
+    display: flex;
+    align-items: center;
+    padding-left: 200px;
+    height: 24px;
+  }
+  .v-arrow::before {
+    content: '↓';
+    font-size: 16px;
+    color: var(--arrow);
+    margin-left: 10px;
+  }
+
+  /* ── Box ── */
+  .box {
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .box .title {
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+  .box .sub {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .box-blue  { background: var(--blue-bg);  border: 1px solid var(--blue-border);  color: var(--blue-text); }
+  .box-green { background: var(--green-bg); border: 1px solid var(--green-border); color: var(--green-text); }
+  .box-orange{ background: var(--orange-bg);border: 1px solid var(--orange-border);color: var(--orange-text);}
+  .box-gray  { background: var(--gray-bg);  border: 1px solid var(--gray-border);  color: var(--gray-text); }
+  .box-teal  { background: var(--teal-bg);  border: 1px solid var(--teal-border);  color: var(--teal-text); }
+  .box-scan  { background: var(--scan-bg);  border: 1px solid var(--scan-border);  color: var(--scan-text); }
+
+  /* ── Main + side layout ── */
+  .main-side {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .main-col { flex: 1; }
+  .side-col {
+    width: 160px;
+    min-width: 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 4px;
+  }
+
+  /* ── Agent badges ── */
+  .agent {
+    font-size: 10px;
+    padding: 5px 10px;
+    border-radius: 4px;
+    background: var(--orange-bg);
+    border: 1px solid var(--orange-border);
+    color: var(--orange-text);
+    white-space: nowrap;
+  }
+  .agent.gray {
+    background: var(--gray-bg);
+    border-color: var(--gray-border);
+    color: var(--gray-text);
+  }
+
+  /* ── Scan pipeline ── */
+  .scan-pipeline {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .scan-step {
+    flex: 1;
+    min-width: 130px;
+    border-radius: 5px;
+    padding: 8px 10px;
+    font-size: 10.5px;
+    line-height: 1.5;
+    position: relative;
+    text-align: center;
+  }
+  .scan-step .st { font-weight: 700; font-size: 11px; display: block; margin-bottom: 2px; }
+  .scan-step .sd { font-size: 9.5px; color: var(--text-muted); }
+  .scan-arrow {
+    font-size: 16px;
+    color: var(--scan-border);
+    padding: 0 4px;
+    flex-shrink: 0;
+  }
+
+  /* Fallback row */
+  .fallback-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .fb {
+    flex: 1;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 9.5px;
+    line-height: 1.5;
+    border: 1px dashed;
+    text-align: center;
+  }
+  .fb .fl { font-weight: 700; font-size: 10px; }
+  .fb-l1 { border-color: #a0b8d0; color: #2a4a6a; background: #edf3f8; }
+  .fb-l2 { border-color: #b0a0d0; color: #3a2a6a; background: #f0edf8; }
+  .fb-l3 { border-color: #c0a0a0; color: #6a2a2a; background: #f8edec; }
+
+  /* JSON gate box */
+  .gate-box {
+    border: 2px solid var(--scan-border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-top: 8px;
+    background: #faf8ff;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .gate-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+  .gate-text .title { font-size: 12px; font-weight: 700; color: var(--scan-text); }
+  .gate-text .sub   { font-size: 10px; color: var(--text-muted); }
+
+  /* GCS badge */
+  .gcs-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    background: #e8f4e8;
+    border: 1px solid #7aab88;
+    color: #1a5a30;
+    border-radius: 4px;
+    padding: 3px 8px;
+    margin-top: 6px;
+  }
+
+  /* Parallel badge */
+  .parallel-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 9px;
+    font-family: 'IBM Plex Mono', monospace;
+    background: #fff8e0;
+    border: 1px solid #d4b04a;
+    color: #7a5010;
+    border-radius: 4px;
+    padding: 2px 7px;
+    margin-top: 4px;
+  }
+
+  /* ── Source boxes ── */
+  .source-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .src-box {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px 10px;
+    font-size: 11px;
+    background: white;
+    text-align: center;
+    color: var(--gray-text);
+  }
+  .src-box .src-title { font-weight: 500; font-size: 12px; }
+  .src-box .src-sub   { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+
+  /* strikethrough overlay */
+  .strike-box {
+    position: relative;
+    border: 1px dashed #bbb;
+    border-radius: 5px;
+    padding: 8px 10px;
+    font-size: 10px;
+    color: #aaa;
+    background: #f8f8f8;
+    text-align: center;
+  }
+  .strike-box::after {
+    content: '';
+    position: absolute;
+    left: 8px; right: 8px; top: 50%;
+    border-top: 1.5px solid #c07878;
+    transform: rotate(-4deg);
+  }
+
+  /* DATA LAYER */
+  .data-layer-label {
+    font-size: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--phase-label);
+    margin-bottom: 8px;
+    letter-spacing: 0.05em;
+  }
+  .data-row {
+    display: flex;
+    gap: 8px;
+  }
+  .data-box {
+    flex: 1;
+    border-radius: 5px;
+    padding: 10px 12px;
+    font-size: 11px;
+    text-align: center;
+  }
+  .data-box .dt { font-weight: 700; font-size: 12px; margin-bottom: 3px; }
+  .data-box .ds { font-size: 10px; }
+
+  hr.section-div {
+    border: none;
+    border-top: 1px dashed var(--border);
+    margin: 20px 0 20px 180px;
+  }
+
+  .note-bottom {
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 28px;
+    letter-spacing: 0.05em;
+  }
+
+  .tag {
+    display: inline-block;
+    font-size: 9px;
+    font-family: 'IBM Plex Mono', monospace;
+    background: #e0e0e0;
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: #555;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .tag.new { background: #d8efd8; color: #2a6a2a; }
+  .tag.updated { background: #fde8cc; color: #8a4010; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>読み人知らず — 自動組版アーキテクチャ</h1>
+    <p>Adobe製品ゼロ・校正サイクル消滅　／　原稿分析プロセス更新版</p>
+  </div>
+
+  <!-- ════════════════════════════════ -->
+  <!-- PHASE 0: 原稿分析（PDF逆変換）   -->
+  <!-- ════════════════════════════════ -->
+  <div class="phase-row">
+    <div class="phase-label">
+      PHASE 0 — 原稿分析
+      <span>既存PDF逆変換・組版指示書抽出</span>
+    </div>
+    <div class="phase-body">
+
+      <!-- Source -->
+      <div class="source-row">
+        <div class="src-box">
+          <div class="src-title">既存PDF原稿</div>
+          <div class="src-sub">印刷用入稿データ等</div>
+        </div>
+        <div style="display:flex;align-items:center;">
+          <div class="gcs-badge">↑ gs://bucket/page_N.pdf</div>
+        </div>
+        <div class="src-box" style="background:#e8f4e8;border-color:#7aab88;color:#1a5a30;">
+          <div class="src-title">GCS ストレージ</div>
+          <div class="src-sub">URL参照渡し（バイナリ非送信）</div>
+        </div>
+      </div>
+
+      <!-- 3-step scan pipeline -->
+      <div class="scan-pipeline">
+        <div class="scan-step box-scan">
+          <span class="st">① Document AI</span>
+          <span class="sd">Layout Parser<br>コンポーネント空間分割<br>Bounding Box抽出</span>
+        </div>
+        <div class="scan-arrow">→</div>
+        <div class="scan-step box-teal">
+          <span class="st">② PyMuPDF</span>
+          <span class="sd">get_text("rawdict")<br>フォント・座標・行間<br>数学的逆算（物理測定）</span>
+        </div>
+        <div class="scan-arrow">→</div>
+        <div class="scan-step box-green">
+          <span class="st">③ Vertex AI</span>
+          <span class="sd">コンポーネント＋数値<br>照合・コンテキスト保存<br>JSONスキーマへマッピング</span>
+        </div>
+      </div>
+
+      <div style="margin-top:6px;">
+        <span class="parallel-badge">⚡ 1ページ × N並列実行（Fan-out） — Lazy AI防止・省略不可</span>
+      </div>
+
+      <!-- Fallback logic -->
+      <div class="fallback-row">
+        <div class="fb fb-l1">
+          <div class="fl">Fallback L1</div>
+          フォント欠損・文字化け<br>→ bbox切り抜き + OCR<br>（座標はPDF物理値を正とする）
+        </div>
+        <div class="fb fb-l2">
+          <div class="fl">Fallback L2</div>
+          アウトライン化（パス化）<br>→ Draw bbox グルーピング<br>→ 行bbox合成＋高さから文字サイズ算出
+        </div>
+        <div class="fb fb-l3">
+          <div class="fl">Fallback L3</div>
+          完全画像PDF（スキャン）<br>→ Document AI ポリゴン座標のみ取得<br>→ 物理逆算ロジックへ流入
+        </div>
+      </div>
+
+      <!-- Gate -->
+      <div class="gate-box">
+        <div class="gate-icon">🔒</div>
+        <div class="gate-text">
+          <div class="title">組版指示書 JSON（完全版）<span class="tag new">GATE</span></div>
+          <div class="sub">ハルシネーションチェック防波堤　／　数値検証パス後のみ次フェーズへ進行　／　null = 測定不能（捏造禁止）</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="v-arrow"></div>
+
+  <!-- ════════════════ -->
+  <!-- PHASE 1          -->
+  <!-- ════════════════ -->
+  <div class="phase-row">
+    <div class="phase-label">
+      PHASE 1 — 入口の合議
+      <span>原稿正規化</span>
+    </div>
+    <div class="phase-body">
+      <div class="source-row" style="margin-bottom:0;">
+        <div class="src-box">
+          <div class="src-title">著者A原稿</div>
+          <div class="src-sub">Word / GDoc</div>
+        </div>
+        <div class="src-box">
+          <div class="src-title">著者B原稿</div>
+          <div class="src-sub">Word / GDoc</div>
+        </div>
+        <div class="src-box">
+          <div class="src-title">著者C原稿</div>
+          <div class="src-sub">Markdown</div>
+        </div>
+      </div>
+      <div style="text-align:center;color:var(--arrow);font-size:14px;margin:6px 0;">↓</div>
+      <div class="main-side">
+        <div class="main-col">
+          <div class="box box-blue">
+            <div class="title">三者合議 ① — 原稿正規化</div>
+            <div class="sub">表記揺れ除去・マージ・地雷除去</div>
+          </div>
+        </div>
+        <div class="side-col">
+          <div class="agent">Agent 1: 表記検証</div>
+          <div class="agent">Agent 2: 構造照合</div>
+          <div class="agent">Agent 3: 意味検証</div>
+          <div class="agent" style="background:var(--orange-bg);">顧客別ルール<br><span style="font-size:9px;">BigQuery参照</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="v-arrow"></div>
+
+  <!-- PHASE 2 -->
+  <div class="phase-row">
+    <div class="phase-label">
+      PHASE 2 — 一手目
+      <span>意味地図生成</span>
+    </div>
+    <div class="phase-body">
+      <div class="box box-blue">
+        <div class="title">意味地図（セマンティックマップ）</div>
+        <div class="sub">全文ベクトル化・構造分析・粒度測定</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="v-arrow"></div>
+
+  <!-- PHASE 3 -->
+  <div class="phase-row">
+    <div class="phase-label">
+      PHASE 3 — 二手目
+      <span>ルール確定</span>
+    </div>
+    <div class="phase-body">
+      <div class="box box-blue">
+        <div class="title">組版ルール自動確定 <span class="tag updated">Updated</span></div>
+        <div class="sub">CSS生成・グリッド・フォント・行送り<br>
+          <span style="font-size:9.5px;color:var(--scan-text);">↑ PHASE 0 組版指示書JSONをルールベースDBと照合・差分吸収</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="v-arrow"></div>
+
+  <!-- PHASE 4 -->
+  <div class="phase-row">
+    <div class="phase-label">
+      PHASE 4 — 三手目
+      <span>全ページ一括生成</span>
+    </div>
+    <div class="phase-body">
+      <div class="main-side">
+        <div class="main-col">
+          <div class="box box-green">
+            <div class="title">Vivliostyle 組版エンジン</div>
+            <div class="sub">VFM + CSS → 全ページ同時PDF生成</div>
+          </div>
+        </div>
+        <div class="side-col">
+          <div class="agent gray" style="text-align:center;">合議不要<br>機械的実行のみ</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="v-arrow"></div>
+
+  <!-- PHASE 5 -->
+  <div class="phase-row">
+    <div class="phase-label">
+      PHASE 5 — 出口の合議
+      <span>品質検証</span>
+    </div>
+    <div class="phase-body">
+      <div class="main-side">
+        <div class="main-col">
+          <div class="box box-blue">
+            <div class="title">三者合議 ② — 品質検証</div>
+            <div class="sub">19項目チェック・差分検証・プリフライト</div>
+          </div>
+          <div style="text-align:center;color:var(--arrow);font-size:14px;margin:8px 0;">↓</div>
+          <div class="box box-green">
+            <div class="title">印刷用PDF出力</div>
+            <div class="sub">PDF/X-1a 入稿データ</div>
+          </div>
+          <div style="margin-top:8px;">
+            <div class="strike-box">初校 → 再校 → 三校 → 四校 → 念校　消滅</div>
+          </div>
+        </div>
+        <div class="side-col">
+          <div class="agent">Agent 1: 構造検証</div>
+          <div class="agent">Agent 2: マッピング</div>
+          <div class="agent">Agent 3: 差分検証</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="section-div">
+
+  <!-- DATA LAYER -->
+  <div style="padding-left:180px;">
+    <div class="data-layer-label">DATA LAYER — 学習基盤</div>
+    <div class="data-row">
+      <div class="data-box box-orange">
+        <div class="dt">BigQuery</div>
+        <div class="ds">差分データ・ベクトル</div>
+      </div>
+      <div class="data-box box-orange">
+        <div class="dt">顧客別ディレクトリ</div>
+        <div class="ds">10–20パターン/顧客</div>
+      </div>
+      <div class="data-box box-orange">
+        <div class="dt">ルールベースDB</div>
+        <div class="ds">過去差分から自動生成<br>
+          <span style="font-size:9px;color:var(--scan-text);">+ PHASE 0 JSON蓄積</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note-bottom">
+    運用するほど精度が上がる — 校正サイクルが構造的に不要になる<br>
+    <span style="font-size:9px;">PHASE 0 更新: Document AI（空間）→ PyMuPDF（物理測定）→ Vertex AI（照合） / GCS URL参照 / 1ページ並列</span>
+  </div>
+
+</div>
+</body>
+</html>

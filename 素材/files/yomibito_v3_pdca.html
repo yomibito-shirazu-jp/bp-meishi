@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>読み人知らず — PDCA内蔵 自己進化型・自動組版システム</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --bg: #f4f3ef;
+  --paper: #faf9f6;
+  --ink: #161614;
+  --ink-2: #3a3a36;
+  --ink-3: #6a6a62;
+  --rule: #d0cfc8;
+
+  /* Step colors */
+  --s1-bg: #edf2fc;
+  --s1-bd: #6a8fdb;
+  --s1-text: #1a2f72;
+
+  --s2-bg: #e8f5ea;
+  --s2-bd: #4aaa68;
+  --s2-text: #0f4520;
+
+  --s3-bg: #fff4e0;
+  --s3-bd: #d4933a;
+  --s3-text: #6a3800;
+
+  /* PDCA */
+  --pdca-bg: #fef0f0;
+  --pdca-bd: #c05858;
+  --pdca-text: #6a1010;
+  --pdca-accent: #e07070;
+
+  /* Callout */
+  --call-bg: #fffbe8;
+  --call-bd: #c8b84a;
+
+  /* DB */
+  --db-bg: #f0ebff;
+  --db-bd: #8a6ad0;
+  --db-text: #2e1070;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Noto Sans JP', sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  padding: 48px 24px 64px;
+  min-height: 100vh;
+}
+
+.canvas {
+  max-width: 960px;
+  margin: 0 auto;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 40px 44px 48px;
+  position: relative;
+}
+
+/* ─── HEADER ─── */
+.header {
+  text-align: center;
+  margin-bottom: 40px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--rule);
+}
+.header h1 {
+  font-size: 21px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+}
+.header h1 em {
+  font-style: normal;
+  color: var(--pdca-bd);
+}
+.header p {
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-top: 6px;
+  letter-spacing: 0.12em;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+/* ─── LAYOUT: pipeline + PDCA ─── */
+.body-grid {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 24px;
+  align-items: start;
+}
+
+/* ─── PIPELINE ─── */
+.pipeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Input row */
+.input-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.input-box {
+  flex: 1;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 9px 12px;
+  font-size: 11px;
+  background: white;
+  text-align: center;
+}
+.input-box .ib-title { font-weight: 700; font-size: 12px; color: var(--ink-2); }
+.input-box .ib-sub   { font-size: 10px; color: var(--ink-3); margin-top: 2px; }
+.input-plus {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; color: var(--ink-3); width: 24px; flex-shrink: 0;
+}
+
+/* Step card */
+.step-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.step-card {
+  width: 100%;
+  border-radius: 7px;
+  padding: 16px 18px;
+  position: relative;
+}
+.step-card .step-num {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+.step-card .step-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 5px;
+  line-height: 1.3;
+}
+.step-card .step-body {
+  font-size: 11px;
+  line-height: 1.7;
+  color: inherit;
+  opacity: 0.85;
+}
+.step-card .tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.tag {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9.5px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(0,0,0,0.12);
+  white-space: nowrap;
+}
+
+.s1 { background: var(--s1-bg); border: 1.5px solid var(--s1-bd); color: var(--s1-text); }
+.s2 { background: var(--s2-bg); border: 2px solid var(--s2-bd);   color: var(--s2-text); }
+.s3 { background: var(--s3-bg); border: 1.5px solid var(--s3-bd); color: var(--s3-text); }
+
+/* Step connector */
+.step-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  height: 28px;
+  justify-content: center;
+  position: relative;
+}
+.step-connector::before {
+  content: '';
+  display: block;
+  width: 1.5px;
+  height: 14px;
+  background: var(--ink-3);
+}
+.step-connector::after {
+  content: '▼';
+  font-size: 11px;
+  color: var(--ink-3);
+  line-height: 1;
+}
+
+/* output */
+.output-box {
+  margin-top: 14px;
+  border: 2px solid var(--s3-bd);
+  border-radius: 6px;
+  padding: 11px 16px;
+  background: #fffdf8;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.output-icon { font-size: 22px; flex-shrink: 0; }
+.output-text .ot-title { font-weight: 700; font-size: 13px; color: var(--s3-text); }
+.output-text .ot-sub   { font-size: 10px; color: var(--ink-3); margin-top: 2px; }
+
+/* ─── PDCA COLUMN ─── */
+.pdca-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Callout card */
+.callout {
+  background: var(--call-bg);
+  border: 1px solid var(--call-bd);
+  border-radius: 5px;
+  padding: 9px 11px;
+  font-size: 10.5px;
+  line-height: 1.65;
+  color: #4a3a00;
+  position: relative;
+  margin-bottom: 10px;
+}
+.callout::before {
+  content: attr(data-label);
+  display: block;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: #8a6a00;
+  font-weight: 600;
+  margin-bottom: 3px;
+  letter-spacing: 0.08em;
+}
+
+/* PDCA loop box */
+.pdca-loop {
+  border: 2px solid var(--pdca-bd);
+  border-radius: 8px;
+  background: var(--pdca-bg);
+  padding: 16px 14px;
+  color: var(--pdca-text);
+  margin-top: 4px;
+  flex: 1;
+}
+.pdca-loop .pdca-title {
+  font-size: 13px;
+  font-weight: 900;
+  text-align: center;
+  margin-bottom: 12px;
+  letter-spacing: 0.04em;
+  color: var(--pdca-bd);
+}
+
+/* PDCA cycle */
+.cycle {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.cycle-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(192,88,88,0.18);
+}
+.cycle-item:last-child { border-bottom: none; }
+
+.ci-badge {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--pdca-bd);
+  color: white;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.ci-body { flex: 1; }
+.ci-body .ci-label { font-size: 10.5px; font-weight: 700; }
+.ci-body .ci-desc  { font-size: 10px; color: var(--pdca-bd); line-height: 1.55; margin-top: 1px; opacity: 0.9; }
+
+/* Center message in loop */
+.loop-center {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.65;
+  color: var(--pdca-bd);
+  background: rgba(255,255,255,0.5);
+  border-radius: 5px;
+  padding: 8px 10px;
+  border: 1px dashed var(--pdca-accent);
+}
+
+/* DB box */
+.db-box {
+  border: 1.5px solid var(--db-bd);
+  border-radius: 6px;
+  background: var(--db-bg);
+  padding: 10px 12px;
+  margin-top: 10px;
+  color: var(--db-text);
+}
+.db-box .db-title {
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.db-box .db-rows { font-size: 10px; line-height: 1.65; }
+.db-box .db-rows span {
+  display: flex; align-items: center; gap: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--db-bd); flex-shrink: 0; }
+
+/* ─── RETURN ARROW (PDCA → STEP2) ─── */
+.return-arrow {
+  text-align: center;
+  font-size: 10px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--pdca-bd);
+  margin-top: 8px;
+  padding: 5px 8px;
+  background: rgba(192,88,88,0.08);
+  border-radius: 4px;
+  border: 1px dashed var(--pdca-accent);
+}
+
+/* ─── STEP2 SPECIAL ─── */
+.s2-highlight {
+  display: inline-block;
+  background: rgba(74,170,104,0.18);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-weight: 700;
+}
+
+/* ─── FOOTER ─── */
+.footer {
+  margin-top: 32px;
+  padding-top: 18px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+}
+.footer-left {
+  font-size: 10px;
+  color: var(--ink-3);
+  line-height: 1.7;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.footer-right {
+  font-size: 10px;
+  color: var(--ink-3);
+  text-align: right;
+  line-height: 1.7;
+}
+
+/* ─── WATERMARK label ─── */
+.arch-label {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: var(--ink-3);
+  letter-spacing: 0.1em;
+}
+
+/* Bridge line: show step2 → PDCA connection visually */
+.bridge-note {
+  font-size: 9.5px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--s2-text);
+  background: rgba(74,170,104,0.12);
+  border: 1px dashed var(--s2-bd);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-top: 6px;
+  text-align: center;
+}
+</style>
+</head>
+<body>
+<div class="canvas">
+  <div class="arch-label">v3 — 2026</div>
+
+  <!-- ── HEADER ── -->
+  <div class="header">
+    <h1>読み人知らず — <em>「PDCA内蔵」</em>自己進化型・自動組版システム</h1>
+    <p>InDesignゼロ　／　校正サイクル消滅　／　属人化の完全排除</p>
+  </div>
+
+  <!-- ── BODY ── -->
+  <div class="body-grid">
+
+    <!-- ════ LEFT: PIPELINE ════ -->
+    <div class="pipeline">
+
+      <!-- Input -->
+      <div class="input-row">
+        <div class="input-box">
+          <div class="ib-title">著者原稿</div>
+          <div class="ib-sub">Word / Markdown / GDoc</div>
+        </div>
+        <div class="input-plus">＋</div>
+        <div class="input-box">
+          <div class="ib-title">既存PDF</div>
+          <div class="ib-sub">レイアウト事実（gs:// URL）</div>
+        </div>
+      </div>
+
+      <!-- ─── STEP 1 ─── -->
+      <div class="step-wrap">
+        <div class="step-card s1">
+          <div class="step-num">STEP 1</div>
+          <div class="step-title">物理的コンポーネント分解（チャンキング）</div>
+          <div class="step-body">
+            PDFの「箱（コンポーネント）の座標・サイズ」を物理測定し、<br>
+            原稿テキストを意味のある塊に分解・タグ付けする。
+          </div>
+          <div class="tags">
+            <span class="tag">Document AI</span>
+            <span class="tag">PyMuPDF · get_text("rawdict")</span>
+            <span class="tag">[Role: QA_Box]</span>
+            <span class="tag">バウンディングボックス抽出</span>
+          </div>
+        </div>
+        <div class="step-connector"></div>
+      </div>
+
+      <!-- ─── STEP 2 ─── -->
+      <div class="step-wrap">
+        <div class="step-card s2" id="step2">
+          <div class="step-num">STEP 2 — システムの頭脳</div>
+          <div class="step-title">RAG検査 ＆ JSON強制整形</div>
+          <div class="step-body">
+            チャンクごとに Supabase から<span class="s2-highlight">顧客専用ルールのみ</span>をベクトル検索（RAG）で引き当て、Gemini Agent が「合否＋修正案」を<strong>厳格なJSONスキーマで出力</strong>する。<br>
+            AIにデザインはさせない——ルール（事実）に基づく検査・採点のみを強制。
+          </div>
+          <div class="tags">
+            <span class="tag">Supabase pgvector</span>
+            <span class="tag">RAG（顧客別ルール）</span>
+            <span class="tag">文字あふれ事前検知</span>
+            <span class="tag">厳格なJSON出力</span>
+            <span class="tag">Gemini Agent（推論禁止）</span>
+          </div>
+          <div class="bridge-note">← PDCAループの新ルールが即時フィードバック</div>
+        </div>
+        <div class="step-connector"></div>
+      </div>
+
+      <!-- ─── STEP 3 ─── -->
+      <div class="step-wrap">
+        <div class="step-card s3">
+          <div class="step-num">STEP 3</div>
+          <div class="step-title">機械的コンパイル（Vivliostyle レンダリング）</div>
+          <div class="step-body">
+            100%検証済みの JSON を HTML + CSS（Paged Media）にバインドし、Vivliostyle に流し込んでPDFを一括生成。<br>
+            <strong>人間の介入もAIの推論も一切なし。</strong><br>
+            InDesign特有の流し込み作業によるズレ（デグレ）が数学的に発生しない。
+          </div>
+          <div class="tags">
+            <span class="tag">合議不要・機械的実行のみ</span>
+            <span class="tag">HTML / CSS変換</span>
+            <span class="tag">Vivliostyle</span>
+            <span class="tag">数秒で全ページPDF/X-1a</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Output -->
+      <div class="output-box">
+        <div class="output-icon">🖨</div>
+        <div class="output-text">
+          <div class="ot-title">印刷用PDF/X-1a 出力</div>
+          <div class="ot-sub">初校〜念校まるごと消滅 ／ 版ズレ・表記ゆれ・文字あふれ：ゼロ保証</div>
+        </div>
+      </div>
+
+    </div><!-- /pipeline -->
+
+    <!-- ════ RIGHT: PDCA + CALLOUTS ════ -->
+    <div class="pdca-col">
+
+      <!-- Callout 1: near STEP2 level -->
+      <div class="callout" data-label="POINT_01">
+        AIにデザインはさせない。<br>
+        ルール（事実）に基づく<br>
+        検査・採点のみを強制する。
+      </div>
+
+      <!-- PDCA Loop -->
+      <div class="pdca-loop">
+        <div class="pdca-title">自己進化 PDCAループ</div>
+
+        <div class="cycle">
+
+          <div class="cycle-item">
+            <div class="ci-badge">C<br><span style="font-size:8px">heck</span></div>
+            <div class="ci-body">
+              <div class="ci-label">人間が修正・上書き</div>
+              <div class="ci-desc">確認画面でAI提案を<br>人間が修正した瞬間が起点</div>
+            </div>
+          </div>
+
+          <div class="cycle-item">
+            <div class="ci-badge">A<br><span style="font-size:8px">ction</span></div>
+            <div class="ci-body">
+              <div class="ci-label">Edge Function 起動</div>
+              <div class="ci-desc">元テキスト・AI案・人間修正の<br>3差分から暗黙知を1文で抽出</div>
+            </div>
+          </div>
+
+          <div class="cycle-item">
+            <div class="ci-badge" style="font-size:9px;">DB<br></div>
+            <div class="ci-body">
+              <div class="ci-label">ベクトル化 ＆ 格納</div>
+              <div class="ci-desc">text-embedding-004 で埋め込み<br>client_rules テーブルへ保存</div>
+            </div>
+          </div>
+
+          <div class="cycle-item" style="border-bottom:none;">
+            <div class="ci-badge">P<br><span style="font-size:8px">lan</span></div>
+            <div class="ci-body">
+              <div class="ci-label">STEP 2 RAG に即時還流</div>
+              <div class="ci-desc">次回から最新ルールが<br>自動適用される</div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="loop-center">
+          運用するほどベクトルDBが分厚くなり、<br>
+          人間の修正（赤字）がゼロに近づく<br>
+          <strong>自己進化ループ</strong>
+        </div>
+
+      </div><!-- /pdca-loop -->
+
+      <!-- DB detail -->
+      <div class="db-box">
+        <div class="db-title">🗄 Supabase (pgvector)</div>
+        <div class="db-rows">
+          <span><span class="dot"></span>client_rules — 顧客別ルールDB</span>
+          <span><span class="dot"></span>10〜20パターン/顧客（自動蓄積）</span>
+          <span><span class="dot"></span>text-embedding-004 ベクトル検索</span>
+        </div>
+      </div>
+
+      <!-- Return arrow note -->
+      <div class="return-arrow">
+        ↑ 新ルールが即座に<br>STEP 2 の RAG知識ベースへ
+      </div>
+
+      <!-- Callout 2 -->
+      <div class="callout" style="margin-top:12px;" data-label="POINT_02">
+        流し込み作業による<br>
+        デグレ（ズレ）が<br>
+        数学的に発生しない。
+      </div>
+
+    </div><!-- /pdca-col -->
+  </div><!-- /body-grid -->
+
+  <!-- ── FOOTER ── -->
+  <div class="footer">
+    <div class="footer-left">
+      STEP 1: 物理測定（Document AI + PyMuPDF）<br>
+      STEP 2: 検査（Supabase RAG + Gemini Agent）<br>
+      STEP 3: 描画（Vivliostyle · HTML/CSS Paged Media）
+    </div>
+    <div class="footer-right">
+      Before: 複数AIが合議して「頑張って作る」<br>
+      After:　データが流れるパイプライン ＋ 自動学習フィルター（PDCA）<br>
+      <strong>抽出・検証・描画の完全分離</strong>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

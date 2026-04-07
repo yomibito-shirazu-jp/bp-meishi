@@ -1,8 +1,9 @@
 import { Span } from '../types';
 
 import { getConfig } from './config';
+import { analyzePDFWithDocumentAI, extractBusinessCardInfo, DocumentAIResult } from './documentai';
 
-const geminiUrl = (model = 'gemini-3.1-flash-lite-preview') =>
+const geminiUrl = (model = 'gemini-2.0-flash') =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${getConfig('VITE_GOOGLE_AI_KEY')}`;
 
 export interface CorrectedSpan {
@@ -121,4 +122,93 @@ async function callGemini(imageBase64: string, prompt: string): Promise<string> 
 
   const data = await res.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+/**
+ * Document AIでPDFから名刺情報を抽出
+ */
+export async function extractBusinessCardFromPDF(
+  pdfBase64: string,
+  processorId?: string
+): Promise<{
+  cardInfo: Record<string, string>;
+  confidence: number;
+  blocks: any[];
+  fullText: string;
+}> {
+  if (!getConfig('VITE_GOOGLE_PROJECT_ID')) {
+    throw new Error('VITE_GOOGLE_PROJECT_ID not set — Document AI requires project ID');
+  }
+
+  try {
+    const documentAIResult: DocumentAIResult = await analyzePDFWithDocumentAI(pdfBase64, processorId);
+    return extractBusinessCardInfo(documentAIResult);
+  } catch (error) {
+    console.error('Document AI business card extraction failed:', error);
+    throw error;
+  }
+}
+
+/**
+ * ハイブリッド名刺処理：画像OCR + PDF Document AI
+ */
+export async function processBusinessCardHybrid(
+  imageBase64?: string,
+  pdfBase64?: string,
+  mergedSpans?: Span[]
+): Promise<CorrectedSpan[]> {
+  // PDFが提供されている場合はDocument AIを優先
+  if (pdfBase64) {
+    try {
+      const documentAIResult = await extractBusinessCardFromPDF(pdfBase64);
+      return convertDocumentAIToSpans(documentAIResult);
+    } catch (error) {
+      console.warn('Document AI failed, falling back to image OCR:', error);
+    }
+  }
+
+  // 画像OCR処理（既存のロジック）
+  if (imageBase64 && mergedSpans) {
+    return await correctOcrWithAI(imageBase64, mergedSpans);
+  }
+
+  throw new Error('Either PDF or image with OCR results must be provided');
+}
+
+/**
+ * Document AI結果をCorrectedSpan形式に変換
+ */
+function convertDocumentAIToSpans(documentAIResult: {
+  cardInfo: Record<string, string>;
+  confidence: number;
+  blocks: any[];
+  fullText: string;
+}): CorrectedSpan[] {
+  const spans: CorrectedSpan[] = [];
+  
+  // カード情報からスパンを生成
+  Object.entries(documentAIResult.cardInfo).forEach(([key, value], index) => {
+    spans.push({
+      id: `documentai_${key}`,
+      text: value,
+      category: key,
+    });
+  });
+
+  // ブロック情報から追加のテキストを抽出
+  documentAIResult.blocks.forEach((block, index) => {
+    if (block.type === 'text' && block.confidence > 0.7) {
+      // 既存のカード情報に含まれていないテキストを追加
+      const isDuplicate = spans.some(span => span.text === block.text);
+      if (!isDuplicate) {
+        spans.push({
+          id: `documentai_block_${index}`,
+          text: block.text,
+          category: 'other',
+        });
+      }
+    }
+  });
+
+  return spans;
 }
