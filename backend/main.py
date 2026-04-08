@@ -473,10 +473,12 @@ body {{
 async def vivliostyle_build(req: VivliostyleBuildRequest):
     """Vivliostyle CLI で HTML+CSS → 印刷用PDF生成"""
     vivliostyle_cmd = shutil.which("vivliostyle")
+    use_npx = False
     if not vivliostyle_cmd:
         npx_cmd = shutil.which("npx")
         if npx_cmd:
-            vivliostyle_cmd = "npx"
+            use_npx = True
+            vivliostyle_cmd = npx_cmd
         else:
             raise HTTPException(500, "vivliostyle CLI が見つかりません")
 
@@ -495,13 +497,15 @@ async def vivliostyle_build(req: VivliostyleBuildRequest):
         with open(css_path, "w", encoding="utf-8") as f:
             f.write(css_content)
 
-        if vivliostyle_cmd == "npx":
+        if use_npx:
             cmd = [
-                "npx", "-y", "@vivliostyle/cli",
-                "build", html_path, "-o", pdf_path,
+                vivliostyle_cmd, "-y", "@vivliostyle/cli",
+                "build", html_path, "-o", pdf_path
             ]
         else:
-            cmd = [vivliostyle_cmd, "build", html_path, "-o", pdf_path]
+            cmd = [
+                vivliostyle_cmd, "build", html_path, "-o", pdf_path
+            ]
 
         print(f"Vivliostyle build: {' '.join(cmd)}")
         result = subprocess.run(

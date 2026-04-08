@@ -1,0 +1,80 @@
+Step #0:  ---> Running in 253bb7b8184f
+Step #0: Removing intermediate container 253bb7b8184f
+Step #0:  ---> 6c7f4e49ab8f
+Step #0: Successfully built 6c7f4e49ab8f
+Step #0: Successfully tagged asia-northeast1-docker.pkg.dev/aidriven-mastering-fyqu/cloud-run-source-deploy/meishi-api:5a290bf5-d147-4546-9b67-1365639d1142
+Finished Step #0
+Starting Step #1
+Step #1: Already have image (with digest): gcr.io/cloud-builders/docker
+Step #1: The push refers to repository [asia-northeast1-docker.pkg.dev/aidriven-mastering-fyqu/cloud-run-source-deploy/meishi-api]
+Step #1: a87b604a1ece: Preparing
+Step #1: ccf4b849ed69: Preparing
+Step #1: 0a6d263a142a: Preparing
+Step #1: c7e0b500e713: Preparing
+Step #1: 731c400e7827: Preparing
+Step #1: d729e986d519: Preparing
+Step #1: 129c8aa20e7b: Preparing
+Step #1: b1e63d8b157a: Preparing
+Step #1: fa5904d51443: Preparing
+Step #1: 23648ecf9819: Preparing
+Step #1: 55ae106bd30c: Preparing
+Step #1: 1b9ade8c8459: Preparing
+Step #1: 60e70dddd9ea: Preparing
+Step #1: 55ae106bd30c: Waiting
+Step #1: 1b9ade8c8459: Waiting
+Step #1: 60e70dddd9ea: Waiting
+Step #1: 23648ecf9819: Layer already exists
+Step #1: 55ae106bd30c: Layer already exists
+Step #1: 1b9ade8c8459: Layer already exists
+Step #1: a87b604a1ece: Pushed
+Step #1: 731c400e7827: Pushed
+Step #1: c7e0b500e713: Pushed
+Step #1: ccf4b849ed69: Pushed
+Step #1: d729e986d519: Pushed
+Step #1: 60e70dddd9ea: Pushed
+Step #1: b1e63d8b157a: Pushed
+Step #1: 0a6d263a142a: Pushed
+Step #1: fa5904d51443: Pushed
+Step #1: 129c8aa20e7b: Pushed
+Step #1: 5a290bf5-d147-4546-9b67-1365639d1142: digest: sha256:6d0435262fdfef2b349e14b33e2f7e5dc62a16f6b9d22f34be7dd52639776bec size: 3051
+Finished Step #1
+Starting Step #2
+Step #2: Pulling image: gcr.io/google.com/cloudsdktool/cloud-sdk
+Step #2: Using default tag: latest
+Step #2: latest: Pulling from google.com/cloudsdktool/cloud-sdk
+Step #2: 9d2f29087bcd: Already exists
+Step #2: 74da153c22f8: Pulling fs layer
+Step #2: 16b1c74a2e3a: Pulling fs layer
+Step #2: d67724a2d470: Pulling fs layer
+Step #2: fe164de4d5c6: Pulling fs layer
+Step #2: 09057521cead: Pulling fs layer
+Step #2: fe164de4d5c6: Verifying Checksum
+Step #2: fe164de4d5c6: Download complete
+Step #2: 09057521cead: Verifying Checksum
+Step #2: 09057521cead: Download complete
+Step #2: 74da153c22f8: Download complete
+Step #2: 74da153c22f8: Pull complete
+Step #2: d67724a2d470: Verifying Checksum
+Step #2: d67724a2d470: Download complete
+Step #2: 16b1c74a2e3a: Verifying Checksum
+Step #2: 16b1c74a2e3a: Download complete
+Step #2: 16b1c74a2e3a: Pull complete
+Step #2: d67724a2d470: Pull complete
+Step #2: fe164de4d5c6: Pull complete
+Step #2: 09057521cead: Pull complete
+Step #2: Digest: sha256:3dfb91948331de0a0ff66f883c546b6f57ca92042794b7b61f0bdc536236c048
+Step #2: Status: Downloaded newer image for gcr.io/google.com/cloudsdktool/cloud-sdk:latest
+Step #2: gcr.io/google.com/cloudsdktool/cloud-sdk:latest
+Step #2: Deploying container to Cloud Run service [meishi-api] in project [aidriven-mastering-fyqu] region [asia-northeast1]
+Step #2: Deploying...
+Step #2: Setting IAM Policy..........................done
+Step #2: Creating Revision.................................................................................................................................................................................failed
+Step #2: Deployment failed
+Step #2: ERROR: (gcloud.run.deploy) The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.
+Step #2:
+Step #2: Logs URL: https://console.cloud.google.com/logs/viewer?project=aidriven-mastering-fyqu&resource=cloud_run_revision/service_name/meishi-api/revision_name/meishi-api-00025-c6b&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22meishi-api%22%0Aresource.labels.revision_name%3D%22meishi-api-00025-c6b%22
+Step #2: For more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start
+Finished Step #2
+ERROR
+ERROR: build step 2 "gcr.io/google.com/cloudsdktool/cloud-sdk" failed: step exited with non-zero status: 1
+----------------------------
