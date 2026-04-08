@@ -58,6 +58,7 @@ export const rebuildPdf = async (
   pageIndex = 0,
   clipRect?: [number, number, number, number],
   overrides?: Record<string, SpanOverride>,
+  originalTexts?: Record<string, string>,
 ): Promise<RebuildResponse> => {
   const res = await fetch(`${getApiUrl()}/rebuild`, {
     method: 'POST',
@@ -65,6 +66,7 @@ export const rebuildPdf = async (
     body: JSON.stringify({
       pdf_b64: pdfB64,
       edits,
+      original_texts: originalTexts || {},
       overrides: overrides || {},
       raw_id_map: rawIdMap,
       dpi,

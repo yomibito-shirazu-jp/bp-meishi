@@ -371,11 +371,86 @@ async def analyze_pdf(
 
 @app.post("/rebuild")
 async def rebuild_pdf(req: dict[str, Any]):
-    """互換レイヤー: 編集済みSpanをそのまま返す（Vivliostyle移行中）"""
-    return {
-        "pdf_b64": req.get("pdf_b64", ""),
-        "png_b64": "",
-    }
+    """PyMuPD でテキストを置換して修正PDF + プレビュー PNG を返す"""
+    pdf_b64 = req.get("pdf_b64", "")
+    edits = req.get("edits", {})
+    original_texts = req.get("original_texts", {})
+    overrides = req.get("overrides", {})
+    page_index = req.get("page_index", 0)
+    dpi = req.get("dpi", 300)
+
+    if not pdf_b64:
+        raise HTTPException(400, "pdf_b64 is required")
+
+    try:
+        pdf_bytes = base64.b64decode(pdf_b64)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        page = doc.load_page(page_index)
+
+        changes_applied = 0
+        for span_id, new_text in edits.items():
+            old_text = original_texts.get(span_id, "")
+            if not old_text or old_text == new_text:
+                continue
+
+            rects = page.search_for(old_text)
+            if not rects:
+                # 部分一致を試行
+                for word in old_text.split():
+                    if len(word) >= 2:
+                        rects = page.search_for(word)
+                        if rects:
+                            break
+
+            if not rects:
+                print(f"Text not found: '{old_text}'")
+                continue
+
+            rect = rects[0]
+            ov = overrides.get(span_id, {})
+            size_pt = ov.get("size_pt", 9.0)
+
+            # 元テキストを消去して白塗り
+            page.add_redact_annot(rect, fill=(1, 1, 1))
+            page.apply_redactions()
+
+            # 新テキストを挿入
+            try:
+                page.insert_text(
+                    fitz.Point(rect.x0, rect.y1 - 1),
+                    new_text,
+                    fontname="japan",
+                    fontsize=size_pt,
+                    color=(0, 0, 0),
+                )
+                changes_applied += 1
+            except Exception as e:
+                print(f"insert_text error: {e}")
+
+        print(f"Rebuild: {changes_applied}/{len(edits)}")
+
+        new_pdf_bytes = doc.write()
+
+        # プレビュー PNG 生成
+        page = doc.load_page(page_index)
+        scale = dpi / 72
+        mat = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=mat)
+        png_bytes = pix.tobytes("png")
+        doc.close()
+
+        return {
+            "pdf_b64": base64.b64encode(
+                new_pdf_bytes).decode("utf-8"),
+            "png_b64": base64.b64encode(
+                png_bytes).decode("utf-8"),
+            "changes_applied": changes_applied,
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"再構築失敗: {e}")
 
 
 # ── /vivliostyle-build エンドポイント ─────────────────────────────────────────

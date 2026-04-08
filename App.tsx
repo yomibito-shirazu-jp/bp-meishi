@@ -381,6 +381,7 @@ const App: React.FC = () => {
       return;
     }
     const edits: Record<string, string> = {};
+    const originalTexts: Record<string, string> = {};
     const ovMap: Record<string, SpanOverride> = {};
     spans.forEach((s, i) => {
       if (!originalSpans[i]) return;
@@ -389,7 +390,10 @@ const App: React.FC = () => {
       const fontChanged = s.font_class !== orig.font_class;
       const sizeChanged = s.size_pt !== orig.size_pt;
       const posChanged = s.x_pct !== orig.x_pct || s.y_pct !== orig.y_pct;
-      if (textChanged) edits[s.id] = s.text;
+      if (textChanged) {
+        edits[s.id] = s.text;
+        originalTexts[s.id] = orig.text;
+      }
       if (fontChanged || sizeChanged || posChanged) {
         const ov: SpanOverride = {};
         if (fontChanged) ov.font_class = s.font_class;
@@ -402,7 +406,7 @@ const App: React.FC = () => {
     if (!totalChanges) { flash('変更がありません', 'info'); return; }
     flash(`再構築中 (${totalChanges}件)...`, 'info');
     try {
-      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect, ovMap);
+      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect, ovMap, originalTexts);
       if (data.png_b64) { setRebuiltPng(`data:image/png;base64,${data.png_b64}`); setPreviewTab('rebuilt'); }
 
       // Auto-save to DB with rebuilt PDF
