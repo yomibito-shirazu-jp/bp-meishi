@@ -18,7 +18,7 @@ export const analyzePdf = async (file: File, useDocumentAI?: boolean): Promise<A
   if (geminiKey) {
     headers['X-Gemini-API-Key'] = geminiKey;
   }
-  const useDocAI = useDocumentAI ?? (getConfig('VITE_USE_DOCUMENT_AI') === 'true');
+  const useDocAI = useDocumentAI ?? (getConfig('VITE_USE_DOCUMENT_AI') !== 'false');
   if (useDocAI) {
     headers['X-Use-DocumentAI'] = 'true';
     const projectId = getConfig('VITE_GOOGLE_PROJECT_ID');
