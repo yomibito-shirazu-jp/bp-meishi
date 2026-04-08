@@ -1450,6 +1450,11 @@ const App: React.FC = () => {
                   const changed = originalSpans[i] && s.text !== originalSpans[i].text;
                   const posChanged = originalSpans[i] && (s.x_pct !== originalSpans[i].x_pct || s.y_pct !== originalSpans[i].y_pct);
                   const isModified = changed || posChanged;
+                  const fontFamily = s.font_class === 'mincho'
+                    ? "'Noto Serif JP', 'Hiragino Mincho ProN', serif"
+                    : "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif";
+                  const fontWeight = s.font_class === 'gothic_bold' ? 700
+                    : s.font_class === 'light' ? 300 : 400;
                   return (
                     <div
                       key={s.id}
@@ -1472,13 +1477,27 @@ const App: React.FC = () => {
                           ? 'rgba(16,185,129,0.25)'
                           : isActive
                             ? 'rgba(16,185,129,0.1)'
-                            : 'transparent',
+                            : isModified
+                              ? 'rgba(255,255,255,0.92)'
+                              : 'transparent',
                         borderRadius: '2px',
                         transition: isDragging ? 'none' : 'all 0.15s',
                         zIndex: isDragging ? 30 : isActive ? 20 : 10,
                         userSelect: 'none',
+                        display: 'flex',
+                        alignItems: 'center',
+                        overflow: 'hidden',
+                        fontFamily,
+                        fontWeight,
+                        fontSize: `clamp(6px, ${s.h_pct * 0.65}vh, 48px)`,
+                        lineHeight: 1.1,
+                        color: isModified ? '#1e293b' : 'transparent',
+                        whiteSpace: 'nowrap',
+                        padding: '0 2px',
                       }}
-                    />
+                    >
+                      {isModified && s.text}
+                    </div>
                   );
                 })}
               </div>
