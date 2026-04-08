@@ -311,15 +311,19 @@ const App: React.FC = () => {
 
   // ── Upload PDF ──
   const handleUpload = async (file: File) => {
+    console.log('[handleUpload] called with:', file?.name, file?.type, file?.size);
     if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
       flash('PDFファイルを選択してください', 'error');
       return;
     }
     setLoading(true);
-    flash('PDF分析中...', 'info');
+    flash('PDF分析中（Document AI）...', 'info');
     try {
-      const useDocAI = getConfig('VITE_USE_DOCUMENT_AI') === 'true';
+      // Document AI をデフォルトで使用
+      const useDocAI = getConfig('VITE_USE_DOCUMENT_AI') !== 'false';
+      console.log('[handleUpload] useDocAI:', useDocAI, 'API URL:', getConfig('VITE_API_URL'));
       const data = await analyzePdf(file, useDocAI);
+      console.log('[handleUpload] analyzePdf returned:', data?.pages?.length, 'pages');
       const pages = data.pages;
       setAllPages(pages);
       setPdfB64(data.pdf_b64);
@@ -332,6 +336,7 @@ const App: React.FC = () => {
       }
 
       // Load first page with AI correction
+      console.log('[handleUpload] loading page 0, spans:', pages[0]?.spans?.length);
       await loadPage(pages, 0);
       setView(AppState.EDIT);
 
@@ -339,6 +344,7 @@ const App: React.FC = () => {
         flash(`${pages.length}ページ検出 (${pages.filter(p => p.page_label).map(p => p.page_label).join('・') || 'ページ切替可'})`, 'ok');
       }
     } catch (e: any) {
+      console.error('[handleUpload] ERROR:', e);
       flash(`分析エラー: ${e.message}`, 'error');
     } finally {
       setLoading(false);

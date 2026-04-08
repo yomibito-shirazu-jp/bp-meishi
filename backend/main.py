@@ -294,8 +294,8 @@ async def analyze_pdf(
         pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         pages_data = []
 
-        # モード選択
-        use_docai = (x_use_documentai == "true")
+        # モード選択: Document AI をデフォルトで使用（明示的に "false" の場合のみ無効）
+        use_docai = (x_use_documentai != "false")
 
         docai_results = []
         if use_docai:
@@ -304,8 +304,13 @@ async def analyze_pdf(
             proc = x_processor_id or "120a21840002e525"
             ver = x_version_id
             print(f"Using Document AI ({prj}, {loc}, {proc}, {ver})...")
-            docai_results = _extract_spans_documentai(
-                pdf_bytes, prj, loc, proc, ver)
+            try:
+                docai_results = _extract_spans_documentai(
+                    pdf_bytes, prj, loc, proc, ver)
+                print(f"Document AI extracted {len(docai_results)} pages")
+            except Exception as docai_err:
+                print(f"Document AI failed, falling back to Gemini: {docai_err}")
+                docai_results = []
 
         for i in range(len(pdf_doc)):
             page = pdf_doc.load_page(i)
