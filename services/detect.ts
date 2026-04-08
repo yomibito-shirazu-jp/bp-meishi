@@ -177,7 +177,7 @@ async function detectViaDirectGemini(
   // 画像をリサイズしてトークン数を削減
   const resized = await resizeImageBase64(imageBase64, mimeType);
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
   const body = {
     contents: [{
       parts: [

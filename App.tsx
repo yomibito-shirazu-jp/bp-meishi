@@ -2288,8 +2288,8 @@ const App: React.FC = () => {
 
       // 合議: 複数モデルで同時実行
       const [result1, result2] = await Promise.all([
-        callGemini('gemini-3.1-pro-preview', prompt),
-        callGemini('gemini-3.1-pro-preview', prompt),
+        callGemini('gemini-2.0-flash', prompt),
+        callGemini('gemini-2.0-flash', prompt),
       ]);
 
       // 合議結果をマージ（長い方を基準に）
@@ -2301,8 +2301,8 @@ const App: React.FC = () => {
         source_type: 'upload',
         text: consensus,
         ai_results: [
-          { model: 'gemini-3.1-pro-preview', text: result1 },
-          { model: 'gemini-3.1-pro-preview', text: result2 },
+          { model: 'gemini-2.0-flash', text: result1 },
+          { model: 'gemini-2.0-flash', text: result2 },
         ],
         consensus_text: consensus,
         created_at: new Date().toISOString(),
@@ -2475,7 +2475,7 @@ const App: React.FC = () => {
 
       // Geminiで文書構造を解析 → 組版指示を生成
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2908,7 +2908,7 @@ JSONのみ返してください。` },
       }
 
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
