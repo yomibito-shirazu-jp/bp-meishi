@@ -286,8 +286,13 @@ async def analyze_pdf(
     x_version_id: Optional[str] = Header(None),
 ):
     """PDF → Gemini または Document AI でSpan抽出"""
-    if file.content_type != "application/pdf":
-        raise HTTPException(400, "PDFファイルのみ対応しています")
+    ct = (file.content_type or "").lower()
+    fn = (file.filename or "").lower()
+    is_pdf = ("pdf" in ct) or fn.endswith(".pdf")
+    if not is_pdf:
+        raise HTTPException(
+            400, "PDFファイルのみ対応しています"
+        )
 
     try:
         pdf_bytes = await file.read()
