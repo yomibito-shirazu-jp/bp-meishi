@@ -42,14 +42,11 @@ export const getConfig = (key: ConfigKey): string => {
   return (import.meta.env[key] as string) || '';
 };
 
-/** Persist a new value for a config key. Pass '' to clear the override. */
+/** Persist a new value for a config key. Empty strings are ignored (existing value kept). */
 export const saveConfig = (key: ConfigKey, value: string): void => {
+  if (value.trim() === '') return; // 空なら既存値を維持
   const overrides = loadAll();
-  if (value.trim() === '') {
-    delete overrides[key];
-  } else {
-    overrides[key] = value.trim();
-  }
+  overrides[key] = value.trim();
   localStorage.setItem(LS_KEY, JSON.stringify(overrides));
 };
 
