@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent, ManuscriptChunk, ValidationReportResponse, ChunkDetail, FeedbackInput, FeedbackResponse, FeedbackActionType } from './types';
-import { analyzePdf, rebuildPdf, SpanOverride, vivliostyleBuild } from './services/api';
+import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent, ManuscriptChunk, ValidationReportResponse, ChunkDetail, FeedbackInput, FeedbackResponse, FeedbackActionType, ImageInfo, LayoutBlock, BarcodeInfo, DetectedLanguage } from './types';
+import { analyzePdf, rebuildPdf, SpanOverride, vivliostyleBuild, visionAnalyze, VisionAnalyzeResult } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
@@ -111,6 +111,21 @@ const App: React.FC = () => {
   const [previewTab, setPreviewTab] = useState<'edit' | 'original' | 'rebuilt'>('edit');
   const [fieldCategories, setFieldCategories] = useState<Record<string, string>>({});
   const [jobInstruction, setJobInstruction] = useState<JobInstruction | null>(null);
+
+  // ── Images ──
+  const [pageImages, setPageImages] = useState<ImageInfo[]>([]);
+  const [imageReplacements, setImageReplacements] = useState<Record<string, { xref: number; data_b64: string; mime_type: string }>>({});
+  const imgFileRef = useRef<HTMLInputElement>(null);
+  const [replacingImageId, setReplacingImageId] = useState<string | null>(null);
+
+  // ── Document AI Layout ──
+  const [layoutBlocks, setLayoutBlocks] = useState<LayoutBlock[]>([]);
+  const [barcodes, setBarcodes] = useState<BarcodeInfo[]>([]);
+  const [detectedLanguages, setDetectedLanguages] = useState<DetectedLanguage[]>([]);
+
+  // ── Vision API ──
+  const [visionResults, setVisionResults] = useState<Record<string, VisionAnalyzeResult>>({});
+  const [analyzingImageId, setAnalyzingImageId] = useState<string | null>(null);
 
   // ── Multi-Page ──
   const [allPages, setAllPages] = useState<PageData[]>([]);
@@ -276,6 +291,11 @@ const App: React.FC = () => {
     setRebuiltPng(null);
     setSelectedId(null);
     setZoom(1);
+    setPageImages(page.images || []);
+    setImageReplacements({});
+    setLayoutBlocks(page.layout_blocks || []);
+    setBarcodes(page.barcodes || []);
+    setDetectedLanguages(page.detected_languages || []);
 
     if (!skipAI && page.original_png_b64) {
       flash('AI補正中 (Gemini Vision)...', 'info');
@@ -295,7 +315,7 @@ const App: React.FC = () => {
         const finalSpans = aiSpans.length > 0 ? aiSpans : mergedSpans;
         setSpans(finalSpans);
         setOriginalSpans(JSON.parse(JSON.stringify(finalSpans)));
-        flash(`${finalSpans.length}個のフィールド (AI補正済み)`, 'ok');
+        flash(`${finalSpans.length}個のテキスト + ${(page.images||[]).length}個の画像 (AI補正済み)`, 'ok');
       } catch (aiErr: any) {
         console.error('AI correction failed:', aiErr);
         setSpans(mergedSpans);
@@ -305,14 +325,15 @@ const App: React.FC = () => {
     } else {
       setSpans(mergedSpans);
       setOriginalSpans(JSON.parse(JSON.stringify(mergedSpans)));
-      flash(`${mergedSpans.length}個のフィールドを検出`, 'ok');
+      flash(`${mergedSpans.length}個のテキスト + ${(page.images||[]).length}個の画像を検出`, 'ok');
     }
   };
 
   // ── Upload PDF ──
   const handleUpload = async (file: File) => {
     console.log('[handleUpload] called with:', file?.name, file?.type, file?.size);
-    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
+    const isPdf = file && (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf');
+    if (!isPdf) {
       flash('PDFファイルを選択してください', 'error');
       return;
     }
@@ -402,11 +423,11 @@ const App: React.FC = () => {
         ovMap[s.id] = ov;
       }
     });
-    const totalChanges = Object.keys(edits).length + Object.keys(ovMap).length;
+    const totalChanges = Object.keys(edits).length + Object.keys(ovMap).length + Object.keys(imageReplacements).length;
     if (!totalChanges) { flash('変更がありません', 'info'); return; }
-    flash(`再構築中 (${totalChanges}件)...`, 'info');
+    flash(`再構築中 (テキスト${Object.keys(edits).length}件 + 画像${Object.keys(imageReplacements).length}件)...`, 'info');
     try {
-      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect, ovMap, originalTexts);
+      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect, ovMap, originalTexts, imageReplacements);
       if (data.png_b64) { setRebuiltPng(`data:image/png;base64,${data.png_b64}`); setPreviewTab('rebuilt'); }
 
       // Auto-save to DB with rebuilt PDF
@@ -1285,6 +1306,11 @@ const App: React.FC = () => {
                   <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ background: '#12122a', color: '#8888aa' }}>
                     {FONT_LABELS[s.font_class] || s.font_class}
                   </span>
+                  {s.writing_direction === 'vertical' && (
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,146,60,0.15)', color: '#fb923c' }}>
+                      縦
+                    </span>
+                  )}
                   <span className="text-[10px] font-mono" style={{ color: '#5a5a7a' }}>{s.size_pt}pt</span>
                   {changed && (
                     <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full ml-auto" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
@@ -1410,6 +1436,265 @@ const App: React.FC = () => {
                 </span>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ── PDF構成サマリー ── */}
+        <div className="border-t px-3 py-2.5 shrink-0" style={{ borderColor: '#2a2a4a', background: '#12122a' }}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: spans.length > 0 ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: spans.length > 0 ? '#10b981' : '#ef4444' }}>
+              テキスト {spans.length > 0 ? `${spans.length}件` : 'なし'}
+            </span>
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: pageImages.length > 0 ? 'rgba(59,130,246,0.15)' : 'rgba(107,114,128,0.15)', color: pageImages.length > 0 ? '#3b82f6' : '#6b7280' }}>
+              画像 {pageImages.length > 0 ? `${pageImages.length}件` : 'なし'}
+            </span>
+            {layoutBlocks.length > 0 && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(168,85,247,0.15)', color: '#a855f7' }}>
+                ブロック {layoutBlocks.length}
+              </span>
+            )}
+            {barcodes.length > 0 && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(236,72,153,0.15)', color: '#ec4899' }}>
+                バーコード {barcodes.length}
+              </span>
+            )}
+            {detectedLanguages.length > 0 && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(34,211,238,0.15)', color: '#22d3ee' }}>
+                {detectedLanguages.map(l => l.code).join('/')}
+              </span>
+            )}
+            {Object.keys(imageReplacements).length > 0 && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(251,146,60,0.15)', color: '#fb923c' }}>
+                差替 {Object.keys(imageReplacements).length}件
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* ── 画像パネル ── */}
+        {pageImages.length > 0 && (
+          <div className="border-t px-3 py-2.5 shrink-0" style={{ borderColor: '#2a2a4a', background: '#0f0f20' }}>
+            <h4 className="text-[11px] font-medium mb-2 flex items-center gap-1.5" style={{ color: '#8888aa' }}>
+              📷 画像 ({pageImages.length})
+            </h4>
+            <div className="space-y-2 max-h-[400px] overflow-y-auto">
+              {pageImages.map(img => {
+                const replaced = imageReplacements[img.id];
+                const vr = visionResults[img.id];
+                const isAnalyzing = analyzingImageId === img.id;
+                const displaySrc = replaced
+                  ? `data:${replaced.mime_type};base64,${replaced.data_b64}`
+                  : `data:${img.mime_type};base64,${img.data_b64}`;
+                return (
+                  <div key={img.id} className="rounded-lg overflow-hidden" style={{ border: replaced ? '2px solid #fb923c' : '1px solid #2a2a4a' }}>
+                    <img
+                      src={displaySrc}
+                      alt={img.id}
+                      className="w-full h-20 object-contain"
+                      style={{ background: '#1a1a2e' }}
+                    />
+                    <div className="flex items-center justify-between px-2 py-1" style={{ background: '#16162a' }}>
+                      <span className="text-[9px] font-mono" style={{ color: '#6b6b8a' }}>
+                        {img.width}×{img.height}
+                        {replaced && <span style={{ color: '#fb923c' }}> (差替済)</span>}
+                      </span>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={async () => {
+                            if (isAnalyzing) return;
+                            setAnalyzingImageId(img.id);
+                            try {
+                              const result = await visionAnalyze(img.data_b64);
+                              setVisionResults(prev => ({ ...prev, [img.id]: result }));
+                              flash(`Vision解析完了: ${result.labels.length}ラベル検出`, 'ok');
+                            } catch (err: any) {
+                              flash(`Vision解析エラー: ${err.message}`, 'error');
+                            }
+                            setAnalyzingImageId(null);
+                          }}
+                          disabled={isAnalyzing}
+                          className="text-[10px] font-medium px-2 py-0.5 rounded transition-colors"
+                          style={{ background: 'rgba(168,85,247,0.15)', color: '#a855f7', opacity: isAnalyzing ? 0.5 : 1 }}
+                        >
+                          {isAnalyzing ? '解析中...' : 'AI解析'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setReplacingImageId(img.id);
+                            imgFileRef.current?.click();
+                          }}
+                          className="text-[10px] font-medium px-2 py-0.5 rounded transition-colors"
+                          style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}
+                        >
+                          差替
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* ── Vision解析結果 ── */}
+                    {vr && (
+                      <div className="px-2 py-1.5 space-y-1.5" style={{ background: '#0d0d1f', borderTop: '1px solid #1e1e3a' }}>
+                        {/* ラベル */}
+                        {vr.labels.length > 0 && (
+                          <div>
+                            <div className="text-[9px] font-medium mb-0.5" style={{ color: '#a855f7' }}>ラベル</div>
+                            <div className="flex flex-wrap gap-1">
+                              {vr.labels.slice(0, 6).map((l, i) => (
+                                <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(168,85,247,0.1)', color: '#c084fc' }}>
+                                  {l.description} ({Math.round(l.score * 100)}%)
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* ロゴ */}
+                        {vr.logos.length > 0 && (
+                          <div>
+                            <div className="text-[9px] font-medium mb-0.5" style={{ color: '#f472b6' }}>ロゴ</div>
+                            <div className="flex flex-wrap gap-1">
+                              {vr.logos.map((l, i) => (
+                                <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(236,72,153,0.1)', color: '#f472b6' }}>
+                                  {l.description}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* テキスト */}
+                        {vr.full_text && (
+                          <div>
+                            <div className="text-[9px] font-medium mb-0.5" style={{ color: '#22d3ee' }}>検出テキスト</div>
+                            <div className="text-[8px] p-1 rounded max-h-12 overflow-y-auto" style={{ background: 'rgba(34,211,238,0.05)', color: '#67e8f9', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                              {vr.full_text.slice(0, 200)}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 主要色 */}
+                        {vr.dominant_colors.length > 0 && (
+                          <div>
+                            <div className="text-[9px] font-medium mb-0.5" style={{ color: '#fbbf24' }}>主要色</div>
+                            <div className="flex gap-1">
+                              {vr.dominant_colors.slice(0, 5).map((c, i) => (
+                                <div
+                                  key={i}
+                                  className="w-5 h-5 rounded-sm border border-white/10"
+                                  style={{ background: `rgb(${c.r},${c.g},${c.b})` }}
+                                  title={`RGB(${c.r},${c.g},${c.b}) ${Math.round(c.pixel_fraction * 100)}%`}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Web類似画像 → 差し替え */}
+                        {vr.web?.visually_similar_images?.length > 0 && (
+                          <div>
+                            <div className="text-[9px] font-medium mb-0.5" style={{ color: '#10b981' }}>類似画像 (クリックで差替)</div>
+                            <div className="flex gap-1 flex-wrap">
+                              {vr.web.visually_similar_images.slice(0, 4).map((si, i) => (
+                                <button
+                                  key={i}
+                                  onClick={async () => {
+                                    try {
+                                      flash('類似画像をダウンロード中...', 'info');
+                                      const proxyRes = await fetch(si.url);
+                                      if (!proxyRes.ok) throw new Error('ダウンロード失敗');
+                                      const blob = await proxyRes.blob();
+                                      const buf = await blob.arrayBuffer();
+                                      const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                                      setImageReplacements(prev => ({
+                                        ...prev,
+                                        [img.id]: {
+                                          xref: img.xref,
+                                          data_b64: b64,
+                                          mime_type: blob.type || 'image/png',
+                                        },
+                                      }));
+                                      setRebuiltPng(null);
+                                      setPreviewTab('edit');
+                                      flash('類似画像で差し替えました', 'ok');
+                                    } catch (err: any) {
+                                      flash(`取得エラー: ${err.message}`, 'error');
+                                    }
+                                  }}
+                                  className="w-12 h-12 rounded overflow-hidden border border-white/10 hover:border-green-400 transition-colors flex-shrink-0"
+                                  title={si.url}
+                                >
+                                  <img src={si.url} alt={`similar-${i}`} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Webエンティティ */}
+                        {vr.web?.web_entities?.length > 0 && (
+                          <div>
+                            <div className="text-[9px] font-medium mb-0.5" style={{ color: '#60a5fa' }}>Web検出</div>
+                            <div className="flex flex-wrap gap-1">
+                              {vr.web.web_entities.slice(0, 5).map((e, i) => (
+                                <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(96,165,250,0.1)', color: '#93c5fd' }}>
+                                  {e.description}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Safe Search */}
+                        {Object.keys(vr.safe_search).length > 0 && (
+                          <div className="flex gap-1 flex-wrap">
+                            {Object.entries(vr.safe_search).map(([k, v]) => (
+                              <span key={k} className="text-[7px] px-1 py-0.5 rounded" style={{
+                                background: v === 'VERY_LIKELY' || v === 'LIKELY' ? 'rgba(239,68,68,0.15)' : 'rgba(107,114,128,0.1)',
+                                color: v === 'VERY_LIKELY' || v === 'LIKELY' ? '#ef4444' : '#6b7280',
+                              }}>
+                                {k}: {v}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {/* Hidden file input for image replacement */}
+            <input
+              ref={imgFileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file || !replacingImageId) return;
+                const targetImg = pageImages.find(img => img.id === replacingImageId);
+                if (!targetImg) return;
+                try {
+                  const buf = await file.arrayBuffer();
+                  const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                  setImageReplacements(prev => ({
+                    ...prev,
+                    [replacingImageId]: {
+                      xref: targetImg.xref,
+                      data_b64: b64,
+                      mime_type: file.type || 'image/png',
+                    },
+                  }));
+                  setRebuiltPng(null);
+                  setPreviewTab('edit');
+                  flash('画像を差し替えました', 'ok');
+                } catch (err: any) {
+                  flash(`画像読み込みエラー: ${err.message}`, 'error');
+                }
+                setReplacingImageId(null);
+                e.target.value = '';
+              }}
+            />
           </div>
         )}
       </div>
@@ -2222,7 +2507,7 @@ const App: React.FC = () => {
       e.preventDefault();
       setGlobalDrag(false);
       dragCounterRef.current = 0;
-      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf');
       if (files.length === 1) {
         handleUpload(files[0]);
       } else if (files.length >= 2) {

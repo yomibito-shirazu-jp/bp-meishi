@@ -10,17 +10,60 @@ export interface Span {
   y_pct: number;
   w_pct: number;
   h_pct: number;
+  writing_direction?: 'horizontal' | 'vertical';
 }
 
 export interface ImageInfo {
   id: string;
+  xref: number;
+  data_b64: string;
+  mime_type: string;
+  width: number;
+  height: number;
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
   bbox: [number, number, number, number];
 }
 
 export interface DrawingInfo {
+  id: string;
   bbox: [number, number, number, number];
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
   fill: [number, number, number] | null;
   color: [number, number, number] | null;
+}
+
+export interface LayoutBlock {
+  id: string;
+  type: 'text' | 'image' | 'table' | 'barcode';
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
+  confidence?: number;
+  text_preview?: string | null;
+  rows?: number;
+}
+
+export interface BarcodeInfo {
+  id: string;
+  type: 'barcode';
+  format: string;
+  value: string;
+  x_pct?: number;
+  y_pct?: number;
+  w_pct?: number;
+  h_pct?: number;
+}
+
+export interface DetectedLanguage {
+  code: string;
+  confidence: number;
 }
 
 export interface PageData {
@@ -32,6 +75,11 @@ export interface PageData {
   raw_id_map: Record<string, string[]>;
   images: ImageInfo[];
   drawings: DrawingInfo[];
+  layout_blocks?: LayoutBlock[];
+  barcodes?: BarcodeInfo[];
+  detected_languages?: DetectedLanguage[];
+  has_text?: boolean;
+  has_images?: boolean;
   original_png_b64: string;
   clip_rect: [number, number, number, number];
 }

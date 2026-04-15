@@ -164,7 +164,13 @@ async function downloadDriveFile(fileId: string, fileName: string, mimeType: str
   );
   if (!res.ok) throw new Error(`Drive API error: ${res.status}`);
   const blob = await res.blob();
-  return new File([blob], fileName || 'file', { type: mimeType || blob.type || 'application/octet-stream' });
+  const resolvedType = mimeType || blob.type || 'application/octet-stream';
+  // Ensure filename has correct extension for the MIME type
+  let resolvedName = fileName || 'file';
+  if (resolvedType === 'application/pdf' && !resolvedName.toLowerCase().endsWith('.pdf')) {
+    resolvedName += '.pdf';
+  }
+  return new File([blob], resolvedName, { type: resolvedType });
 }
 
 /** Check if Google Drive integration is configured */

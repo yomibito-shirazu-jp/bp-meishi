@@ -59,6 +59,7 @@ export const rebuildPdf = async (
   clipRect?: [number, number, number, number],
   overrides?: Record<string, SpanOverride>,
   originalTexts?: Record<string, string>,
+  imageReplacements?: Record<string, { xref: number; data_b64: string; mime_type?: string }>,
 ): Promise<RebuildResponse> => {
   const res = await fetch(`${getApiUrl()}/rebuild`, {
     method: 'POST',
@@ -68,6 +69,7 @@ export const rebuildPdf = async (
       edits,
       original_texts: originalTexts || {},
       overrides: overrides || {},
+      image_replacements: imageReplacements || {},
       raw_id_map: rawIdMap,
       dpi,
       page_index: pageIndex,
@@ -126,6 +128,44 @@ export const vivliostyleBuild = async (
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throw new Error(e.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
+// ── Vision API ──────────────────────────────────────────────────────────────
+
+export interface VisionLabel { description: string; score: number; }
+export interface VisionObject { name: string; score: number; bbox: { x: number; y: number }[]; }
+export interface VisionWebResult {
+  best_guess_labels: { label: string; language: string }[];
+  web_entities: { description: string; score: number }[];
+  visually_similar_images: { url: string }[];
+  pages_with_matching_images: { url: string; title: string }[];
+}
+export interface VisionDominantColor {
+  r: number; g: number; b: number;
+  score: number; pixel_fraction: number;
+}
+export interface VisionAnalyzeResult {
+  labels: VisionLabel[];
+  texts: { text: string; bbox: { x: number; y: number }[] }[];
+  logos: VisionLabel[];
+  objects: VisionObject[];
+  web: VisionWebResult;
+  safe_search: Record<string, string>;
+  dominant_colors: VisionDominantColor[];
+  full_text: string;
+}
+
+export const visionAnalyze = async (imageB64: string): Promise<VisionAnalyzeResult> => {
+  const res = await fetch(`${getApiUrl()}/vision-analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_b64: imageB64 }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail || `Vision API Error: HTTP ${res.status}`);
   }
   return res.json();
 };

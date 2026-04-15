@@ -23,6 +23,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google.cloud import documentai
+from google.cloud import vision
 from google.api_core.client_options import ClientOptions
 
 # ── Gemini 設定 ──────────────────────────────────────────────────────────────
@@ -174,9 +175,17 @@ def _extract_spans_documentai(pdf_bytes: bytes,
                               project_id: str,
                               location: str,
                               processor_id: str,
-                              version_id: Optional[str] = None) -> list[list[dict[str,
-                                                                                  Any]]]:
-    """Document AI で PDF 全体から Span 抽出 (チャンク処理対応)"""
+                              version_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """Document AI で PDF 全体から Span + レイアウト情報を抽出 (チャンク処理対応)
+
+    Returns: list of dicts per page:
+        {
+            "spans": [...],
+            "layout_blocks": [...],   # 画像/テーブル/テキストブロック
+            "barcodes": [...],
+            "detected_languages": [...],
+        }
+    """
     opts = ClientOptions(api_endpoint=f"{location}-documentai.googleapis.com")
     client = documentai.DocumentProcessorServiceClient(client_options=opts)
 
@@ -191,7 +200,7 @@ def _extract_spans_documentai(pdf_bytes: bytes,
     total_pages = len(doc)
     chunk_size = 15
 
-    all_pages_spans = []
+    all_pages_data: list[dict[str, Any]] = []
 
     for start_idx in range(0, total_pages, chunk_size):
         end_idx = min(start_idx + chunk_size, total_pages)
@@ -214,39 +223,66 @@ def _extract_spans_documentai(pdf_bytes: bytes,
             document = result.document
         except Exception as e:
             print(f"Document AI API Error: {e}")
-            # エラー時は空枠を詰める
             for _ in range(end_idx - start_idx):
-                all_pages_spans.append([])
+                all_pages_data.append({"spans": [], "layout_blocks": [], "barcodes": [], "detected_languages": []})
             continue
+
+        # ── token → フォントサイズマップ構築 ──
+        # Document AI の style 情報からフォントサイズを取得
+        font_size_map: dict[str, float] = {}
+        try:
+            for style in getattr(document, "text_styles", []):
+                fs = getattr(style, "font_size", None)
+                if fs:
+                    size_pt = getattr(fs, "size", 0)
+                    unit = getattr(fs, "unit", "")
+                    if unit == "PT" or not unit:
+                        for seg in style.text_anchor.text_segments:
+                            start = int(seg.start_index) if seg.start_index else 0
+                            end = int(seg.end_index) if seg.end_index else 0
+                            for idx in range(start, end):
+                                font_size_map[str(idx)] = size_pt
+        except Exception:
+            pass
 
         for page in document.pages:
             page_spans = []
-            # tokenではなく、lineベースで抽出する
+            page_blocks = []
+            page_barcodes = []
+            page_langs = []
+
+            # ── テキスト行抽出 ──
             for i, line in enumerate(page.lines):
                 text = ""
+                char_indices = []
                 for segment in line.layout.text_anchor.text_segments:
                     try:
-                        start = int(
-                            segment.start_index) if segment.start_index else 0
+                        start = int(segment.start_index) if segment.start_index else 0
                     except (AttributeError, ValueError, TypeError):
                         start = 0
                     try:
-                        end = int(
-                            segment.end_index) if segment.end_index else 0
+                        end = int(segment.end_index) if segment.end_index else 0
                     except (AttributeError, ValueError, TypeError):
                         end = 0
                     text += document.text[start:end]
+                    char_indices.extend(range(start, end))
 
                 if not text.strip():
                     continue
 
+                # フォントクラス推定
                 font_class = "gothic"
-                # tokenからスタイル情報を見る
                 if hasattr(line, "style_info") and line.style_info:
-                    family = getattr(
-                        line.style_info, "font_family", "").lower()
+                    family = getattr(line.style_info, "font_family", "").lower()
                     if "mincho" in family or "serif" in family:
                         font_class = "mincho"
+
+                # フォントサイズ推定 (Document AI style から)
+                size_pt = 9.0
+                if char_indices and font_size_map:
+                    sizes = [font_size_map[str(idx)] for idx in char_indices if str(idx) in font_size_map]
+                    if sizes:
+                        size_pt = round(sum(sizes) / len(sizes), 1)
 
                 v = line.layout.bounding_poly.normalized_vertices
                 if len(v) < 4:
@@ -257,20 +293,115 @@ def _extract_spans_documentai(pdf_bytes: bytes,
                 x_max = max(v[0].x, v[1].x, v[2].x, v[3].x)
                 y_max = max(v[0].y, v[1].y, v[2].y, v[3].y)
 
+                # 縦書き検出: bounding boxが縦長なら vertical
+                bb_w = x_max - x_min
+                bb_h = y_max - y_min
+                writing_dir = "vertical" if (bb_h > bb_w * 2.0 and len(text.strip()) > 1) else "horizontal"
+
                 page_spans.append({
                     "id": f"dai_{int(time.time() * 1000)}_{i}",
                     "text": text.strip(),
                     "font_class": font_class,
-                    "size_pt": 9.0,
+                    "size_pt": size_pt,
                     "x_pct": x_min * 100,
                     "y_pct": y_min * 100,
                     "w_pct": (x_max - x_min) * 100,
                     "h_pct": (y_max - y_min) * 100,
+                    "writing_direction": writing_dir,
                 })
-            all_pages_spans.append(page_spans)
+
+            # ── レイアウトブロック (画像/テーブル/テキスト領域) ──
+            for bi, block in enumerate(page.blocks):
+                v = block.layout.bounding_poly.normalized_vertices
+                if len(v) < 4:
+                    continue
+                x_min = min(vv.x for vv in v)
+                y_min = min(vv.y for vv in v)
+                x_max = max(vv.x for vv in v)
+                y_max = max(vv.y for vv in v)
+
+                # ブロックのテキストを取得してタイプ判定
+                block_text = ""
+                for segment in block.layout.text_anchor.text_segments:
+                    try:
+                        start = int(segment.start_index) if segment.start_index else 0
+                        end = int(segment.end_index) if segment.end_index else 0
+                        block_text += document.text[start:end]
+                    except Exception:
+                        pass
+
+                # テキストがなければ画像ブロックと推定
+                block_type = "text" if block_text.strip() else "image"
+
+                page_blocks.append({
+                    "id": f"block_{bi}",
+                    "type": block_type,
+                    "x_pct": x_min * 100,
+                    "y_pct": y_min * 100,
+                    "w_pct": (x_max - x_min) * 100,
+                    "h_pct": (y_max - y_min) * 100,
+                    "confidence": getattr(block.layout, "confidence", 0),
+                    "text_preview": block_text.strip()[:50] if block_text.strip() else None,
+                })
+
+            # ── テーブル検出 ──
+            for ti, table in enumerate(getattr(page, "tables", [])):
+                v = table.layout.bounding_poly.normalized_vertices
+                if len(v) < 4:
+                    continue
+                x_min = min(vv.x for vv in v)
+                y_min = min(vv.y for vv in v)
+                x_max = max(vv.x for vv in v)
+                y_max = max(vv.y for vv in v)
+                page_blocks.append({
+                    "id": f"table_{ti}",
+                    "type": "table",
+                    "x_pct": x_min * 100,
+                    "y_pct": y_min * 100,
+                    "w_pct": (x_max - x_min) * 100,
+                    "h_pct": (y_max - y_min) * 100,
+                    "rows": len(table.header_rows) + len(table.body_rows) if hasattr(table, "body_rows") else 0,
+                    "confidence": getattr(table.layout, "confidence", 0),
+                })
+
+            # ── バーコード検出 ──
+            for bci, barcode in enumerate(getattr(page, "detected_barcodes", [])):
+                v = barcode.layout.bounding_poly.normalized_vertices
+                bc_data = {
+                    "id": f"barcode_{bci}",
+                    "type": "barcode",
+                    "format": getattr(barcode.barcode, "format_", "UNKNOWN") if hasattr(barcode, "barcode") else "UNKNOWN",
+                    "value": getattr(barcode.barcode, "raw_value", "") if hasattr(barcode, "barcode") else "",
+                }
+                if len(v) >= 4:
+                    x_min = min(vv.x for vv in v)
+                    y_min = min(vv.y for vv in v)
+                    x_max = max(vv.x for vv in v)
+                    y_max = max(vv.y for vv in v)
+                    bc_data.update({
+                        "x_pct": x_min * 100,
+                        "y_pct": y_min * 100,
+                        "w_pct": (x_max - x_min) * 100,
+                        "h_pct": (y_max - y_min) * 100,
+                    })
+                page_barcodes.append(bc_data)
+
+            # ── 言語検出 ──
+            for lang in getattr(page, "detected_languages", []):
+                page_langs.append({
+                    "code": getattr(lang, "language_code", "unknown"),
+                    "confidence": getattr(lang, "confidence", 0),
+                })
+
+            all_pages_data.append({
+                "spans": page_spans,
+                "layout_blocks": page_blocks,
+                "barcodes": page_barcodes,
+                "detected_languages": page_langs,
+            })
 
     doc.close()
-    return all_pages_spans
+    return all_pages_data
 
 
 # ── /analyze エンドポイント ────────────────────────────────────────────────────
@@ -299,16 +430,26 @@ async def analyze_pdf(
         pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         pages_data = []
 
-        # モード選択: Document AI をデフォルトで使用（明示的に "false" の場合のみ無効）
-        use_docai = (x_use_documentai != "false")
+        # PDF内にテキスト情報が埋め込まれているかチェック
+        has_text = False
+        for i in range(len(pdf_doc)):
+            if pdf_doc.load_page(i).get_text("text").strip():
+                has_text = True
+                break
 
-        docai_results = []
-        if use_docai:
-            prj = x_project_id or "270124753853"
-            loc = x_location or "asia-southeast1"
-            proc = x_processor_id or "120a21840002e525"
-            ver = x_version_id
-            print(f"Using Document AI ({prj}, {loc}, {proc}, {ver})...")
+        # モード選択: Document AI  "false"→無効  "force"→テキスト有無問わず強制  それ以外→テキスト無し時のみ
+        use_docai_mode = (x_use_documentai or "").lower()
+        use_docai = (use_docai_mode != "false")
+        force_docai = (use_docai_mode == "force")
+
+        docai_results: list[dict[str, Any]] = []
+        if use_docai and (not has_text or force_docai):
+            prj = x_project_id or os.environ.get("VITE_GOOGLE_PROJECT_ID", "270124753853")
+            loc = x_location or os.environ.get("VITE_DOCUMENT_AI_LOCATION", "us")
+            proc = x_processor_id or os.environ.get("VITE_DOCUMENT_AI_PROCESSOR_ID", "57695b373b653f96")
+            ver = x_version_id or os.environ.get("VITE_DOCUMENT_AI_VERSION_ID")
+            mode_label = "FORCE" if force_docai else "OCR"
+            print(f"Using Document AI {mode_label} ({prj}, {loc}, {proc}, {ver})...")
             try:
                 docai_results = _extract_spans_documentai(
                     pdf_bytes, prj, loc, proc, ver)
@@ -316,6 +457,8 @@ async def analyze_pdf(
             except Exception as docai_err:
                 print(f"Document AI failed, falling back to Gemini: {docai_err}")
                 docai_results = []
+        elif has_text:
+            print("PDF has embedded text. Skipping Document AI OCR.")
 
         for i in range(len(pdf_doc)):
             page = pdf_doc.load_page(i)
@@ -328,8 +471,17 @@ async def analyze_pdf(
             png_bytes = pix.tobytes("png")
             original_png_b64 = base64.b64encode(png_bytes).decode("utf-8")
 
+            # Document AI レイアウト情報
+            docai_layout_blocks = []
+            docai_barcodes = []
+            docai_languages = []
+
             if use_docai and i < len(docai_results):
-                spans = docai_results[i]
+                docai_page = docai_results[i]
+                spans = docai_page["spans"]
+                docai_layout_blocks = docai_page.get("layout_blocks", [])
+                docai_barcodes = docai_page.get("barcodes", [])
+                docai_languages = docai_page.get("detected_languages", [])
                 # 座標を pt に変換して追加属性付与
                 for s in spans:
                     bx = (s["x_pct"] / 100) * rect.width
@@ -349,14 +501,88 @@ async def analyze_pdf(
                     api_key=x_gemini_api_key
                 )
 
+            # ── 画像抽出 ──
+            images_data = []
+            try:
+                for img_idx, img_info in enumerate(page.get_images(full=True)):
+                    xref = img_info[0]
+                    try:
+                        base_image = pdf_doc.extract_image(xref)
+                        if not base_image or not base_image.get("image"):
+                            continue
+                        img_bytes = base_image["image"]
+                        img_ext = base_image.get("ext", "png")
+                        img_w = base_image.get("width", 0)
+                        img_h = base_image.get("height", 0)
+
+                        # 画像のページ内位置を探す
+                        img_rects = page.get_image_rects(xref)
+                        if img_rects:
+                            ir = img_rects[0]
+                            x_pct = (ir.x0 / rect.width) * 100
+                            y_pct = (ir.y0 / rect.height) * 100
+                            w_pct = ((ir.x1 - ir.x0) / rect.width) * 100
+                            h_pct = ((ir.y1 - ir.y0) / rect.height) * 100
+                        else:
+                            x_pct, y_pct, w_pct, h_pct = 0, 0, 50, 50
+
+                        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+                        mime = f"image/{img_ext}" if img_ext != "jpg" else "image/jpeg"
+
+                        images_data.append({
+                            "id": f"img_{i}_{img_idx}",
+                            "xref": xref,
+                            "data_b64": img_b64,
+                            "mime_type": mime,
+                            "width": img_w,
+                            "height": img_h,
+                            "x_pct": x_pct,
+                            "y_pct": y_pct,
+                            "w_pct": w_pct,
+                            "h_pct": h_pct,
+                            "bbox": [x_pct, y_pct, w_pct, h_pct],
+                        })
+                    except Exception as img_err:
+                        print(f"Image extraction error (xref={xref}): {img_err}")
+            except Exception as imgs_err:
+                print(f"get_images error: {imgs_err}")
+
+            # ── 描画要素(罫線・背景色)抽出 ──
+            drawings_data = []
+            try:
+                for d_idx, drawing in enumerate(page.get_drawings()):
+                    d_rect = drawing.get("rect", fitz.Rect(0, 0, 0, 0))
+                    fill_color = drawing.get("fill")
+                    stroke_color = drawing.get("color")
+                    # 小さすぎる描画は無視
+                    if d_rect.width < 2 and d_rect.height < 2:
+                        continue
+                    drawings_data.append({
+                        "id": f"draw_{i}_{d_idx}",
+                        "bbox": [d_rect.x0, d_rect.y0, d_rect.width, d_rect.height],
+                        "x_pct": (d_rect.x0 / rect.width) * 100,
+                        "y_pct": (d_rect.y0 / rect.height) * 100,
+                        "w_pct": (d_rect.width / rect.width) * 100,
+                        "h_pct": (d_rect.height / rect.height) * 100,
+                        "fill": list(fill_color) if fill_color else None,
+                        "color": list(stroke_color) if stroke_color else None,
+                    })
+            except Exception as draw_err:
+                print(f"get_drawings error: {draw_err}")
+
             pages_data.append({
                 "page_index": i,
                 "page_pt": [rect.width, rect.height],
                 "page_mm": [width_mm, height_mm],
                 "spans": spans,
                 "raw_id_map": {},
-                "images": [],
-                "drawings": [],
+                "images": images_data,
+                "drawings": drawings_data,
+                "layout_blocks": docai_layout_blocks,
+                "barcodes": docai_barcodes,
+                "detected_languages": docai_languages,
+                "has_text": has_text,
+                "has_images": len(images_data) > 0,
                 "original_png_b64": original_png_b64,
                 "clip_rect": [0, 0, rect.width, rect.height],
             })
@@ -372,6 +598,135 @@ async def analyze_pdf(
         raise HTTPException(500, f"分析失敗: {e}")
 
 
+# ── /vision-analyze エンドポイント ─────────────────────────────────────────────
+
+@app.post("/vision-analyze")
+async def vision_analyze(req: dict[str, Any]):
+    """Cloud Vision API で画像を解析。ラベル/テキスト/ロゴ/物体/Web検出を実行。"""
+    image_b64 = req.get("image_b64", "")
+    if not image_b64:
+        raise HTTPException(400, "image_b64 is required")
+
+    try:
+        image_bytes = base64.b64decode(image_b64)
+        client = vision.ImageAnnotatorClient()
+        image = vision.Image(content=image_bytes)
+
+        # 複数の検出を一括実行
+        features = [
+            vision.Feature(type_=vision.Feature.Type.LABEL_DETECTION, max_results=10),
+            vision.Feature(type_=vision.Feature.Type.TEXT_DETECTION),
+            vision.Feature(type_=vision.Feature.Type.LOGO_DETECTION, max_results=5),
+            vision.Feature(type_=vision.Feature.Type.OBJECT_LOCALIZATION, max_results=10),
+            vision.Feature(type_=vision.Feature.Type.WEB_DETECTION, max_results=5),
+            vision.Feature(type_=vision.Feature.Type.SAFE_SEARCH_DETECTION),
+            vision.Feature(type_=vision.Feature.Type.IMAGE_PROPERTIES),
+        ]
+
+        request = vision.AnnotateImageRequest(image=image, features=features)
+        response = client.annotate_image(request=request)
+
+        if response.error.message:
+            raise HTTPException(500, f"Vision API Error: {response.error.message}")
+
+        # ── 結果整形 ──
+        labels = [
+            {"description": l.description, "score": round(l.score, 3)}
+            for l in response.label_annotations
+        ]
+
+        texts = []
+        for t in response.text_annotations:
+            verts = t.bounding_poly.vertices
+            texts.append({
+                "text": t.description,
+                "bbox": [
+                    {"x": v.x, "y": v.y} for v in verts
+                ] if verts else [],
+            })
+
+        logos = [
+            {"description": l.description, "score": round(l.score, 3)}
+            for l in response.logo_annotations
+        ]
+
+        objects = []
+        for obj in response.localized_object_annotations:
+            verts = obj.bounding_poly.normalized_vertices
+            objects.append({
+                "name": obj.name,
+                "score": round(obj.score, 3),
+                "bbox": [
+                    {"x": round(v.x, 4), "y": round(v.y, 4)} for v in verts
+                ] if verts else [],
+            })
+
+        # Web検出: 類似画像URL + ベストゲス ラベル
+        web = {}
+        if response.web_detection:
+            wd = response.web_detection
+            web = {
+                "best_guess_labels": [
+                    {"label": g.label, "language": getattr(g, "language_code", "")}
+                    for g in getattr(wd, "best_guess_labels", [])
+                ],
+                "web_entities": [
+                    {"description": e.description, "score": round(e.score, 3)}
+                    for e in wd.web_entities if e.description
+                ][:10],
+                "visually_similar_images": [
+                    {"url": img.url}
+                    for img in getattr(wd, "visually_similar_images", [])
+                ][:5],
+                "pages_with_matching_images": [
+                    {"url": p.url, "title": getattr(p, "page_title", "")}
+                    for p in getattr(wd, "pages_with_matching_images", [])
+                ][:5],
+            }
+
+        # Safe Search
+        safe_search = {}
+        if response.safe_search_annotation:
+            ss = response.safe_search_annotation
+            safe_search = {
+                "adult": ss.adult.name if ss.adult else "UNKNOWN",
+                "violence": ss.violence.name if ss.violence else "UNKNOWN",
+                "medical": ss.medical.name if ss.medical else "UNKNOWN",
+                "racy": ss.racy.name if ss.racy else "UNKNOWN",
+            }
+
+        # 画像プロパティ (主要色)
+        dominant_colors = []
+        if response.image_properties_annotation:
+            colors = response.image_properties_annotation.dominant_colors.colors
+            for c in colors[:5]:
+                dominant_colors.append({
+                    "r": int(c.color.red),
+                    "g": int(c.color.green),
+                    "b": int(c.color.blue),
+                    "score": round(c.score, 3),
+                    "pixel_fraction": round(c.pixel_fraction, 3),
+                })
+
+        return {
+            "labels": labels,
+            "texts": texts,
+            "logos": logos,
+            "objects": objects,
+            "web": web,
+            "safe_search": safe_search,
+            "dominant_colors": dominant_colors,
+            "full_text": response.text_annotations[0].description if response.text_annotations else "",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Vision解析失敗: {e}")
+
+
 # ── /rebuild エンドポイント ────────────────────────────────────────────────────
 
 @app.post("/rebuild")
@@ -381,6 +736,7 @@ async def rebuild_pdf(req: dict[str, Any]):
     edits = req.get("edits", {})
     original_texts = req.get("original_texts", {})
     overrides = req.get("overrides", {})
+    image_replacements = req.get("image_replacements", {})
     page_index = req.get("page_index", 0)
     dpi = req.get("dpi", 300)
 
@@ -432,7 +788,41 @@ async def rebuild_pdf(req: dict[str, Any]):
             except Exception as e:
                 print(f"insert_text error: {e}")
 
-        print(f"Rebuild: {changes_applied}/{len(edits)}")
+        # ── 画像差し替え ──
+        images_replaced = 0
+        for img_id, new_img_data in image_replacements.items():
+            try:
+                xref = new_img_data.get("xref")
+                new_b64 = new_img_data.get("data_b64", "")
+                if not xref or not new_b64:
+                    continue
+                new_img_bytes = base64.b64decode(new_b64)
+                # PyMuPDF で画像を差し替え
+                doc._deleteObject(xref)
+                page = doc.load_page(page_index)
+
+                # 画像の位置を取得して再配置
+                img_rect_data = new_img_data.get("rect")
+                if img_rect_data:
+                    img_rect = fitz.Rect(img_rect_data)
+                    page.insert_image(img_rect, stream=new_img_bytes)
+                    images_replaced += 1
+                else:
+                    # xrefベースで直接置換
+                    try:
+                        pix = fitz.Pixmap(new_img_bytes)
+                        doc.replace_image(xref, pixmap=pix)
+                        images_replaced += 1
+                    except Exception:
+                        # fallback: ページ上に画像を配置
+                        img_rects = page.get_image_rects(xref)
+                        if img_rects:
+                            page.insert_image(img_rects[0], stream=new_img_bytes)
+                            images_replaced += 1
+            except Exception as img_err:
+                print(f"Image replace error ({img_id}): {img_err}")
+
+        print(f"Rebuild: text={changes_applied}/{len(edits)}, images={images_replaced}/{len(image_replacements)}")
 
         new_pdf_bytes = doc.write()
 
@@ -450,6 +840,7 @@ async def rebuild_pdf(req: dict[str, Any]):
             "png_b64": base64.b64encode(
                 png_bytes).decode("utf-8"),
             "changes_applied": changes_applied,
+            "images_replaced": images_replaced,
         }
 
     except Exception as e:
