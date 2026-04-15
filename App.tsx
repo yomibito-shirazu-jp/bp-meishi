@@ -415,11 +415,14 @@ const App: React.FC = () => {
         edits[s.id] = s.text;
         originalTexts[s.id] = orig.text;
       }
-      if (fontChanged || sizeChanged || posChanged) {
-        const ov: SpanOverride = {};
+      // テキスト変更時も含め、origin/size_pt/writing_directionを常にoverridesに含める
+      if (textChanged || fontChanged || sizeChanged || posChanged) {
+        const ov: SpanOverride = {
+          origin: s.origin,
+          size_pt: s.size_pt,
+          writing_direction: s.writing_direction || 'horizontal',
+        };
         if (fontChanged) ov.font_class = s.font_class;
-        if (sizeChanged) ov.size_pt = s.size_pt;
-        if (posChanged) ov.origin = s.origin;
         ovMap[s.id] = ov;
       }
     });

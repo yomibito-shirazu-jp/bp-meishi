@@ -48,6 +48,7 @@ export interface SpanOverride {
   font_class?: string;
   size_pt?: number;
   origin?: [number, number];
+  writing_direction?: 'horizontal' | 'vertical';
 }
 
 export const rebuildPdf = async (

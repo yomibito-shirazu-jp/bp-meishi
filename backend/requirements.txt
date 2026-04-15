@@ -4,7 +4,7 @@ pydantic==2.7.0
 python-multipart==0.0.9
 httpx==0.27.0
 pymupdf==1.24.2
-google-generativeai==0.8.3
+google-generativeai>=0.8.3
 google-cloud-documentai
 google-cloud-vision
 Pillow

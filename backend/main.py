@@ -78,27 +78,62 @@ async def health():
 # ── Gemini Vision による Span 抽出 ────────────────────────────────────────────
 
 GEMINI_EXTRACT_PROMPT = """
-あなたは印刷・組版の専門家です。この名刺・カード画像からすべてのテキスト要素を抽出し、
-以下のJSON配列のみを返してください（コードブロック不要）。
+あなたは印刷・DTPの専門家です。この画像からすべてのテキスト要素を正確に抽出してください。
+文書は名刺、パンフレット、チラシ、請求書など様々なタイプの可能性があります。
 
-各要素:
-{
-  "text": "テキスト内容",
-  "font_class": "gothic" | "mincho" | "gothic_bold" | "light",
-  "size_pt": 推定フォントサイズ(pt、数値),
-  "x_pct": 左端の位置(0〜100の%),
-  "y_pct": 上端の位置(0〜100の%),
-  "w_pct": 幅(0〜100の%),
-  "h_pct": 高さ(0〜100の%)
-}
+【抽出ルール】
+1. 画像内に表示されているすべてのテキストを漏れなく抽出すること
+   （小さな文字、電話番号、FAX番号、メールアドレス、URL、住所、
+    〒郵便番号、注記、キャプション、ページ番号なども含む）
+2. 各テキスト要素の位置を画像全体を100×100として正規化した座標で正確に返すこと
+3. テキストが改行で分かれている場合でも、1つの論理的なブロック
+   （同じフォント・サイズで隣接するもの）は1つの要素として返すこと
+4. 縦書きテキストも正確に検出し、writing_direction を "vertical" にすること
+5. テーブル内のテキストは、セルごと・行ごとに分けて抽出すること
 
-ルール:
-- x_pct, y_pct, w_pct, h_pct は画像全体を100×100として正規化した座標
-- font_class: 游明朝・ヒラギノ明朝系→"mincho", それ以外→"gothic" or "gothic_bold"
-- size_pt: 本文≒8〜10pt, 氏名≒12〜16pt, 会社名≒11〜14pt を目安に推定
+【座標の推定方法】
+- x_pct: テキストブロックの左端のX座標（0=画像左端、100=画像右端）
+- y_pct: テキストブロックの上端のY座標（0=画像上端、100=画像下端）
+- w_pct: テキストブロックの幅（0〜100）
+- h_pct: テキストブロックの高さ（0〜100）
+- テキストがぴったり収まる最小の矩形として座標を推定すること
+- 余白を含めず、文字の外接矩形に合わせること
+
+【フォント分類】
+- gothic: ゴシック体、サンセリフ体、角ゴシック
+- mincho: 明朝体、セリフ体
+- gothic_bold: 太ゴシック、ボールド体（見出し等の太字）
+- light: 細字、ライト体
+
+【フォントサイズ推定の目安】
+- 名刺: 氏名≒12〜18pt, 会社名≒10〜14pt, 部署/役職≒8〜10pt, 住所/電話≒7〜9pt
+- パンフレット: 大見出し≒16〜28pt, 小見出し≒12〜16pt, 本文≒9〜12pt, キャプション≒7〜9pt
+- 一般文書: タイトル≒14〜20pt, 本文≒10〜12pt, 注記≒7〜9pt
+
+【重要】
 - 空文字のテキストは含めない
-- JSON配列のみを出力（他の文字は一切含めない）
+- 画像内のすべてのテキストを漏れなく抽出すること（検出漏れは不可）
+- 日本語・英語・数字・記号をすべて正確に読み取ること
 """
+
+# Gemini 構造化出力スキーマ
+GEMINI_SPAN_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "text": {"type": "STRING", "description": "テキスト内容"},
+            "font_class": {"type": "STRING", "description": "フォント分類: gothic, mincho, gothic_bold, light"},
+            "size_pt": {"type": "NUMBER", "description": "推定フォントサイズ(pt)"},
+            "x_pct": {"type": "NUMBER", "description": "左端X座標(0-100%)"},
+            "y_pct": {"type": "NUMBER", "description": "上端Y座標(0-100%)"},
+            "w_pct": {"type": "NUMBER", "description": "幅(0-100%)"},
+            "h_pct": {"type": "NUMBER", "description": "高さ(0-100%)"},
+            "writing_direction": {"type": "STRING", "description": "組方向: horizontal または vertical"},
+        },
+        "required": ["text", "font_class", "size_pt", "x_pct", "y_pct", "w_pct", "h_pct"],
+    },
+}
 
 
 def _extract_spans_gemini(
@@ -107,7 +142,7 @@ def _extract_spans_gemini(
     page_h_pt: float,
     api_key: str = None,
 ) -> list[dict[str, Any]]:
-    """Gemini 2.0 Flash で PNG → Span リストを抽出"""
+    """Gemini 2.5 Flash で PNG → Span リストを抽出（構造化出力）"""
     active_key = api_key or GEMINI_API_KEY
     if not active_key:
         print("Error: Gemini API key is not set.")
@@ -115,18 +150,46 @@ def _extract_spans_gemini(
 
     try:
         genai.configure(api_key=active_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         img_part = {
             "mime_type": "image/png",
             "data": base64.b64encode(png_bytes).decode(),
         }
-        response = model.generate_content([GEMINI_EXTRACT_PROMPT, img_part])
+        response = model.generate_content(
+            [GEMINI_EXTRACT_PROMPT, img_part],
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,
+                max_output_tokens=16384,
+                response_mime_type="application/json",
+                response_schema=GEMINI_SPAN_SCHEMA,
+            ),
+        )
         raw = response.text.strip()
     except Exception as e:
         print(f"Gemini API Error: {e}")
-        return []
+        # 2.5-flash が利用不可の場合、2.0-flash にフォールバック
+        try:
+            print("Falling back to gemini-2.0-flash...")
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            img_part = {
+                "mime_type": "image/png",
+                "data": base64.b64encode(png_bytes).decode(),
+            }
+            response = model.generate_content(
+                [GEMINI_EXTRACT_PROMPT, img_part],
+                generation_config=genai.GenerationConfig(
+                    temperature=0.1,
+                    max_output_tokens=16384,
+                    response_mime_type="application/json",
+                    response_schema=GEMINI_SPAN_SCHEMA,
+                ),
+            )
+            raw = response.text.strip()
+        except Exception as e2:
+            print(f"Gemini 2.0 fallback also failed: {e2}")
+            return []
 
-    # JSON ブロック除去
+    # JSON ブロック除去（response_schema 使用時は通常不要だが安全のため）
     if raw.startswith("```"):
         lines = raw.split("\n")
         raw = "\n".join(
@@ -137,21 +200,33 @@ def _extract_spans_gemini(
     try:
         items = json.loads(raw)
     except json.JSONDecodeError:
-        print(f"Gemini JSON parse error. raw={raw[:200]}")
+        print(f"Gemini JSON parse error. raw={raw[:300]}")
+        return []
+
+    if not isinstance(items, list):
+        print(f"Gemini returned non-list: {type(items)}")
         return []
 
     spans = []
     for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
         if not item.get("text", "").strip():
             continue
         try:
             x_pct = float(item.get("x_pct", 0))
             y_pct = float(item.get("y_pct", 0))
-            w_pct = float(item.get("w_pct", 20))
-            h_pct = float(item.get("h_pct", 5))
-            size_pt = float(item.get("size_pt", 10))
+            w_pct = max(0.5, float(item.get("w_pct", 20)))
+            h_pct = max(0.5, float(item.get("h_pct", 5)))
+            size_pt = max(4.0, float(item.get("size_pt", 10)))
         except (ValueError, TypeError):
             continue
+
+        # 座標の妥当性チェック
+        x_pct = max(0, min(99, x_pct))
+        y_pct = max(0, min(99, y_pct))
+        w_pct = min(100 - x_pct, w_pct)
+        h_pct = min(100 - y_pct, h_pct)
 
         # 絶対座標 (bbox) を pt 単位で計算
         bx = (x_pct / 100) * page_w_pt
@@ -159,22 +234,130 @@ def _extract_spans_gemini(
         bw = (w_pct / 100) * page_w_pt
         bh = (h_pct / 100) * page_h_pt
 
+        # 組方向
+        writing_dir = item.get("writing_direction", "horizontal")
+        if writing_dir not in ("horizontal", "vertical"):
+            writing_dir = "horizontal"
+
         spans.append({
             "id": f"s_{int(time.time() * 1000)}_{i}",
             "text": item["text"].strip(),
             "font_original": "Gemini_Extracted",
             "font_class": item.get("font_class", "gothic"),
-            "size_pt": size_pt,
+            "size_pt": round(size_pt, 1),
             "origin": [bx, by + bh],
             "bbox": [bx, by, bw, bh],
-            "x_pct": x_pct,
-            "y_pct": y_pct,
-            "w_pct": w_pct,
-            "h_pct": h_pct,
+            "x_pct": round(x_pct, 2),
+            "y_pct": round(y_pct, 2),
+            "w_pct": round(w_pct, 2),
+            "h_pct": round(h_pct, 2),
+            "writing_direction": writing_dir,
         })
 
+    print(f"Gemini extracted {len(spans)} spans")
     return spans
 
+
+# ── PyMuPDF 直接テキスト抽出（テキスト埋め込みPDF用・最高精度） ──────────────
+
+def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
+    """PyMuPDF でテキスト埋め込みPDFから直接 Span 抽出（行単位）
+
+    テキストが埋め込まれたPDFの場合、Gemini Vision や Document AI OCR よりも
+    正確な位置・フォント・サイズ情報を得られる。
+    """
+    rect = page.rect
+    if rect.width <= 0 or rect.height <= 0:
+        return []
+
+    result_spans = []
+
+    try:
+        text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES)
+    except Exception as e:
+        print(f"PyMuPDF get_text error: {e}")
+        return []
+
+    span_counter = 0
+    for block_idx, block in enumerate(text_dict.get("blocks", [])):
+        if block.get("type") != 0:  # テキストブロックのみ
+            continue
+
+        for line_idx, line in enumerate(block.get("lines", [])):
+            spans_in_line = [s for s in line.get("spans", []) if s.get("text", "").strip()]
+            if not spans_in_line:
+                continue
+
+            # 行内のすべてのスパンをマージ
+            full_text = "".join(s["text"] for s in spans_in_line)
+            if not full_text.strip():
+                continue
+
+            # Union bounding box
+            x0 = min(s["bbox"][0] for s in spans_in_line)
+            y0 = min(s["bbox"][1] for s in spans_in_line)
+            x1 = max(s["bbox"][2] for s in spans_in_line)
+            y1 = max(s["bbox"][3] for s in spans_in_line)
+
+            # 主要フォント（文字数ベース）
+            font_counts: dict[tuple[str, float], int] = {}
+            for s in spans_in_line:
+                key = (s.get("font", ""), s.get("size", 9.0))
+                font_counts[key] = font_counts.get(key, 0) + len(s.get("text", ""))
+            dominant_font, dominant_size = max(font_counts, key=lambda k: font_counts[k])
+
+            # フォントクラス判定
+            font_lower = dominant_font.lower()
+            if any(k in font_lower for k in ["mincho", "ming", "明朝", "serif", "ryumin",
+                                               "heitmin", "kozuka min", "IPAex明朝",
+                                               "ms 明朝", "yu mincho", "hiragino min"]):
+                font_class = "mincho"
+            elif any(k in font_lower for k in ["bold", "heavy", "black", "w7", "w8", "w9",
+                                                 "demibold", "semibold", "extrabold"]):
+                font_class = "gothic_bold"
+            elif any(k in font_lower for k in ["light", "thin", "ultralight", "w1", "w2",
+                                                 "w3", "hairline"]):
+                font_class = "light"
+            else:
+                font_class = "gothic"
+
+            # 正規化座標
+            x_pct = (x0 / rect.width) * 100
+            y_pct = (y0 / rect.height) * 100
+            w_pct = ((x1 - x0) / rect.width) * 100
+            h_pct = ((y1 - y0) / rect.height) * 100
+
+            # 縦書き検出: bbox が縦長 + 複数文字
+            bb_w = x1 - x0
+            bb_h = y1 - y0
+            text_stripped = full_text.strip()
+            writing_dir = "vertical" if (bb_h > bb_w * 2.0 and len(text_stripped) > 1) else "horizontal"
+
+            # 縦書きフォント名の検出（日本語フォントの "V" 接尾辞）
+            if any(k in font_lower for k in ["-v", "vert", "tate", "縦"]):
+                writing_dir = "vertical"
+
+            result_spans.append({
+                "id": f"pdf_{block_idx}_{line_idx}_{span_counter}",
+                "text": text_stripped,
+                "font_original": dominant_font,
+                "font_class": font_class,
+                "size_pt": round(dominant_size, 1),
+                "origin": [round(x0, 2), round(y1, 2)],
+                "bbox": [round(x0, 2), round(y0, 2), round(x1 - x0, 2), round(y1 - y0, 2)],
+                "x_pct": round(x_pct, 2),
+                "y_pct": round(y_pct, 2),
+                "w_pct": round(w_pct, 2),
+                "h_pct": round(h_pct, 2),
+                "writing_direction": writing_dir,
+            })
+            span_counter += 1
+
+    print(f"PyMuPDF direct extraction: {len(result_spans)} spans")
+    return result_spans
+
+
+# ── Document AI による Span 抽出（スキャンPDF用 OCR） ─────────────────────────
 
 def _extract_spans_documentai(pdf_bytes: bytes,
                               project_id: str,
@@ -463,7 +646,7 @@ async def analyze_pdf(
                 print(f"Document AI failed, falling back to Gemini: {docai_err}")
                 docai_results = []
         elif has_text:
-            print("PDF has embedded text. Skipping Document AI OCR.")
+            print("PDF has embedded text. Using PyMuPDF direct extraction.")
 
         for i in range(len(pdf_doc)):
             page = pdf_doc.load_page(i)
@@ -471,10 +654,16 @@ async def analyze_pdf(
             width_mm = rect.width * 0.352778
             height_mm = rect.height * 0.352778
 
-            # 高解像度 PNG に変換
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            # 適応的スケーリング: 名刺等の小さい文書は高解像度に
+            long_side_pt = max(rect.width, rect.height)
+            min_target_px = 1500
+            scale_factor = max(2, min_target_px / long_side_pt)
+            scale_factor = min(scale_factor, 6)  # 上限6倍
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale_factor, scale_factor))
             png_bytes = pix.tobytes("png")
             original_png_b64 = base64.b64encode(png_bytes).decode("utf-8")
+            print(f"Page {i}: {rect.width:.0f}x{rect.height:.0f}pt → "
+                  f"{pix.width}x{pix.height}px (scale={scale_factor:.1f}x)")
 
             # Document AI レイアウト情報
             docai_layout_blocks = []
@@ -482,6 +671,7 @@ async def analyze_pdf(
             docai_languages = []
 
             if use_docai and i < len(docai_results):
+                # Document AI OCR 結果を使用（スキャンPDF）
                 docai_page = docai_results[i]
                 spans = docai_page["spans"]
                 docai_layout_blocks = docai_page.get("layout_blocks", [])
@@ -497,13 +687,23 @@ async def analyze_pdf(
                         "origin": [bx, by + bh],
                         "bbox": [bx, by, bw, bh],
                     })
+                print(f"Page {i}: Document AI OCR → {len(spans)} spans")
+            elif has_text:
+                # テキスト埋め込みPDF → PyMuPDF 直接抽出（最高精度）
+                spans = _extract_spans_pymupdf(page)
+                if not spans:
+                    # PyMuPDF でテキスト取得できなかった場合 → Gemini フォールバック
+                    print(f"Page {i}: PyMuPDF returned 0 spans, falling back to Gemini")
+                    spans = _extract_spans_gemini(
+                        png_bytes, rect.width, rect.height, api_key=x_gemini_api_key
+                    )
+                else:
+                    print(f"Page {i}: PyMuPDF direct → {len(spans)} spans")
             else:
-                # Fallback to Gemini
+                # スキャンPDF + Document AI 未使用 → Gemini Vision フォールバック
+                print(f"Page {i}: Using Gemini Vision extraction")
                 spans = _extract_spans_gemini(
-                    png_bytes,
-                    rect.width,
-                    rect.height,
-                    api_key=x_gemini_api_key
+                    png_bytes, rect.width, rect.height, api_key=x_gemini_api_key
                 )
 
             # ── 画像抽出 ──
@@ -922,13 +1122,23 @@ async def rebuild_pdf(req: dict[str, Any]):
                 if origin and len(origin) >= 2:
                     # originはページ座標 [x, y_bottom]
                     size_pt_fb = ov.get("size_pt", 9.0)
-                    est_width = len(old_text) * size_pt_fb * 0.7
-                    rect_fb = fitz.Rect(
-                        origin[0], origin[1] - size_pt_fb * 1.3,
-                        origin[0] + est_width, origin[1] + 2
-                    )
+                    wd = ov.get("writing_direction", "horizontal")
+                    if wd == "vertical":
+                        # 縦書き: 縦長の矩形
+                        est_height = len(old_text) * size_pt_fb * 1.5
+                        rect_fb = fitz.Rect(
+                            origin[0] - size_pt_fb * 0.6, origin[1] - est_height,
+                            origin[0] + size_pt_fb * 0.6, origin[1] + 2
+                        )
+                    else:
+                        # 横書き: 横長の矩形
+                        est_width = len(old_text) * size_pt_fb * 0.7
+                        rect_fb = fitz.Rect(
+                            origin[0], origin[1] - size_pt_fb * 1.3,
+                            origin[0] + est_width, origin[1] + 2
+                        )
                     rects = [rect_fb]
-                    print(f"Using bbox fallback for: '{old_text[:20]}...'")
+                    print(f"Using bbox fallback ({wd}) for: '{old_text[:20]}...'")
 
             if not rects:
                 print(f"Text not found (all methods): '{old_text[:30]}'")
@@ -943,15 +1153,32 @@ async def rebuild_pdf(req: dict[str, Any]):
             page.apply_redactions()
 
             # 新テキストを挿入
+            writing_dir = ov.get("writing_direction", "horizontal")
             try:
-                page.insert_text(
-                    fitz.Point(rect.x0, rect.y1 - 1),
-                    new_text,
-                    fontname="japan",
-                    fontsize=size_pt,
-                    color=(0, 0, 0),
-                )
-                changes_applied += 1
+                if writing_dir == "vertical":
+                    # 縦書き: 1文字ずつ縦に配置
+                    char_h = size_pt * 1.5  # 行送り
+                    x_pos = rect.x0 + (rect.width - size_pt) / 2  # 水平中央
+                    y_start = rect.y0 + size_pt + 2
+                    for ci, ch in enumerate(new_text):
+                        page.insert_text(
+                            fitz.Point(x_pos, y_start + ci * char_h),
+                            ch,
+                            fontname="japan",
+                            fontsize=size_pt,
+                            color=(0, 0, 0),
+                        )
+                    changes_applied += 1
+                else:
+                    # 横書き: 通常挿入
+                    page.insert_text(
+                        fitz.Point(rect.x0, rect.y1 - 1),
+                        new_text,
+                        fontname="japan",
+                        fontsize=size_pt,
+                        color=(0, 0, 0),
+                    )
+                    changes_applied += 1
             except Exception as e:
                 print(f"insert_text error: {e}")
 
