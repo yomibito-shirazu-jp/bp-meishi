@@ -18,6 +18,11 @@ from typing import Any, Optional
 import time
 
 import fitz  # PyMuPDF
+from io import BytesIO
+try:
+    from PIL import Image as PILImage
+except ImportError:
+    PILImage = None
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -547,6 +552,43 @@ async def analyze_pdf(
             except Exception as imgs_err:
                 print(f"get_images error: {imgs_err}")
 
+            # ── Document AI layout_blocks からの画像検出補強 ──
+            if not images_data and docai_layout_blocks and PILImage:
+                try:
+                    pil_img = PILImage.open(BytesIO(png_bytes))
+                    png_w, png_h = pil_img.size
+                    for lb_idx, lb in enumerate(docai_layout_blocks):
+                        if lb.get("type") != "image":
+                            continue
+                        # layout_blocks の座標は pct
+                        crop_x0 = int(lb["x_pct"] / 100 * png_w)
+                        crop_y0 = int(lb["y_pct"] / 100 * png_h)
+                        crop_x1 = int((lb["x_pct"] + lb["w_pct"]) / 100 * png_w)
+                        crop_y1 = int((lb["y_pct"] + lb["h_pct"]) / 100 * png_h)
+                        if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
+                            continue
+                        cropped = pil_img.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+                        buf = BytesIO()
+                        cropped.save(buf, format="PNG")
+                        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                        images_data.append({
+                            "id": f"docai_img_{i}_{lb_idx}",
+                            "xref": -1,
+                            "data_b64": img_b64,
+                            "mime_type": "image/png",
+                            "width": crop_x1 - crop_x0,
+                            "height": crop_y1 - crop_y0,
+                            "x_pct": lb["x_pct"],
+                            "y_pct": lb["y_pct"],
+                            "w_pct": lb["w_pct"],
+                            "h_pct": lb["h_pct"],
+                            "bbox": [lb["x_pct"], lb["y_pct"], lb["w_pct"], lb["h_pct"]],
+                        })
+                    if images_data:
+                        print(f"Document AI detected {len(images_data)} image blocks from layout")
+                except Exception as docai_img_err:
+                    print(f"DocAI image extraction fallback error: {docai_img_err}")
+
             # ── 描画要素(罫線・背景色)抽出 ──
             drawings_data = []
             try:
@@ -756,15 +798,37 @@ async def rebuild_pdf(req: dict[str, Any]):
 
             rects = page.search_for(old_text)
             if not rects:
-                # 部分一致を試行
+                # 部分一致を試行（日本語は空白分割が効かないので文字単位）
                 for word in old_text.split():
                     if len(word) >= 2:
                         rects = page.search_for(word)
                         if rects:
                             break
+                # さらに文字単位で試行
+                if not rects and len(old_text) >= 3:
+                    for start in range(len(old_text) - 2):
+                        chunk = old_text[start:start+3]
+                        rects = page.search_for(chunk)
+                        if rects:
+                            break
+
+            # bbox座標フォールバック（overridesにorigin/bbox情報がある場合）
+            if not rects:
+                ov = overrides.get(span_id, {})
+                origin = ov.get("origin")
+                if origin and len(origin) >= 2:
+                    # originはページ座標 [x, y_bottom]
+                    size_pt_fb = ov.get("size_pt", 9.0)
+                    est_width = len(old_text) * size_pt_fb * 0.7
+                    rect_fb = fitz.Rect(
+                        origin[0], origin[1] - size_pt_fb * 1.3,
+                        origin[0] + est_width, origin[1] + 2
+                    )
+                    rects = [rect_fb]
+                    print(f"Using bbox fallback for: '{old_text[:20]}...'")
 
             if not rects:
-                print(f"Text not found: '{old_text}'")
+                print(f"Text not found (all methods): '{old_text[:30]}'")
                 continue
 
             rect = rects[0]
