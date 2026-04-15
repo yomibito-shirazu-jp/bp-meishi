@@ -1155,25 +1155,110 @@ async def rebuild_pdf(req: dict[str, Any]):
             if not old_text or old_text == new_text:
                 continue
 
-            rects = page.search_for(old_text)
-            if not rects:
-                # 部分一致を試行（日本語は空白分割が効かないので文字単位）
+            import re
+            ov = overrides.get(span_id, {})
+            x_pct = ov.get("x_pct")
+            y_pct = ov.get("y_pct")
+            w_pct = ov.get("w_pct")
+            h_pct = ov.get("h_pct")
+            has_pct = (x_pct is not None and y_pct is not None and w_pct and h_pct)
+
+            # ── 戦略A: pct座標が存在する場合、まず完全一致をsearch_forで試す ──
+            # 完全一致が見つかった場合のみsearch_forを採用（部分一致は使わない）
+            # 完全一致がなければpct座標を使用（画像内テキストの可能性が高い）
+            rects = []
+            use_method = ""
+
+            # Step 1: 完全一致検索（exact match only）
+            exact_rects = page.search_for(old_text)
+            if exact_rects:
+                # pct座標がある場合は、search_for結果がpct位置に近いか検証
+                if has_pct:
+                    page_rect = page.rect
+                    expected_cx = (x_pct / 100) * page_rect.width + (w_pct / 200) * page_rect.width
+                    expected_cy = (y_pct / 100) * page_rect.height + (h_pct / 200) * page_rect.height
+                    # 最も近いrectを選択
+                    best_rect = None
+                    best_dist = float('inf')
+                    for r in exact_rects:
+                        cx = (r.x0 + r.x1) / 2
+                        cy = (r.y0 + r.y1) / 2
+                        dist = ((cx - expected_cx) ** 2 + (cy - expected_cy) ** 2) ** 0.5
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_rect = r
+                    # 距離が妥当な範囲内（ページ対角線の30%以内）なら使用
+                    diag = (page_rect.width ** 2 + page_rect.height ** 2) ** 0.5
+                    if best_dist < diag * 0.3:
+                        rects = [best_rect]
+                        use_method = f"exact-match (dist={best_dist:.0f})"
+                    else:
+                        # 完全一致が見つかったが位置が遠すぎる → pct座標を使用
+                        print(f"  Exact match found but too far (dist={best_dist:.0f} > {diag*0.3:.0f}): '{old_text[:30]}'")
+                else:
+                    rects = exact_rects
+                    use_method = "exact-match"
+
+            # Step 2: pct座標がある場合はそちらを優先（search_for失敗時）
+            if not rects and has_pct:
+                page_rect = page.rect
+                x0 = (x_pct / 100) * page_rect.width
+                y0 = (y_pct / 100) * page_rect.height
+                x1 = x0 + (w_pct / 100) * page_rect.width
+                y1 = y0 + (h_pct / 100) * page_rect.height
+                rects = [fitz.Rect(x0, y0, x1, y1)]
+                use_method = "★ pct-bbox (OCR coordinates) ★"
+                print(f"Using pct-bbox for: '{old_text[:30]}' → rect={rects[0]}")
+
+            # Step 3: pct座標がない場合のみ、部分一致やフォールバック検索
+            if not rects and not has_pct:
+                # スペース除去で検索
+                no_spaces = re.sub(r'\s+', '', old_text)
+                if no_spaces != old_text and len(no_spaces) >= 2:
+                    rects = page.search_for(no_spaces)
+                    if rects:
+                        use_method = "no-spaces"
+                        print(f"Found via no-spaces: '{no_spaces[:30]}'")
+
+            if not rects and not has_pct:
+                chars = [c for c in old_text if c != ' ']
+                if len(chars) >= 3:
+                    restored = ''.join(chars)
+                    for sep in [':', '：']:
+                        if sep in restored:
+                            parts = restored.split(sep, 1)
+                            restored_with_space = f"{parts[0]}{sep} {parts[1]}"
+                            rects = page.search_for(restored_with_space)
+                            if rects:
+                                use_method = "restored"
+                                print(f"Found via restored: '{restored_with_space[:30]}'")
+                                break
+                    if not rects:
+                        rects = page.search_for(restored)
+                        if rects:
+                            use_method = "char-join"
+                            print(f"Found via char-join: '{restored[:30]}'")
+
+            if not rects and not has_pct:
+                no_spaces = re.sub(r'\s+', '', old_text)
+                for length in range(min(len(no_spaces), 8), 2, -1):
+                    chunk = no_spaces[:length]
+                    rects = page.search_for(chunk)
+                    if rects:
+                        use_method = f"prefix-chunk({chunk})"
+                        print(f"Found via prefix chunk: '{chunk}'")
+                        break
+
+            if not rects and not has_pct:
                 for word in old_text.split():
                     if len(word) >= 2:
                         rects = page.search_for(word)
                         if rects:
-                            break
-                # さらに文字単位で試行
-                if not rects and len(old_text) >= 3:
-                    for start in range(len(old_text) - 2):
-                        chunk = old_text[start:start+3]
-                        rects = page.search_for(chunk)
-                        if rects:
+                            use_method = f"word({word})"
                             break
 
-            # bbox座標フォールバック（overridesにorigin/bbox情報がある場合）
+            # bbox座標フォールバック（overridesにorigin情報がある場合）
             if not rects:
-                ov = overrides.get(span_id, {})
                 origin = ov.get("origin")
                 if origin and len(origin) >= 2:
                     size_pt_fb = ov.get("size_pt", 9.0)
@@ -1191,7 +1276,15 @@ async def rebuild_pdf(req: dict[str, Any]):
                             origin[0] + est_width, origin[1] + 2
                         )
                     rects = [rect_fb]
-                    print(f"Using bbox fallback ({wd}) for: '{old_text[:20]}...'")
+                    use_method = f"origin-bbox ({wd})"
+                    print(f"Using origin-bbox fallback ({wd}) for: '{old_text[:20]}...'")
+
+            if not rects:
+                print(f"Text not found + no position data: '{old_text[:30]}' (span_id={span_id})")
+                skipped_edits.append({"span_id": span_id, "text": old_text[:30], "reason": "no_position"})
+                continue
+
+            print(f"  [{span_id}] method={use_method}: '{old_text[:25]}' → '{new_text[:25]}'")
 
             if not rects:
                 print(f"Text not found (all methods): '{old_text[:30]}'")

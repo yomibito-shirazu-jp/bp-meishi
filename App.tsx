@@ -454,6 +454,10 @@ const App: React.FC = () => {
           origin: s.origin,
           size_pt: s.size_pt,
           writing_direction: s.writing_direction || 'horizontal',
+          x_pct: s.x_pct,
+          y_pct: s.y_pct,
+          w_pct: s.w_pct,
+          h_pct: s.h_pct,
         };
         if (fontChanged) ov.font_class = s.font_class;
         ovMap[s.id] = ov;
