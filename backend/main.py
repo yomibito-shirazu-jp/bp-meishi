@@ -589,6 +589,109 @@ async def analyze_pdf(
                 except Exception as docai_img_err:
                     print(f"DocAI image extraction fallback error: {docai_img_err}")
 
+            # ── Vision API での画像検出（印鑑・ロゴ・スタンプ等） ──
+            if not images_data and PILImage:
+                try:
+                    client = vision.ImageAnnotatorClient()
+                    vis_image = vision.Image(content=png_bytes)
+                    features = [
+                        vision.Feature(type_=vision.Feature.Type.OBJECT_LOCALIZATION, max_results=10),
+                        vision.Feature(type_=vision.Feature.Type.LOGO_DETECTION, max_results=10),
+                    ]
+                    vis_request = vision.AnnotateImageRequest(image=vis_image, features=features)
+                    vis_response = client.annotate_image(request=vis_request)
+
+                    pil_img = PILImage.open(BytesIO(png_bytes))
+                    png_w, png_h = pil_img.size
+                    vis_img_idx = 0
+
+                    # Object Localization
+                    for obj in vis_response.localized_object_annotations:
+                        if obj.score < 0.3:
+                            continue
+                        verts = obj.bounding_poly.normalized_vertices
+                        if len(verts) < 4:
+                            continue
+                        x_min = min(v.x for v in verts)
+                        y_min = min(v.y for v in verts)
+                        x_max = max(v.x for v in verts)
+                        y_max = max(v.y for v in verts)
+                        crop_x0 = int(x_min * png_w)
+                        crop_y0 = int(y_min * png_h)
+                        crop_x1 = int(x_max * png_w)
+                        crop_y1 = int(y_max * png_h)
+                        if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
+                            continue
+                        cropped = pil_img.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+                        buf = BytesIO()
+                        cropped.save(buf, format="PNG")
+                        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                        images_data.append({
+                            "id": f"vis_obj_{i}_{vis_img_idx}",
+                            "xref": -1,
+                            "data_b64": img_b64,
+                            "mime_type": "image/png",
+                            "width": crop_x1 - crop_x0,
+                            "height": crop_y1 - crop_y0,
+                            "x_pct": x_min * 100,
+                            "y_pct": y_min * 100,
+                            "w_pct": (x_max - x_min) * 100,
+                            "h_pct": (y_max - y_min) * 100,
+                            "bbox": [x_min * 100, y_min * 100, (x_max - x_min) * 100, (y_max - y_min) * 100],
+                            "label": f"{obj.name} ({obj.score:.0%})",
+                        })
+                        vis_img_idx += 1
+
+                    # Logo Detection
+                    for logo in vis_response.logo_annotations:
+                        if logo.score < 0.3:
+                            continue
+                        verts = logo.bounding_poly.vertices
+                        if len(verts) < 4:
+                            continue
+                        x_min = min(v.x for v in verts) / png_w
+                        y_min = min(v.y for v in verts) / png_h
+                        x_max = max(v.x for v in verts) / png_w
+                        y_max = max(v.y for v in verts) / png_h
+                        crop_x0 = int(x_min * png_w)
+                        crop_y0 = int(y_min * png_h)
+                        crop_x1 = int(x_max * png_w)
+                        crop_y1 = int(y_max * png_h)
+                        if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
+                            continue
+                        # 既存の画像と重複チェック
+                        is_dup = False
+                        for existing in images_data:
+                            if abs(existing["x_pct"] - x_min * 100) < 3 and abs(existing["y_pct"] - y_min * 100) < 3:
+                                is_dup = True
+                                break
+                        if is_dup:
+                            continue
+                        cropped = pil_img.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+                        buf = BytesIO()
+                        cropped.save(buf, format="PNG")
+                        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                        images_data.append({
+                            "id": f"vis_logo_{i}_{vis_img_idx}",
+                            "xref": -1,
+                            "data_b64": img_b64,
+                            "mime_type": "image/png",
+                            "width": crop_x1 - crop_x0,
+                            "height": crop_y1 - crop_y0,
+                            "x_pct": x_min * 100,
+                            "y_pct": y_min * 100,
+                            "w_pct": (x_max - x_min) * 100,
+                            "h_pct": (y_max - y_min) * 100,
+                            "bbox": [x_min * 100, y_min * 100, (x_max - x_min) * 100, (y_max - y_min) * 100],
+                            "label": f"Logo: {logo.description} ({logo.score:.0%})",
+                        })
+                        vis_img_idx += 1
+
+                    if images_data:
+                        print(f"Vision API detected {len(images_data)} images (objects+logos)")
+                except Exception as vis_img_err:
+                    print(f"Vision API image detection error: {vis_img_err}")
+
             # ── 描画要素(罫線・背景色)抽出 ──
             drawings_data = []
             try:
