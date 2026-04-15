@@ -357,7 +357,52 @@ def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
     return result_spans
 
 
-# ── Document AI による Span 抽出（スキャンPDF用 OCR） ─────────────────────────
+def _merge_font_info(docai_spans: list[dict], pymupdf_spans: list[dict],
+                     page_w: float, page_h: float):
+    """Document AIのspan に PyMuPDF の正確なフォント情報（名前・サイズ・クラス）をマージ"""
+    for ds in docai_spans:
+        dx_center = ds["x_pct"] + ds["w_pct"] / 2
+        dy_center = ds["y_pct"] + ds["h_pct"] / 2
+
+        best_match = None
+        best_dist = 999999
+        for ps in pymupdf_spans:
+            px_center = ps["x_pct"] + ps["w_pct"] / 2
+            py_center = ps["y_pct"] + ps["h_pct"] / 2
+            dist = abs(dx_center - px_center) + abs(dy_center - py_center)
+            # テキストの一致度も考慮
+            text_overlap = _text_similarity(ds.get("text", ""), ps.get("text", ""))
+            if text_overlap > 0.3:
+                dist *= (1.0 - text_overlap * 0.5)
+            if dist < best_dist:
+                best_dist = dist
+                best_match = ps
+
+        if best_match and best_dist < 15:  # 近い位置にマッチするspanがある場合
+            ds["font_class"] = best_match.get("font_class", ds.get("font_class", "gothic"))
+            ds["size_pt"] = best_match.get("size_pt", ds.get("size_pt", 9.0))
+            if "font_original" in best_match:
+                ds["font_original"] = best_match["font_original"]
+            if "writing_direction" in best_match:
+                ds["writing_direction"] = best_match["writing_direction"]
+
+
+def _text_similarity(a: str, b: str) -> float:
+    """2つのテキストの簡易類似度（0.0〜1.0）"""
+    if not a or not b:
+        return 0.0
+    a, b = a.strip(), b.strip()
+    if a == b:
+        return 1.0
+    shorter = min(len(a), len(b))
+    longer = max(len(a), len(b))
+    if longer == 0:
+        return 0.0
+    common = sum(1 for ca, cb in zip(a, b) if ca == cb)
+    return common / longer
+
+
+# ── Document AI による Span 抽出 ─────────────────────────
 
 def _extract_spans_documentai(pdf_bytes: bytes,
                               project_id: str,
@@ -625,28 +670,24 @@ async def analyze_pdf(
                 has_text = True
                 break
 
-        # モード選択: Document AI  "false"→無効  "force"→テキスト有無問わず強制  それ以外→テキスト無し時のみ
+        # モード選択: Document AI  "false"→無効  それ以外→常に使用（テキスト有無問わず）
         use_docai_mode = (x_use_documentai or "").lower()
         use_docai = (use_docai_mode != "false")
-        force_docai = (use_docai_mode == "force")
 
         docai_results: list[dict[str, Any]] = []
-        if use_docai and (not has_text or force_docai):
+        if use_docai:
             prj = x_project_id or os.environ.get("VITE_GOOGLE_PROJECT_ID", "270124753853")
             loc = x_location or os.environ.get("VITE_DOCUMENT_AI_LOCATION", "us")
             proc = x_processor_id or os.environ.get("VITE_DOCUMENT_AI_PROCESSOR_ID", "57695b373b653f96")
             ver = x_version_id or os.environ.get("VITE_DOCUMENT_AI_VERSION_ID")
-            mode_label = "FORCE" if force_docai else "OCR"
-            print(f"Using Document AI {mode_label} ({prj}, {loc}, {proc}, {ver})...")
+            print(f"Using Document AI (always-on) ({prj}, {loc}, {proc})...")
             try:
                 docai_results = _extract_spans_documentai(
                     pdf_bytes, prj, loc, proc, ver)
                 print(f"Document AI extracted {len(docai_results)} pages")
             except Exception as docai_err:
-                print(f"Document AI failed, falling back to Gemini: {docai_err}")
+                print(f"Document AI failed, falling back: {docai_err}")
                 docai_results = []
-        elif has_text:
-            print("PDF has embedded text. Using PyMuPDF direct extraction.")
 
         for i in range(len(pdf_doc)):
             page = pdf_doc.load_page(i)
@@ -671,7 +712,7 @@ async def analyze_pdf(
             docai_languages = []
 
             if use_docai and i < len(docai_results):
-                # Document AI OCR 結果を使用（スキャンPDF）
+                # Document AI 結果を主軸に使用
                 docai_page = docai_results[i]
                 spans = docai_page["spans"]
                 docai_layout_blocks = docai_page.get("layout_blocks", [])
@@ -687,12 +728,21 @@ async def analyze_pdf(
                         "origin": [bx, by + bh],
                         "bbox": [bx, by, bw, bh],
                     })
-                print(f"Page {i}: Document AI OCR → {len(spans)} spans")
+
+                # テキスト埋め込みPDFの場合、PyMuPDFのフォント情報で補強
+                if has_text:
+                    pymupdf_spans = _extract_spans_pymupdf(page)
+                    if pymupdf_spans:
+                        _merge_font_info(spans, pymupdf_spans, rect.width, rect.height)
+                        print(f"Page {i}: Document AI + PyMuPDF font merge → {len(spans)} spans")
+                    else:
+                        print(f"Page {i}: Document AI OCR → {len(spans)} spans")
+                else:
+                    print(f"Page {i}: Document AI OCR → {len(spans)} spans")
             elif has_text:
-                # テキスト埋め込みPDF → PyMuPDF 直接抽出（最高精度）
+                # Document AI 未使用 + テキスト埋め込みPDF → PyMuPDF
                 spans = _extract_spans_pymupdf(page)
                 if not spans:
-                    # PyMuPDF でテキスト取得できなかった場合 → Gemini フォールバック
                     print(f"Page {i}: PyMuPDF returned 0 spans, falling back to Gemini")
                     spans = _extract_spans_gemini(
                         png_bytes, rect.width, rect.height, api_key=x_gemini_api_key
@@ -1091,9 +1141,15 @@ async def rebuild_pdf(req: dict[str, Any]):
     try:
         pdf_bytes = base64.b64decode(pdf_b64)
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if page_index < 0 or page_index >= len(doc):
+            raise HTTPException(400, f"page_index {page_index} is out of range (total pages: {len(doc)})")
         page = doc.load_page(page_index)
 
         changes_applied = 0
+        skipped_edits = []
+
+        # ── Phase 1: 全編集の検索矩形を先に取得（apply_redactions前に全検索） ──
+        edit_plan = []  # [(span_id, new_text, rect, size_pt, writing_dir)]
         for span_id, new_text in edits.items():
             old_text = original_texts.get(span_id, "")
             if not old_text or old_text == new_text:
@@ -1120,18 +1176,15 @@ async def rebuild_pdf(req: dict[str, Any]):
                 ov = overrides.get(span_id, {})
                 origin = ov.get("origin")
                 if origin and len(origin) >= 2:
-                    # originはページ座標 [x, y_bottom]
                     size_pt_fb = ov.get("size_pt", 9.0)
                     wd = ov.get("writing_direction", "horizontal")
                     if wd == "vertical":
-                        # 縦書き: 縦長の矩形
                         est_height = len(old_text) * size_pt_fb * 1.5
                         rect_fb = fitz.Rect(
                             origin[0] - size_pt_fb * 0.6, origin[1] - est_height,
                             origin[0] + size_pt_fb * 0.6, origin[1] + 2
                         )
                     else:
-                        # 横書き: 横長の矩形
                         est_width = len(old_text) * size_pt_fb * 0.7
                         rect_fb = fitz.Rect(
                             origin[0], origin[1] - size_pt_fb * 1.3,
@@ -1142,24 +1195,39 @@ async def rebuild_pdf(req: dict[str, Any]):
 
             if not rects:
                 print(f"Text not found (all methods): '{old_text[:30]}'")
+                skipped_edits.append({"span_id": span_id, "text": old_text[:30]})
                 continue
 
             rect = rects[0]
             ov = overrides.get(span_id, {})
-            size_pt = ov.get("size_pt", 9.0)
+            # size_pt: overrides > 元テキストの推定サイズ > デフォルト
+            size_pt = ov.get("size_pt", 0)
+            if not size_pt:
+                # 元テキストの高さからフォントサイズを推定
+                size_pt = max(round(rect.height * 0.75, 1), 6.0)
+            writing_dir = ov.get("writing_direction", "horizontal")
 
-            # 元テキストを消去して白塗り
-            page.add_redact_annot(rect, fill=(1, 1, 1))
+            # 矩形を少し拡張（CJKグリフがはみ出す対策）
+            expanded = fitz.Rect(
+                rect.x0 - 1, rect.y0 - 1,
+                rect.x1 + 1, rect.y1 + 1
+            )
+            edit_plan.append((span_id, new_text, expanded, rect, size_pt, writing_dir))
+
+        # ── Phase 2: 全redact annotationを一括追加してからapply ──
+        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir in edit_plan:
+            page.add_redact_annot(expanded, fill=(1, 1, 1))
+
+        if edit_plan:
             page.apply_redactions()
 
-            # 新テキストを挿入
-            writing_dir = ov.get("writing_direction", "horizontal")
+        # ── Phase 3: 新テキストを元の位置に挿入 ──
+        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir in edit_plan:
             try:
                 if writing_dir == "vertical":
-                    # 縦書き: 1文字ずつ縦に配置
-                    char_h = size_pt * 1.5  # 行送り
-                    x_pos = rect.x0 + (rect.width - size_pt) / 2  # 水平中央
-                    y_start = rect.y0 + size_pt + 2
+                    char_h = size_pt * 1.5
+                    x_pos = orig_rect.x0 + (orig_rect.width - size_pt) / 2
+                    y_start = orig_rect.y0 + size_pt + 2
                     for ci, ch in enumerate(new_text):
                         page.insert_text(
                             fitz.Point(x_pos, y_start + ci * char_h),
@@ -1170,9 +1238,9 @@ async def rebuild_pdf(req: dict[str, Any]):
                         )
                     changes_applied += 1
                 else:
-                    # 横書き: 通常挿入
+                    # 横書き: 元のrect位置に挿入（ベースライン = rect.y1 - descent余白）
                     page.insert_text(
-                        fitz.Point(rect.x0, rect.y1 - 1),
+                        fitz.Point(orig_rect.x0, orig_rect.y1 - 1),
                         new_text,
                         fontname="japan",
                         fontsize=size_pt,
@@ -1235,6 +1303,7 @@ async def rebuild_pdf(req: dict[str, Any]):
                 png_bytes).decode("utf-8"),
             "changes_applied": changes_applied,
             "images_replaced": images_replaced,
+            "skipped_edits": skipped_edits,
         }
 
     except Exception as e:

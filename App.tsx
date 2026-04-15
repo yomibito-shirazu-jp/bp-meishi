@@ -32,6 +32,35 @@ const FONT_LABELS: Record<string, string> = {
   gothic_bold: 'ゴシック太',
 };
 
+const CATEGORY_LABELS: Record<string, string> = {
+  // 名刺
+  company: '会社名', company_en: '会社名(英)', department: '部署', title: '役職',
+  name: '氏名', name_en: '氏名(英)', address: '住所', postal: '郵便番号',
+  phone: '電話', fax: 'FAX', mobile: '携帯', email: 'メール', url: 'URL',
+  // 請求書・見積書
+  doc_title: '書類名', doc_number: '文書番号', date: '日付',
+  company_from: '差出人', company_to: '宛先',
+  item_name: '品名', quantity: '数量', unit_price: '単価', amount: '金額',
+  subtotal: '小計', tax: '税', total: '合計',
+  payment_terms: '支払条件', bank_info: '振込先', note: '備考',
+  // 書籍
+  chapter: '章', heading: '見出し', body: '本文', page_number: 'ページ番号',
+  header: 'ヘッダー', footer: 'フッター', caption: 'キャプション',
+  // 汎用
+  label: 'ラベル', value: '値', number: '番号', other: 'その他',
+};
+
+const CATEGORY_COLORS: Record<string, string> = {
+  company: '#6366f1', company_from: '#6366f1', company_to: '#818cf8',
+  name: '#ec4899', doc_title: '#f59e0b', doc_number: '#f59e0b',
+  date: '#8b5cf6', address: '#14b8a6', postal: '#14b8a6',
+  phone: '#3b82f6', fax: '#3b82f6', mobile: '#3b82f6', email: '#3b82f6', url: '#3b82f6',
+  item_name: '#10b981', quantity: '#f97316', unit_price: '#f97316', amount: '#ef4444',
+  subtotal: '#ef4444', tax: '#ef4444', total: '#ef4444',
+  heading: '#f59e0b', body: '#64748b', note: '#94a3b8',
+  other: '#6b7280',
+};
+
 // Premium SaaS theme — Dark sidebar + Indigo accent
 const C = {
   // Content area (light)
@@ -345,16 +374,19 @@ const App: React.FC = () => {
       console.log('[handleUpload] useDocAI:', useDocAI, 'API URL:', getConfig('VITE_API_URL'));
       const data = await analyzePdf(file, useDocAI);
       console.log('[handleUpload] analyzePdf returned:', data?.pages?.length, 'pages');
-      const pages = data.pages;
+      const pages = data?.pages;
+      if (!pages || !Array.isArray(pages) || pages.length === 0) {
+        flash('ページが見つかりませんでした。PDFを確認してください。', 'error');
+        return;
+      }
+      if (!data.pdf_b64) {
+        flash('PDFデータの取得に失敗しました', 'error');
+        return;
+      }
       setAllPages(pages);
       setPdfB64(data.pdf_b64);
       setJobInstruction(data.job_instruction || null);
       setEditingProjectId(null);
-
-      if (pages.length === 0) {
-        flash('ページが見つかりませんでした', 'error');
-        return;
-      }
 
       // Load first page with AI correction
       console.log('[handleUpload] loading page 0, spans:', pages[0]?.spans?.length);
@@ -404,9 +436,11 @@ const App: React.FC = () => {
     const edits: Record<string, string> = {};
     const originalTexts: Record<string, string> = {};
     const ovMap: Record<string, SpanOverride> = {};
-    spans.forEach((s, i) => {
-      if (!originalSpans[i]) return;
-      const orig = originalSpans[i];
+    // IDベースでoriginalSpansと比較（インデックスずれに対応）
+    const origMap = new Map(originalSpans.map(s => [s.id, s]));
+    spans.forEach(s => {
+      const orig = origMap.get(s.id);
+      if (!orig) return;
       const textChanged = s.text !== orig.text;
       const fontChanged = s.font_class !== orig.font_class;
       const sizeChanged = s.size_pt !== orig.size_pt;
@@ -415,7 +449,6 @@ const App: React.FC = () => {
         edits[s.id] = s.text;
         originalTexts[s.id] = orig.text;
       }
-      // テキスト変更時も含め、origin/size_pt/writing_directionを常にoverridesに含める
       if (textChanged || fontChanged || sizeChanged || posChanged) {
         const ov: SpanOverride = {
           origin: s.origin,
@@ -434,20 +467,27 @@ const App: React.FC = () => {
       if (data.png_b64) { setRebuiltPng(`data:image/png;base64,${data.png_b64}`); setPreviewTab('rebuilt'); }
 
       // Auto-save to DB with rebuilt PDF
-      const project = buildProject(data.pdf_b64, data.png_b64);
-      await saveProject(project);
-      setEditingProjectId(project.id);
-      await loadProjects();
-
-      // Download
       if (data.pdf_b64) {
+        const project = buildProject(data.pdf_b64, data.png_b64);
+        await saveProject(project);
+        setEditingProjectId(project.id);
+        await loadProjects();
+
+        // Download
         const a = document.createElement('a');
         a.href = `data:application/pdf;base64,${data.pdf_b64}`;
         const nameSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
-        a.download = `${nameSpan?.text?.trim() || '名刺'}.pdf`;
+        a.download = `${nameSpan?.text?.trim() || 'document'}.pdf`;
         a.click();
       }
-      flash('再構築 + 保存完了', 'ok');
+
+      // 置換失敗の通知
+      const skipped = (data as any).skipped_edits;
+      if (skipped && skipped.length > 0) {
+        flash(`${data.changes_applied}件適用 / ${skipped.length}件スキップ（元テキスト不一致）`, 'error');
+      } else {
+        flash(`再構築完了（${data.changes_applied}件適用）`, 'ok');
+      }
     } catch (e: any) {
       flash(`再構築エラー: ${e.message}`, 'error');
     }
@@ -1305,16 +1345,23 @@ const App: React.FC = () => {
                   borderBottom: '1px solid #1e1e3a',
                 }}
               >
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ background: '#12122a', color: '#8888aa' }}>
-                    {FONT_LABELS[s.font_class] || s.font_class}
+                <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+                  {fieldCategories[s.id] && fieldCategories[s.id] !== 'other' && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{
+                      background: `${CATEGORY_COLORS[fieldCategories[s.id]] || '#6b7280'}20`,
+                      color: CATEGORY_COLORS[fieldCategories[s.id]] || '#6b7280',
+                    }}>
+                      {CATEGORY_LABELS[fieldCategories[s.id]] || fieldCategories[s.id]}
+                    </span>
+                  )}
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ background: '#12122a', color: '#6b6b8a' }}>
+                    {FONT_LABELS[s.font_class] || s.font_class} {s.size_pt}pt
                   </span>
                   {s.writing_direction === 'vertical' && (
                     <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,146,60,0.15)', color: '#fb923c' }}>
                       縦
                     </span>
                   )}
-                  <span className="text-[10px] font-mono" style={{ color: '#5a5a7a' }}>{s.size_pt}pt</span>
                   {changed && (
                     <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full ml-auto" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
                       変更済
