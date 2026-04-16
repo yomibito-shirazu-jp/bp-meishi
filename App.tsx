@@ -1128,7 +1128,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Actions */}
-        <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 shrink-0 transition-opacity">
           {/* 再度検証する */}
           <button
             className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors flex items-center justify-center"
@@ -1221,8 +1221,10 @@ const App: React.FC = () => {
 
         {/* Empty state — URL入稿 */}
         {projects.length === 0 && !loading && (
-          <div
-            className="rounded-2xl p-1 animate-fadeIn"
+          <div className="space-y-4">
+            <h2 className="text-xl font-bold text-slate-800">ダッシュボード（一覧）</h2>
+            <div
+              className="rounded-2xl p-1 animate-fadeIn"
             style={{ background: C.gradientPrimary }}
           >
             <div className="bg-white rounded-[14px] p-12">

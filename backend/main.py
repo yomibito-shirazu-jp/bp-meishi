@@ -339,19 +339,36 @@ class MarkdownService:
 # 4. FastAPI ルーティング
 # ==============================================================================
 
+from fastapi import FastAPI, HTTPException, UploadFile, File, Header, Form
+import httpx
+
 app = FastAPI(title="Kumihan API (Component & Parallelized)")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.post("/analyze")
 async def analyze_endpoint(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    file_url: Optional[str] = Form(None),
     x_gemini_api_key: Optional[str] = Header(None),
     x_project_id: Optional[str] = Header(os.environ.get("VITE_GOOGLE_PROJECT_ID", "dummy")),
     x_location: Optional[str] = Header(os.environ.get("VITE_DOCUMENT_AI_LOCATION", "us")),
     x_processor_id: Optional[str] = Header(os.environ.get("VITE_DOCUMENT_AI_PROCESSOR_ID", "dummy")),
 ):
     """【主軸】名刺組版データの高精度抽出 (並列処理)"""
-    pdf_bytes = await file.read()
+    pdf_bytes = None
+    if file_url:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(file_url)
+            if resp.status_code == 200:
+                pdf_bytes = resp.content
+            else:
+                raise HTTPException(400, f"Failed to fetch file from URL: {resp.status_code}")
+    elif file:
+        pdf_bytes = await file.read()
+    
+    if not pdf_bytes:
+        raise HTTPException(400, "No file or file_url provided")
+        
     service = KumihanService(x_project_id, x_location, x_processor_id, x_gemini_api_key or GEMINI_API_KEY)
     
     try:
@@ -367,6 +384,528 @@ async def markdown_to_pdf_endpoint(req: MarkdownToPDFRequest):
         return await service.build_pdf_with_md2pdf_ja(req)
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+
+
+@app.post("/rebuild")
+async def rebuild_pdf(req: dict[str, Any]):
+    """PyMuPDF でテキストを置換して修正PDF + プレビュー PNG を返す"""
+    pdf_b64 = req.get("pdf_b64", "")
+    edits = req.get("edits", {})
+    original_texts = req.get("original_texts", {})
+    overrides = req.get("overrides", {})
+    image_replacements = req.get("image_replacements", {})
+    span_bboxes = req.get("span_bboxes", {})  # Phase 2: bbox直接指定
+    page_index = req.get("page_index", 0)
+    dpi = req.get("dpi", 300)
+
+    if not pdf_b64:
+        raise HTTPException(400, "pdf_b64 is required")
+
+    try:
+        pdf_bytes = base64.b64decode(pdf_b64)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if page_index < 0 or page_index >= len(doc):
+            raise HTTPException(400, f"page_index {page_index} is out of range (total pages: {len(doc)})")
+        page = doc.load_page(page_index)
+
+        changes_applied = 0
+        skipped_edits = []
+
+        # Phase 4: 色マップを先に構築（redaction 前）
+        color_map = _build_color_map(page)
+
+        # ── 全編集の矩形を取得 ──
+        edit_plan = []  # [(span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class)]
+        for span_id, new_text in edits.items():
+            old_text = original_texts.get(span_id, "")
+            if not old_text or old_text == new_text:
+                continue
+
+            import re
+            ov = overrides.get(span_id, {})
+            sb = span_bboxes.get(span_id, {})  # Phase 2: bbox直接指定
+            x_pct = ov.get("x_pct")
+            y_pct = ov.get("y_pct")
+            w_pct = ov.get("w_pct")
+            h_pct = ov.get("h_pct")
+            has_pct = (x_pct is not None and y_pct is not None and w_pct and h_pct)
+
+            rects = []
+            use_method = ""
+
+            # ── Step 0 (NEW): span_bboxes から bbox を直接使用 ──
+            sb_bbox = sb.get("bbox")
+            if sb_bbox and len(sb_bbox) == 4:
+                bx, by, bw, bh = sb_bbox
+                if bw > 0 and bh > 0:
+                    rects = [fitz.Rect(bx, by, bx + bw, by + bh)]
+                    use_method = "span-bbox (direct)"
+
+            # Step 1: 完全一致検索（exact match only）
+            if not rects:
+                exact_rects = page.search_for(old_text)
+                if exact_rects:
+                    if has_pct:
+                        page_rect = page.rect
+                        expected_cx = (x_pct / 100) * page_rect.width + (w_pct / 200) * page_rect.width
+                        expected_cy = (y_pct / 100) * page_rect.height + (h_pct / 200) * page_rect.height
+                        best_rect = None
+                        best_dist = float('inf')
+                        for r in exact_rects:
+                            cx = (r.x0 + r.x1) / 2
+                            cy = (r.y0 + r.y1) / 2
+                            dist = ((cx - expected_cx) ** 2 + (cy - expected_cy) ** 2) ** 0.5
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_rect = r
+                        diag = (page_rect.width ** 2 + page_rect.height ** 2) ** 0.5
+                        if best_dist < diag * 0.3:
+                            rects = [best_rect]
+                            use_method = f"exact-match (dist={best_dist:.0f})"
+                        else:
+                            print(f"  Exact match found but too far (dist={best_dist:.0f} > {diag*0.3:.0f}): '{old_text[:30]}'")
+                    else:
+                        rects = exact_rects
+                        use_method = "exact-match"
+
+            # Step 2: pct座標フォールバック
+            if not rects and has_pct:
+                page_rect = page.rect
+                x0 = (x_pct / 100) * page_rect.width
+                y0 = (y_pct / 100) * page_rect.height
+                x1 = x0 + (w_pct / 100) * page_rect.width
+                y1 = y0 + (h_pct / 100) * page_rect.height
+                rects = [fitz.Rect(x0, y0, x1, y1)]
+                use_method = "pct-bbox"
+
+            # Step 3: テキスト検索フォールバック
+            if not rects and not has_pct:
+                no_spaces = re.sub(r'\s+', '', old_text)
+                if no_spaces != old_text and len(no_spaces) >= 2:
+                    rects = page.search_for(no_spaces)
+                    if rects:
+                        use_method = "no-spaces"
+
+            if not rects and not has_pct:
+                chars = [c for c in old_text if c != ' ']
+                if len(chars) >= 3:
+                    restored = ''.join(chars)
+                    for sep in [':', '：']:
+                        if sep in restored:
+                            parts = restored.split(sep, 1)
+                            restored_with_space = f"{parts[0]}{sep} {parts[1]}"
+                            rects = page.search_for(restored_with_space)
+                            if rects:
+                                use_method = "restored"
+                                break
+                    if not rects:
+                        rects = page.search_for(restored)
+                        if rects:
+                            use_method = "char-join"
+
+            if not rects and not has_pct:
+                no_spaces = re.sub(r'\s+', '', old_text)
+                for length in range(min(len(no_spaces), 8), 2, -1):
+                    chunk = no_spaces[:length]
+                    rects = page.search_for(chunk)
+                    if rects:
+                        use_method = f"prefix-chunk({chunk})"
+                        break
+
+            if not rects and not has_pct:
+                for word in old_text.split():
+                    if len(word) >= 2:
+                        rects = page.search_for(word)
+                        if rects:
+                            use_method = f"word({word})"
+                            break
+
+            # origin フォールバック
+            if not rects:
+                origin = ov.get("origin") or sb.get("origin")
+                if origin and len(origin) >= 2:
+                    size_pt_fb = ov.get("size_pt") or sb.get("size_pt") or 9.0
+                    wd = ov.get("writing_direction", "horizontal")
+                    if wd == "vertical":
+                        est_height = len(old_text) * size_pt_fb * 1.5
+                        rect_fb = fitz.Rect(
+                            origin[0] - size_pt_fb * 0.6, origin[1] - est_height,
+                            origin[0] + size_pt_fb * 0.6, origin[1] + 2
+                        )
+                    else:
+                        est_width = len(old_text) * size_pt_fb * 0.7
+                        rect_fb = fitz.Rect(
+                            origin[0], origin[1] - size_pt_fb * 1.3,
+                            origin[0] + est_width, origin[1] + 2
+                        )
+                    rects = [rect_fb]
+                    use_method = f"origin-bbox ({wd})"
+
+            if not rects:
+                print(f"Text not found + no position data: '{old_text[:30]}' (span_id={span_id})")
+                skipped_edits.append({"span_id": span_id, "text": old_text[:30], "reason": "no_position"})
+                continue
+
+            print(f"  [{span_id}] method={use_method}: '{old_text[:25]}' → '{new_text[:25]}'")
+
+            rect = rects[0]
+            size_pt = ov.get("size_pt") or sb.get("size_pt") or 0
+            if not size_pt:
+                size_pt = max(round(rect.height * 0.75, 1), 6.0)
+            writing_dir = ov.get("writing_direction", "horizontal")
+            font_class = ov.get("font_class") or sb.get("font_class") or "gothic"
+
+            expanded = fitz.Rect(
+                rect.x0 - 1, rect.y0 - 1,
+                rect.x1 + 1, rect.y1 + 1
+            )
+            edit_plan.append((span_id, new_text, expanded, rect, size_pt, writing_dir, font_class))
+
+        # ── 全 redact annotation を一括追加 → apply ──
+        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class in edit_plan:
+            # Phase 3: 背景色サンプリング
+            bg_color = _sample_bg_color(page, expanded)
+            page.add_redact_annot(expanded, fill=bg_color)
+
+        if edit_plan:
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+
+        # ── 新テキストを元の位置に挿入 ──
+        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class in edit_plan:
+            try:
+                # Phase 1: フォント解決
+                fontfile = _resolve_font(font_class)
+                font_kwargs: dict[str, Any] = {}
+                if fontfile:
+                    font_kwargs["fontfile"] = fontfile
+                else:
+                    font_kwargs["fontname"] = "japan"
+
+                # Phase 4: 元テキスト色を取得
+                text_color = _lookup_text_color(color_map, orig_rect.x0, orig_rect.y0)
+
+                if writing_dir == "vertical":
+                    char_h = size_pt * 1.5
+                    x_pos = orig_rect.x0 + (orig_rect.width - size_pt) / 2
+                    y_start = orig_rect.y0 + size_pt + 2
+                    for ci, ch in enumerate(new_text):
+                        page.insert_text(
+                            fitz.Point(x_pos, y_start + ci * char_h),
+                            ch,
+                            fontsize=size_pt,
+                            color=text_color,
+                            **font_kwargs,
+                        )
+                    changes_applied += 1
+                else:
+                    page.insert_text(
+                        fitz.Point(orig_rect.x0, orig_rect.y1 - 1),
+                        new_text,
+                        fontsize=size_pt,
+                        color=text_color,
+                        **font_kwargs,
+                    )
+                    changes_applied += 1
+            except Exception as e:
+                print(f"insert_text error: {e}")
+
+        # ── 画像差し替え ──
+        images_replaced = 0
+        for img_id, new_img_data in image_replacements.items():
+            try:
+                xref = new_img_data.get("xref")
+                new_b64 = new_img_data.get("data_b64", "")
+                if not xref or not new_b64:
+                    continue
+                new_img_bytes = base64.b64decode(new_b64)
+                # PyMuPDF で画像を差し替え
+                doc._deleteObject(xref)
+                page = doc.load_page(page_index)
+
+                # 画像の位置を取得して再配置
+                img_rect_data = new_img_data.get("rect")
+                if img_rect_data:
+                    img_rect = fitz.Rect(img_rect_data)
+                    page.insert_image(img_rect, stream=new_img_bytes)
+                    images_replaced += 1
+                else:
+                    # xrefベースで直接置換
+                    try:
+                        pix = fitz.Pixmap(new_img_bytes)
+                        doc.replace_image(xref, pixmap=pix)
+                        images_replaced += 1
+                    except Exception:
+                        # fallback: ページ上に画像を配置
+                        img_rects = page.get_image_rects(xref)
+                        if img_rects:
+                            page.insert_image(img_rects[0], stream=new_img_bytes)
+                            images_replaced += 1
+            except Exception as img_err:
+                print(f"Image replace error ({img_id}): {img_err}")
+
+        print(f"Rebuild: text={changes_applied}/{len(edits)}, images={images_replaced}/{len(image_replacements)}")
+
+        new_pdf_bytes = doc.write()
+
+        # プレビュー PNG 生成
+        page = doc.load_page(page_index)
+        scale = dpi / 72
+        mat = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=mat)
+        png_bytes = pix.tobytes("png")
+        doc.close()
+
+        return {
+            "pdf_b64": base64.b64encode(
+                new_pdf_bytes).decode("utf-8"),
+            "png_b64": base64.b64encode(
+                png_bytes).decode("utf-8"),
+            "changes_applied": changes_applied,
+            "images_replaced": images_replaced,
+            "skipped_edits": skipped_edits,
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"再構築失敗: {e}")
+
+
+# ── /vivliostyle-build エンドポイント ─────────────────────────────────────────
+
+def _generate_html_css(
+    spans: list[VivliostyleSpan],
+    page_mm: list[float],
+    title: str,
+    bg_image_b64: Optional[str] = None,
+) -> tuple[str, str]:
+    """スパンデータからVivliostyle用HTML+CSSを生成"""
+    w_mm, h_mm = page_mm[0], page_mm[1]
+
+    font_map = {
+        "gothic": "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+        "gothic_bold": (
+            "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif"
+        ),
+        "mincho": "'Noto Serif JP', 'Hiragino Mincho ProN', serif",
+        "light": "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+    }
+    weight_map = {
+        "gothic": "400",
+        "gothic_bold": "700",
+        "mincho": "400",
+        "light": "300",
+    }
+
+    css = f"""@page {{
+  size: {w_mm}mm {h_mm}mm;
+  margin: 0;
+  bleed: 3mm;
+  marks: crop cross;
+}}
+
+@font-face {{
+  font-family: 'Noto Sans JP';
+  src: local('Noto Sans JP'), local('NotoSansJP');
+  font-weight: 100 900;
+}}
+
+@font-face {{
+  font-family: 'Noto Serif JP';
+  src: local('Noto Serif JP'), local('NotoSerifJP');
+  font-weight: 100 900;
+}}
+
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
+body {{
+  width: {w_mm}mm;
+  height: {h_mm}mm;
+  position: relative;
+  overflow: hidden;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}}
+
+.card-container {{
+  position: relative;
+  width: 100%;
+  height: 100%;
+}}
+
+.span-element {{
+  position: absolute;
+  white-space: nowrap;
+  line-height: 1.4;
+}}
+"""
+
+    elements_html = ""
+    for i, s in enumerate(spans):
+        font_family = font_map.get(s.font_class, font_map["gothic"])
+        font_weight = weight_map.get(s.font_class, "400")
+        elements_html += (
+            f'    <div class="span-element" style="'
+            f"left: {s.x_pct}%; top: {s.y_pct}%; "
+            f"font-family: {font_family}; font-weight: {font_weight}; "
+            f'font-size: {s.size_pt}pt;">{s.text}</div>\n'
+        )
+
+    html = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>{title}</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="card-container" {f'style="background-image: url(data:image/png;base64,{bg_image_b64});"' if bg_image_b64 else ""}>
+{elements_html}  </div>
+</body>
+</html>"""
+
+    return html, css
+
+
+
+
+class CorrectionTask(BaseModel):
+    id: str = ""
+    page: int = 0
+    location: str = ""
+    original_text: str = ""
+    corrected_text: str = ""
+    instruction: str = ""
+    category: str = "text"      # text / image / layout / delete / add
+    priority: str = "normal"    # high / normal / low
+    status: str = "pending"     # pending / done / skipped
+
+
+class ExtractCorrectionsRequest(BaseModel):
+    pdf_b64: str
+    manuscript_pdf_b64: Optional[str] = None
+
+
+@app.post("/extract-corrections")
+async def extract_corrections(
+    req: ExtractCorrectionsRequest,
+    x_gemini_api_key: Optional[str] = Header(None),
+):
+    """修正指示PDFを解析し、修正タスク一覧を返す"""
+    api_key = x_gemini_api_key or GEMINI_API_KEY
+    if not api_key:
+        raise HTTPException(400, "Gemini API Key が必要です")
+
+    try:
+        pdf_bytes = base64.b64decode(req.pdf_b64)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        all_tasks: list[dict] = []
+        task_counter = 0
+
+        for i in range(len(doc)):
+            page = doc.load_page(i)
+            rect = page.rect
+            scale = max(2, 2000 / max(rect.width, rect.height))
+            scale = min(scale, 6)
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+            png_bytes = pix.tobytes("png")
+
+            # Gemini Vision で修正指示を構造化抽出
+            try:
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel("gemini-2.0-flash")
+                prompt = """この画像は印刷物の「修正指示書（赤字校正・校正刷り）」です。
+画像中の修正指示をすべて読み取り、以下のJSON配列で返してください。
+
+各修正指示について:
+- location: 修正箇所の位置（例: "3行目", "タイトル下", "右カラム2段落目"）
+- original_text: 修正前のテキスト（赤字で取り消されているもの、分かれば）
+- corrected_text: 修正後のテキスト（赤字で書き込まれているもの）
+- instruction: 修正の内容を説明（例: "誤字修正", "文言変更", "削除", "画像差替"）
+- category: "text"（文字修正）, "image"（画像関連）, "layout"（レイアウト変更）, "delete"（削除）, "add"（追加）のいずれか
+- priority: "high"（重要）, "normal"（通常）, "low"（軽微）
+
+朱書き・赤ペン・付箋・コメント・マーカーなど、あらゆる修正指示記号を解読してください。
+
+JSON配列のみ返してください。修正指示が見つからない場合は空配列 [] を返してください。"""
+
+                img_part = {"mime_type": "image/png", "data": png_bytes}
+                resp = model.generate_content(
+                    [prompt, img_part],
+                    generation_config={"temperature": 0.1, "max_output_tokens": 8192},
+                )
+
+                raw = resp.text.strip()
+                # JSON抽出
+                if "```json" in raw:
+                    raw = raw.split("```json")[1].split("```")[0].strip()
+                elif "```" in raw:
+                    raw = raw.split("```")[1].split("```")[0].strip()
+
+                tasks = json.loads(raw)
+                if isinstance(tasks, list):
+                    for t in tasks:
+                        task_counter += 1
+                        all_tasks.append({
+                            "id": f"task_{task_counter:03d}",
+                            "page": i + 1,
+                            "location": t.get("location", ""),
+                            "original_text": t.get("original_text", ""),
+                            "corrected_text": t.get("corrected_text", ""),
+                            "instruction": t.get("instruction", ""),
+                            "category": t.get("category", "text"),
+                            "priority": t.get("priority", "normal"),
+                            "status": "pending",
+                        })
+                    print(f"Page {i+1}: {len(tasks)} correction tasks extracted")
+
+            except Exception as gemini_err:
+                print(f"Page {i+1}: Gemini correction extraction error: {gemini_err}")
+                # ページのテキストからフォールバック抽出
+                page_text = page.get_text("text").strip()
+                if page_text:
+                    task_counter += 1
+                    all_tasks.append({
+                        "id": f"task_{task_counter:03d}",
+                        "page": i + 1,
+                        "location": "ページ全体",
+                        "original_text": "",
+                        "corrected_text": "",
+                        "instruction": f"テキスト抽出（Geminiエラー）: {page_text[:200]}",
+                        "category": "text",
+                        "priority": "normal",
+                        "status": "pending",
+                    })
+
+        # ページプレビューも返す
+        page_previews = []
+        for i in range(len(doc)):
+            page = doc.load_page(i)
+            rect = page.rect
+            scale = max(1.5, 1200 / max(rect.width, rect.height))
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+            png_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+            page_previews.append({
+                "page_index": i,
+                "preview_b64": png_b64,
+                "width": pix.width,
+                "height": pix.height,
+            })
+
+        doc.close()
+        return {
+            "tasks": all_tasks,
+            "total_tasks": len(all_tasks),
+            "pages": page_previews,
+        }
+
+    except Exception as e:
+        raise HTTPException(500, f"修正指示抽出エラー: {str(e)}")
+
+
+
 
 if __name__ == "__main__":
     import uvicorn

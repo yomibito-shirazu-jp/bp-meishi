@@ -9,9 +9,18 @@ export const healthCheck = async (): Promise<boolean> => {
   return data.status === 'ok';
 };
 
+import { uploadPdfToStorage } from './supabase';
+
 export const analyzePdf = async (file: File, useDocumentAI?: boolean): Promise<AnalyzeResponse> => {
   const form = new FormData();
-  form.append('file', file);
+  
+  // Try uploading to Supabase first for large files to avoid 413 Payload Too Large
+  const publicUrl = await uploadPdfToStorage(file);
+  if (publicUrl) {
+    form.append('file_url', publicUrl);
+  } else {
+    form.append('file', file);
+  }
   
   const headers: Record<string, string> = {};
   const geminiKey = getConfig('VITE_GOOGLE_AI_KEY');
