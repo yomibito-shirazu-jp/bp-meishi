@@ -220,6 +220,9 @@ const App: React.FC = () => {
   const [mdTheme, setMdTheme] = useState<'default' | 'academic' | 'business'>('default');
   const [mdFormat, setMdFormat] = useState<'A4' | 'A5' | 'B5' | 'Letter'>('A4');
   const [mdVertical, setMdVertical] = useState(false);
+  const [mdAccuracy, setMdAccuracy] = useState(0);
+  const [mdSourcesAvail, setMdSourcesAvail] = useState<string[]>([]);
+  const [mdDocaiMd, setMdDocaiMd] = useState('');
 
   // ── Derived ──
   const flash = (text: string, type: 'info' | 'ok' | 'error' = 'info') => {
@@ -4397,7 +4400,11 @@ JSONのみ返してください。` },
                             setMdPageMM([data.pages[0].width_mm, data.pages[0].height_mm]);
                             setMdPreviewPngs(data.pages.map(p => p.preview_b64));
                           }
-                          flash(`変換完了（${data.source || 'auto'}） — テキストを編集してください`, 'ok');
+                          setMdAccuracy(data.accuracy_score || 0);
+                          setMdSourcesAvail(data.sources_available || []);
+                          if (data.docai_md) setMdDocaiMd(data.docai_md);
+                          const scoreEmoji = (data.accuracy_score || 0) >= 95 ? '🟢' : (data.accuracy_score || 0) >= 80 ? '🟡' : '🔴';
+                          flash(`${scoreEmoji} 精度 ${data.accuracy_score || '?'}%（${data.source || 'auto'}）${data.verification_notes ? ' — ' + data.verification_notes : ''}`, 'ok');
                         } catch (err: any) {
                           flash(`変換エラー: ${err.message}`, 'error');
                         } finally {
@@ -4423,6 +4430,22 @@ JSONのみ返してください。` },
                 <>
                   {/* Toolbar */}
                   <div className="flex items-center gap-3 flex-wrap">
+                    {mdAccuracy > 0 && (
+                      <div
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
+                        style={{
+                          background: mdAccuracy >= 95 ? '#dcfce7' : mdAccuracy >= 80 ? '#fef9c3' : '#fecaca',
+                          color: mdAccuracy >= 95 ? '#166534' : mdAccuracy >= 80 ? '#854d0e' : '#991b1b',
+                        }}
+                        title={`精度検証: ${mdAccuracy}% | ソース: ${mdSourcesAvail.join(', ')}`}
+                      >
+                        {mdAccuracy >= 95 ? '🟢' : mdAccuracy >= 80 ? '🟡' : '🔴'}
+                        精度 {mdAccuracy}%
+                        <span className="text-[10px] opacity-70 ml-1">
+                          ({mdSourcesAvail.length}エンジン)
+                        </span>
+                      </div>
+                    )}
                     <button
                       onClick={() => mdFileRef.current?.click()}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border"

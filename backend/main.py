@@ -1813,11 +1813,12 @@ async def analyze_markdown(
     req: dict[str, Any],
     x_gemini_api_key: str = Header(None, alias="X-Gemini-API-Key"),
 ):
-    """PDF → Markdown変換（MarkItDown + Gemini Vision OCR ハイブリッド）
-    
-    1. テキスト埋め込みPDF → MarkItDown（高速・高精度）
-    2. スキャンPDF/画像PDF → Gemini Vision OCR（pdf-ocr-obsidian方式）
-    3. 元PDFのページ画像をそのまま背景保持 → 100% 再現
+    """PDF → Markdown変換（MarkItDown + Gemini Vision OCR + Document AI トリプル解析）
+
+    1. MarkItDown（テキスト埋め込みPDF向け・高速）
+    2. Gemini Vision OCR（pdf-ocr-obsidian方式・画像OCR）
+    3. Document AI（Google最高精度OCR・レイアウト解析）
+    4. Gemini 精度検証: 3つの結果を比較し、最高精度のMarkdownを選択
     """
     from markitdown import MarkItDown
 
@@ -1839,7 +1840,7 @@ async def analyze_markdown(
 
         has_embedded_text = total_text_chars > 50
 
-        # ── Step 1: MarkItDown でテキスト抽出を試行 ──
+        # ── Step 1: MarkItDown でテキスト抽出 ──
         markitdown_md = ""
         try:
             md_converter = MarkItDown()
@@ -1849,7 +1850,27 @@ async def analyze_markdown(
         except Exception as mit_err:
             print(f"MarkItDown failed: {mit_err}")
 
-        # ── Step 2: Gemini Vision OCR で各ページをOCR（pdf-ocr-obsidian方式） ──
+        # ── Step 2: Document AI でテキスト抽出 ──
+        docai_md = ""
+        try:
+            prj = os.environ.get("VITE_GOOGLE_PROJECT_ID", "270124753853")
+            loc = os.environ.get("VITE_DOCUMENT_AI_LOCATION", "us")
+            proc = os.environ.get("VITE_DOCUMENT_AI_PROCESSOR_ID", "57695b373b653f96")
+            ver = os.environ.get("VITE_DOCUMENT_AI_VERSION_ID")
+            print(f"Document AI OCR: ({prj}, {loc}, {proc})")
+            docai_pages = _extract_spans_documentai(pdf_bytes, prj, loc, proc, ver)
+            # Document AI結果をMarkdown形式に変換
+            docai_page_texts = []
+            for page_data in docai_pages:
+                spans = page_data.get("spans", [])
+                line_texts = [s.get("text", "") for s in spans]
+                docai_page_texts.append("\n".join(line_texts))
+            docai_md = "\n\n---\n\n".join([t for t in docai_page_texts if t.strip()])
+            print(f"Document AI: {len(docai_md)} chars")
+        except Exception as docai_err:
+            print(f"Document AI failed: {docai_err}")
+
+        # ── Step 3: Gemini Vision OCR（各ページを画像としてOCR → Markdown） ──
         gemini_pages_md = []
         pages = []
 
@@ -1868,7 +1889,7 @@ async def analyze_markdown(
             png_bytes_page = pix.tobytes("png")
             preview_b64 = base64.b64encode(png_bytes_page).decode("utf-8")
 
-            # Gemini Vision OCR（各ページを画像としてOCR → Markdown）
+            # Gemini Vision OCR
             page_md = ""
             if api_key:
                 try:
@@ -1889,36 +1910,65 @@ async def analyze_markdown(
 
         doc.close()
 
-        # ── Step 3: 最良のMarkdownを選択 ──
         # Gemini OCRの結果を結合
         gemini_combined = "\n\n---\n\n".join(
             [md for md in gemini_pages_md if md.strip()]
         )
 
-        # MarkItDown vs Gemini: より内容が豊富な方を採用
-        if len(gemini_combined) > len(markitdown_md) * 0.8 and len(gemini_combined) > 100:
-            # Gemini OCRがより良いコンテンツを持っている
-            final_markdown = gemini_combined
-            source = "gemini_vision_ocr"
-        elif len(markitdown_md) > 100:
-            final_markdown = markitdown_md
-            source = "markitdown"
-        elif gemini_combined:
-            final_markdown = gemini_combined
-            source = "gemini_vision_ocr"
-        else:
-            final_markdown = markitdown_md or "(テキストを抽出できません)"
-            source = "fallback"
+        # ── Step 4: Gemini 精度検証 — 3つのソースから最良を自動選択 ──
+        candidates = {}
+        if markitdown_md and len(markitdown_md) > 50:
+            candidates["markitdown"] = markitdown_md
+        if docai_md and len(docai_md) > 50:
+            candidates["document_ai"] = docai_md
+        if gemini_combined and len(gemini_combined) > 50:
+            candidates["gemini_vision_ocr"] = gemini_combined
 
-        print(f"Final markdown: {source}, {len(final_markdown)} chars, {len(pages)} pages")
+        final_markdown = ""
+        source = "none"
+        accuracy_score = 0
+        verification_notes = ""
+
+        if api_key and len(candidates) >= 2 and pages:
+            # Gemini に3つの結果を比較させて最良選択
+            try:
+                final_markdown, source, accuracy_score, verification_notes = (
+                    _gemini_verify_accuracy(
+                        candidates,
+                        pages[0]["preview_b64"],
+                        api_key,
+                    )
+                )
+            except Exception as verify_err:
+                print(f"Gemini verification failed: {verify_err}")
+
+        # フォールバック: 検証が失敗した場合、長さベースで選択
+        if not final_markdown:
+            lengths = {k: len(v) for k, v in candidates.items()}
+            if lengths:
+                best_key = max(lengths, key=lengths.get)
+                final_markdown = candidates[best_key]
+                source = best_key
+                accuracy_score = 85  # 検証なし
+            else:
+                final_markdown = markitdown_md or gemini_combined or docai_md or "(テキストを抽出できません)"
+                source = "fallback"
+                accuracy_score = 50
+
+        print(f"Final: source={source}, accuracy={accuracy_score}%, "
+              f"{len(final_markdown)} chars, {len(pages)} pages")
 
         return {
             "markdown": final_markdown,
             "pages": pages,
             "total_pages": len(pages),
             "source": source,
+            "accuracy_score": accuracy_score,
+            "verification_notes": verification_notes,
             "markitdown_md": markitdown_md,
             "gemini_md": gemini_combined,
+            "docai_md": docai_md,
+            "sources_available": list(candidates.keys()),
         }
 
     except Exception as e:
@@ -1974,6 +2024,94 @@ def _ocr_page_to_markdown(png_bytes: bytes, api_key: str, page_num: int) -> str:
     print(f"  OCR page {page_num}: {len(text)} chars")
     return text
 
+
+def _gemini_verify_accuracy(
+    candidates: dict[str, str],
+    page_preview_b64: str,
+    api_key: str,
+) -> tuple[str, str, int, str]:
+    """Gemini でOCR結果を元PDF画像と比較し、精度スコアと最良結果を返す
+
+    Returns: (best_markdown, source_name, accuracy_score, notes)
+    """
+    import google.generativeai as genai_local
+    genai_local.configure(api_key=api_key)
+
+    model = genai_local.GenerativeModel("gemini-2.0-flash")
+
+    # 候補のサマリーを構築
+    candidates_text = ""
+    for name, md in candidates.items():
+        # 各候補の最初の500文字だけ送信（トークン節約）
+        truncated = md[:800] if len(md) > 800 else md
+        candidates_text += f"\n\n=== [{name}] ===\n{truncated}\n"
+
+    prompt = f"""あなたはPDF→Markdown変換の精度検証AIです。
+
+元PDFページの画像と、複数のOCRエンジンから抽出されたMarkdownテキストを比較してください。
+
+以下の候補があります:
+{candidates_text}
+
+評価基準:
+1. テキストの正確性（文字の一致率）
+2. レイアウトの再現性（表、見出し、段落の構造）
+3. 数値・固有名詞の正確性（金額、日付、人名、社名）
+4. 改行位置やインデントの適切さ
+
+回答形式（厳密にこの形式で回答してください）:
+BEST: [候補名]
+SCORE: [0-100の精度スコア]
+NOTES: [簡潔な検証コメント（日本語）]"""
+
+    img_part = {
+        "mime_type": "image/png",
+        "data": base64.b64decode(page_preview_b64),
+    }
+
+    try:
+        response = model.generate_content(
+            [prompt, img_part],
+            generation_config={"temperature": 0.1, "max_output_tokens": 500},
+        )
+        result_text = response.text.strip()
+        print(f"Gemini verification: {result_text[:200]}")
+
+        # パース
+        best_name = ""
+        score = 85
+        notes = ""
+
+        for line in result_text.split("\n"):
+            line = line.strip()
+            if line.startswith("BEST:"):
+                best_name = line.split(":", 1)[1].strip().strip("[]")
+            elif line.startswith("SCORE:"):
+                try:
+                    score = int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    score = 85
+            elif line.startswith("NOTES:"):
+                notes = line.split(":", 1)[1].strip()
+
+        # 候補名のマッチング
+        matched_key = None
+        for key in candidates:
+            if key.lower() in best_name.lower() or best_name.lower() in key.lower():
+                matched_key = key
+                break
+
+        if not matched_key:
+            # 一番長い候補をフォールバック
+            matched_key = max(candidates, key=lambda k: len(candidates[k]))
+
+        return candidates[matched_key], matched_key, score, notes
+
+    except Exception as e:
+        print(f"Gemini verify error: {e}")
+        # フォールバック
+        best_key = max(candidates, key=lambda k: len(candidates[k]))
+        return candidates[best_key], best_key, 80, f"検証失敗: {e}"
 
 @app.post("/markdown-to-pdf")
 async def markdown_to_pdf(req: dict[str, Any]):

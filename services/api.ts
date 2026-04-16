@@ -200,8 +200,12 @@ export interface AnalyzeMarkdownResponse {
   pages: MarkdownPage[];
   total_pages: number;
   source?: string;
+  accuracy_score?: number;
+  verification_notes?: string;
   markitdown_md?: string;
   gemini_md?: string;
+  docai_md?: string;
+  sources_available?: string[];
 }
 
 export const analyzeMarkdown = async (pdfB64: string): Promise<AnalyzeMarkdownResponse> => {
