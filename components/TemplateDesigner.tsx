@@ -374,6 +374,32 @@ const TemplateDesigner: React.FC<Props> = ({ category, onBack, flash, colors: C 
             >
               <Upload size={16} /> テンプレートJSONをインポート
             </button>
+            <button
+              onClick={() => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.pdf';
+                input.onchange = async (ev: any) => {
+                  const file = ev.target?.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    const uint8 = new Uint8Array(reader.result as ArrayBuffer);
+                    let binary = '';
+                    uint8.forEach(b => binary += String.fromCharCode(b));
+                    const dataUrl = `data:application/pdf;base64,${btoa(binary)}`;
+                    const tpl: Template = { basePdf: dataUrl, schemas: [[]] };
+                    selectTemplate(tpl, file.name.replace('.pdf', ''));
+                    flash(`PDF「${file.name}」をテンプレートとして読み込みました`, 'ok');
+                  };
+                  reader.readAsArrayBuffer(file);
+                };
+                input.click();
+              }}
+              className="flex items-center gap-2 px-5 py-3 rounded-xl border-2 border-dashed border-gray-300 text-gray-500 hover:border-violet-400 hover:text-violet-600 transition-all text-sm font-medium"
+            >
+              <FileText size={16} /> PDFからテンプレート作成
+            </button>
           </div>
         </div>
       </div>
