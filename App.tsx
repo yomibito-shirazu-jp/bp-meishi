@@ -1293,6 +1293,7 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
+          </div>
         )}
 
         {/* Grouped project cards */}
