@@ -11,6 +11,7 @@ import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './service
 import { chunkManuscript, validateManuscript, submitFeedback } from './services/validate';
 import TemplateDesigner from './components/TemplateDesigner';
 import PdfEditor from './components/PdfEditor';
+import CommercialPublishing from './components/CommercialPublishing';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
@@ -4279,75 +4280,49 @@ JSONのみ返してください。` },
         {view === AppState.TOOL_DETECT_LAYOUT && renderDetectLayout()}
         {view === AppState.TOOL_VALIDATE_MS && renderValidateManuscript()}
         {/* クラウド組版カテゴリ */}
-        {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL) && (
+        {/* 商業出版 → 専用コンポーネント */}
+        {view === AppState.KUMIHAN_COMMERCIAL && (
+          <CommercialPublishing
+            onBack={() => setView(AppState.DASHBOARD)}
+            flash={flash}
+            colors={C}
+            onTemplateDesigner={() => setView(AppState.TEMPLATE_BOOK)}
+          />
+        )}
+        {/* 名刺・新聞 → 共通アップロード画面 */}
+        {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER) && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-5xl mx-auto">
-              <div className="rounded-2xl p-1" style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : view === AppState.KUMIHAN_NEWSPAPER ? 'linear-gradient(135deg, #3b82f6, #60a5fa)' : C.gradientPrimary }}>
+              <div className="rounded-2xl p-1" style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : 'linear-gradient(135deg, #3b82f6, #60a5fa)' }}>
                 <div className="bg-white rounded-[14px] p-10">
                   <div className="text-center mb-8">
                     <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '新聞' : '商業出版'}
+                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : '新聞'}
                     </h2>
                     <p className="text-gray-500">
                       {view === AppState.KUMIHAN_MEISHI && 'PDFを入稿してAI構造解析→自動組版→校了PDFまでワンストップ。'}
                       {view === AppState.KUMIHAN_NEWSPAPER && '新聞原稿を入稿。段組み・見出し・写真配置をAIが自動レイアウト。'}
-                      {view === AppState.KUMIHAN_COMMERCIAL && '書籍原稿を入稿。章立て・目次・索引をAIが構造解析し自動組版。'}
                     </p>
                   </div>
                   <div className="flex justify-center gap-4 flex-wrap">
-                    {/* ローカルPCからアップロード */}
-                    <input
-                      type="file"
-                      accept=".pdf,application/pdf"
-                      id="local-pdf-upload"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleUpload(file);
-                        e.target.value = '';
-                      }}
-                    />
-                    <button
-                      onClick={() => document.getElementById('local-pdf-upload')?.click()}
+                    <input type="file" accept=".pdf,application/pdf" id="local-pdf-upload" className="hidden"
+                      onChange={(e) => { const file = e.target.files?.[0]; if (file) handleUpload(file); e.target.value = ''; }} />
+                    <button onClick={() => document.getElementById('local-pdf-upload')?.click()}
                       className="px-8 py-4 rounded-xl text-[15px] font-bold flex items-center gap-3 text-white shadow-lg transition-all hover:opacity-90"
-                      style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : view === AppState.KUMIHAN_NEWSPAPER ? 'linear-gradient(135deg, #3b82f6, #60a5fa)' : C.gradientPrimary }}
-                    >
+                      style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : 'linear-gradient(135deg, #3b82f6, #60a5fa)' }}>
                       <Upload size={20} /> ローカルPCから入稿
                     </button>
-                    {/* Google Driveから */}
-                    <button
-                      onClick={async () => {
-                        try {
-                          const file = await pickPdfFromDrive();
-                          if (file) handleUpload(file);
-                        } catch (err: any) { flash(err.message, 'error'); }
-                      }}
+                    <button onClick={async () => { try { const file = await pickPdfFromDrive(); if (file) handleUpload(file); } catch (err: any) { flash(err.message, 'error'); } }}
                       className="px-8 py-4 rounded-xl text-[15px] font-bold flex items-center gap-3 border-2 shadow-lg transition-all hover:opacity-90"
-                      style={{
-                        borderColor: view === AppState.KUMIHAN_MEISHI ? '#10b981' : view === AppState.KUMIHAN_NEWSPAPER ? '#3b82f6' : '#8b5cf6',
-                        color: view === AppState.KUMIHAN_MEISHI ? '#10b981' : view === AppState.KUMIHAN_NEWSPAPER ? '#3b82f6' : '#8b5cf6',
-                        background: 'white',
-                      }}
-                    >
+                      style={{ borderColor: view === AppState.KUMIHAN_MEISHI ? '#10b981' : '#3b82f6', color: view === AppState.KUMIHAN_MEISHI ? '#10b981' : '#3b82f6', background: 'white' }}>
                       <HardDrive size={20} /> Google Driveから入稿
                     </button>
                   </div>
                   <p className="text-center text-xs text-gray-400 mt-4">PDFファイルをこのエリアにドラッグ＆ドロップすることもできます</p>
-
-                  {/* テンプレート作成ボタン */}
                   <div className="mt-8 pt-6 border-t border-gray-100">
-                    <button
-                      onClick={() => {
-                        if (view === AppState.KUMIHAN_MEISHI) setView(AppState.TEMPLATE_MEISHI);
-                        else if (view === AppState.KUMIHAN_NEWSPAPER) setView(AppState.TEMPLATE_NEWSPAPER);
-                        else setView(AppState.TEMPLATE_BOOK);
-                      }}
+                    <button onClick={() => { if (view === AppState.KUMIHAN_MEISHI) setView(AppState.TEMPLATE_MEISHI); else setView(AppState.TEMPLATE_NEWSPAPER); }}
                       className="flex items-center gap-2 mx-auto px-6 py-3 rounded-xl text-[14px] font-semibold border-2 transition-all hover:shadow-md"
-                      style={{
-                        borderColor: view === AppState.KUMIHAN_MEISHI ? '#10b981' : view === AppState.KUMIHAN_NEWSPAPER ? '#3b82f6' : '#8b5cf6',
-                        color: view === AppState.KUMIHAN_MEISHI ? '#10b981' : view === AppState.KUMIHAN_NEWSPAPER ? '#3b82f6' : '#8b5cf6',
-                      }}
-                    >
+                      style={{ borderColor: view === AppState.KUMIHAN_MEISHI ? '#10b981' : '#3b82f6', color: view === AppState.KUMIHAN_MEISHI ? '#10b981' : '#3b82f6' }}>
                       <LayoutTemplate size={18} /> テンプレートを作成・編集
                     </button>
                   </div>
