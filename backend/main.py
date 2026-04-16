@@ -603,9 +603,19 @@ def _extract_spans_documentai(pdf_bytes: bytes,
         raw_document = documentai.RawDocument(
             content=chunk_pdf_bytes, mime_type="application/pdf"
         )
+        # OcrConfigを設定してネイティブのPDFテキスト情報の抽出と、日本語の言語ヒントを強制する
+        # さらに開発者ナレッジの推奨通り、フォントスタイル情報を取得するために PremiumFeatures(compute_style_info=True) を有効化
+        ocr_config = documentai.OcrConfig(
+            enable_native_pdf_parsing=True,
+            hints=documentai.OcrConfig.Hints(language_hints=["ja"]),
+            premium_features=documentai.OcrConfig.PremiumFeatures(compute_style_info=True)
+        )
+        process_options = documentai.ProcessOptions(ocr_config=ocr_config)
+        
         request = documentai.ProcessRequest(
             name=name,
-            raw_document=raw_document
+            raw_document=raw_document,
+            process_options=process_options
         )
 
         try:
