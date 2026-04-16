@@ -8,6 +8,7 @@ import {
   Upload, Download, FileText, Eye, Save, RotateCcw,
   Type, Square, Minus, Image as ImageIcon, PenTool,
 } from 'lucide-react';
+import { getPdfmeFont } from './fontHelper';
 
 /* ─────── Plugin registry ─────── */
 const getPlugins = () => {
@@ -37,8 +38,9 @@ const PdfEditor: React.FC<Props> = ({ onBack, flash, colors: C }) => {
   // Initialize designer when pendingPdf changes and DOM is ready
   useEffect(() => {
     if (!pendingPdf || !designerRef.current) return;
+    let isMounted = true;
 
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       if (!designerRef.current) return;
 
       // Destroy previous
@@ -53,11 +55,15 @@ const PdfEditor: React.FC<Props> = ({ onBack, flash, colors: C }) => {
       };
 
       try {
+        const font = await getPdfmeFont();
+        if (!isMounted) return;
+
         const d = new Designer({
           domContainer: designerRef.current,
           template,
           plugins: getPlugins(),
           options: {
+            font,
             lang: 'ja',
             theme: { token: { colorPrimary: '#f59e0b' } },
           } as any,
@@ -73,7 +79,10 @@ const PdfEditor: React.FC<Props> = ({ onBack, flash, colors: C }) => {
       }
     }, 150);
 
-    return () => clearTimeout(timer);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
   }, [pendingPdf, flash]);
 
   // Cleanup
@@ -117,6 +126,7 @@ const PdfEditor: React.FC<Props> = ({ onBack, flash, colors: C }) => {
     try {
       const tpl = designerInstance.current.getTemplate();
       const plugins = getPlugins();
+      const font = await getPdfmeFont();
       const inputs: Record<string, string>[] = [{}];
       const schemas = tpl.schemas?.[0];
       if (Array.isArray(schemas)) {
@@ -124,7 +134,7 @@ const PdfEditor: React.FC<Props> = ({ onBack, flash, colors: C }) => {
           inputs[0][s.name] = s.content || s.name || '';
         });
       }
-      const pdf = await generate({ template: tpl, inputs, plugins });
+      const pdf = await generate({ template: tpl, inputs, plugins, options: { font } });
       const blob = new Blob([pdf.buffer], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
 
@@ -148,6 +158,7 @@ const PdfEditor: React.FC<Props> = ({ onBack, flash, colors: C }) => {
     try {
       const tpl = designerInstance.current.getTemplate();
       const plugins = getPlugins();
+      const font = await getPdfmeFont();
       const inputs: Record<string, string>[] = [{}];
       const schemas = tpl.schemas?.[0];
       if (Array.isArray(schemas)) {
@@ -155,7 +166,7 @@ const PdfEditor: React.FC<Props> = ({ onBack, flash, colors: C }) => {
           inputs[0][s.name] = s.content || s.name || '';
         });
       }
-      const pdf = await generate({ template: tpl, inputs, plugins });
+      const pdf = await generate({ template: tpl, inputs, plugins, options: { font } });
       const blob = new Blob([pdf.buffer], { type: 'application/pdf' });
       window.open(URL.createObjectURL(blob), '_blank');
       flash('プレビューを開きました', 'ok');

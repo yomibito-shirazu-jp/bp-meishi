@@ -38,4 +38,4 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 substitutions:
-  _GOOGLE_AI_KEY: 'AIzaSyCO9_oK-VZ6eWPZcO4SHLvhkR5hAv69gbg'
+  _GOOGLE_AI_KEY: 'AIzaSyB2VhNoNkARnygteXILsYBaQnPIIkmLRP8'

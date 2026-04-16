@@ -62,19 +62,15 @@ const PRESETS: Record<PresetKey, { label: string; icon: string; template: Templa
   blank: { label: '白紙 (A4)', icon: '📄', template: A4_BLANK, desc: 'A4白紙から自由に作成' },
 };
 
-/* ─────────────── Plugin Registry ─────────────── */
-
+/* ─────────────── Generate plugins ─────────────── */
 const getPlugins = () => {
   const plugins: Record<string, any> = { Text: text, Image: image };
-  try { if (multiVariableText) plugins['MultiVariableText'] = multiVariableText; } catch {}
-  try { if (barcodes?.qrcode) plugins['QRCode'] = barcodes.qrcode; } catch {}
-  try { if (barcodes?.code128) plugins['Code128'] = barcodes.code128; } catch {}
-  try { if (barcodes?.ean13) plugins['EAN13'] = barcodes.ean13; } catch {}
-  try { if (line) plugins['Line'] = line; } catch {}
   try { if (rectangle) plugins['Rectangle'] = rectangle; } catch {}
+  try { if (line) plugins['Line'] = line; } catch {}
   try { if (ellipse) plugins['Ellipse'] = ellipse; } catch {}
   try { if (svg) plugins['SVG'] = svg; } catch {}
   try { if (table) plugins['Table'] = table; } catch {}
+  try { if (barcodes) Object.assign(plugins, barcodes); } catch {}
   try { if (dateTime) plugins['DateTime'] = dateTime; } catch {}
   try { if (date) plugins['Date'] = date; } catch {}
   try { if (time) plugins['Time'] = time; } catch {}
@@ -116,8 +112,9 @@ const TemplateDesigner: React.FC<Props> = ({ category, onBack, flash, colors: C 
   useEffect(() => {
     if (mode !== 'designer' || !pendingTemplate || !designerRef.current) return;
 
+    let isMounted = true;
     // Small delay to ensure DOM is fully laid out
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       if (!designerRef.current) return;
 
       // Destroy any previous instance
@@ -128,11 +125,15 @@ const TemplateDesigner: React.FC<Props> = ({ category, onBack, flash, colors: C 
 
       const plugins = getPlugins();
       try {
+        const font = await getPdfmeFont();
+        if (!isMounted) return;
+
         const d = new Designer({
           domContainer: designerRef.current,
           template: pendingTemplate,
           plugins,
           options: {
+            font,
             lang: 'ja',
             theme: { token: { colorPrimary: '#6366f1' } },
           } as any,
@@ -153,7 +154,10 @@ const TemplateDesigner: React.FC<Props> = ({ category, onBack, flash, colors: C 
       }
     }, 100);
 
-    return () => clearTimeout(timer);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
   }, [mode, pendingTemplate, flash]);
 
   // Cleanup on unmount
@@ -243,6 +247,7 @@ const TemplateDesigner: React.FC<Props> = ({ category, onBack, flash, colors: C 
     flash('PDF生成中...', 'info');
     try {
       const plugins = getPlugins();
+      const font = await getPdfmeFont();
       const inputs: Record<string, string>[] = [{}];
       const schemas = tpl.schemas?.[0];
       if (Array.isArray(schemas)) {
@@ -250,7 +255,7 @@ const TemplateDesigner: React.FC<Props> = ({ category, onBack, flash, colors: C 
           inputs[0][s.name] = s.content || s.name || '';
         });
       }
-      const pdf = await generate({ template: tpl, inputs, plugins });
+      const pdf = await generate({ template: tpl, inputs, plugins, options: { font } });
       const blob = new Blob([pdf.buffer], { type: 'application/pdf' });
       window.open(URL.createObjectURL(blob), '_blank');
       flash('PDFを生成しました', 'ok');

@@ -13,7 +13,7 @@ import {
   LayoutTemplate, Filter, ChevronRight,
 } from 'lucide-react';
 import { pickPdfFromDrive } from '../services/gdrive';
-
+import { getPdfmeFont } from './fontHelper';
 /* ─────── Plugin registry ─────── */
 const getPlugins = () => {
   const p: Record<string, any> = { Text: text, Image: image };
@@ -159,11 +159,13 @@ const CommercialPublishing: React.FC<Props> = ({ onBack, flash, colors: C, onTem
       };
 
       try {
+        const font = await getPdfmeFont();
         const d = new Designer({
           domContainer: designerRef.current,
           template,
           plugins: getPlugins(),
           options: {
+            font,
             lang: 'ja',
             theme: { token: { colorPrimary: '#8b5cf6' } },
           } as any,
@@ -196,12 +198,13 @@ const CommercialPublishing: React.FC<Props> = ({ onBack, flash, colors: C, onTem
     try {
       const tpl = designerInstance.current.getTemplate();
       const plugins = getPlugins();
+      const font = await getPdfmeFont();
       const inputs: Record<string, string>[] = [{}];
       const schemas = tpl.schemas?.[0];
       if (Array.isArray(schemas)) {
         schemas.forEach((s: any) => { inputs[0][s.name] = s.content || s.name || ''; });
       }
-      const pdf = await generate({ template: tpl, inputs, plugins });
+      const pdf = await generate({ template: tpl, inputs, plugins, options: { font } });
       const blob = new Blob([pdf.buffer], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

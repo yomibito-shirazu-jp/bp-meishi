@@ -3,6 +3,10 @@
 .env
 .env.local
 backend/__pycache__
+backend/.venv/
+.venv/
+node_modules/
+dist/
 .agents/
 .claude/
 fonts/和文書体*

@@ -41,9 +41,9 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 substitutions:
-  _VITE_API_URL: 'https://meishi-api-pdw36wmy5q-an.a.run.app'
+  _VITE_API_URL: 'https://meishi-api-270124753853.asia-northeast1.run.app'
   _VITE_SUPABASE_URL: 'https://avakiygdyafqjrhlvbjg.supabase.co'
   _VITE_SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF2YWtpeWdkeWFmcWpyaGx2YmpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODAzOTIsImV4cCI6MjA4OTU1NjM5Mn0.6X_9qlsrQSXx9eSKZQ3k0bqT2CM083L_NDsiSLaolOI'
-  _VITE_GOOGLE_AI_KEY: 'AIzaSyCO9_oK-VZ6eWPZcO4SHLvhkR5hAv69gbg'
+  _VITE_GOOGLE_AI_KEY: 'AIzaSyB2VhNoNkARnygteXILsYBaQnPIIkmLRP8'
   _VITE_GOOGLE_CLIENT_ID: '270124753853-u1hjecajdni1e0t1s5dpr5hqo7eah9oa.apps.googleusercontent.com'
   _VITE_GOOGLE_API_KEY: 'AIzaSyCjjLXhUo0bl1EALyYAq5PZS8DiQw14X88'

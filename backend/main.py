@@ -175,7 +175,7 @@ def _extract_spans_gemini(
 
     try:
         genai.configure(api_key=active_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         img_part = {
             "mime_type": "image/png",
             "data": base64.b64encode(resized_bytes).decode(),
@@ -2574,7 +2574,8 @@ async def extract_corrections(
 
             # Gemini Vision で修正指示を構造化抽出
             try:
-                model = genai.GenerativeModel("gemini-2.5-flash-preview-04-17")
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel("gemini-2.0-flash")
                 prompt = """この画像は印刷物の「修正指示書（赤字校正・校正刷り）」です。
 画像中の修正指示をすべて読み取り、以下のJSON配列で返してください。
 
