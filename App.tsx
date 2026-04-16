@@ -10,6 +10,7 @@ import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/co
 import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './services/detect';
 import { chunkManuscript, validateManuscript, submitFeedback } from './services/validate';
 import TemplateDesigner from './components/TemplateDesigner';
+import PdfEditor from './components/PdfEditor';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
@@ -4271,7 +4272,7 @@ JSONのみ返してください。` },
         {view === AppState.TRANSCRIBE_AI && renderTranscribeAI()}
         {view === AppState.TOOL_WRITING && renderToolWorkspace('writing')}
         {view === AppState.TOOL_OCR && renderToolWorkspace('ocr')}
-        {view === AppState.TOOL_PDF_EDIT && renderToolWorkspace('pdf_edit')}
+        {view === AppState.TOOL_PDF_EDIT && <PdfEditor onBack={() => setView(AppState.DASHBOARD)} flash={flash} colors={C} />}
         {view === AppState.TOOL_PDF_COMPARE && renderToolWorkspace('pdf_compare')}
         {view === AppState.TOOL_PROOFREAD && renderToolWorkspace('proofread')}
         {view === AppState.TOOL_TYPESET_SPEC && renderToolWorkspace('typeset_spec')}
