@@ -1007,7 +1007,7 @@ async def analyze_pdf(
                 print(f"get_images error: {imgs_err}")
 
             # ── Document AI layout_blocks からの画像検出補強 ──
-            if not images_data and docai_layout_blocks and PILImage:
+            if docai_layout_blocks and PILImage:
                 try:
                     pil_img = PILImage.open(BytesIO(png_bytes))
                     png_w, png_h = pil_img.size

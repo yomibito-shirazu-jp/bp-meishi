@@ -1917,6 +1917,32 @@ const App: React.FC = () => {
                     </div>
                   );
                 })}
+                {showOverlay && pageImages.map((img) => (
+                  <div
+                    key={img.id}
+                    title={`画像 / ID: ${img.id}`}
+                    style={{
+                      position: 'absolute',
+                      left: `${img.x_pct}%`,
+                      top: `${img.y_pct}%`,
+                      width: `${img.w_pct}%`,
+                      height: `${img.h_pct}%`,
+                      border: '2px dashed rgba(59, 130, 246, 0.6)',
+                      background: 'rgba(59, 130, 246, 0.15)',
+                      borderRadius: '4px',
+                      zIndex: 15,
+                      pointerEvents: 'none',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'flex-end',
+                      overflow: 'hidden'
+                    }}
+                  >
+                    <div className="bg-blue-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-bl-sm opacity-80 shadow-sm">
+                      📷 画像
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="text-sm" style={{ color: '#6b6b8a' }}>プレビューなし</div>
