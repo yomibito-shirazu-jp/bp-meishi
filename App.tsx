@@ -766,6 +766,12 @@ const App: React.FC = () => {
   const renderSidebar = () => {
     const sections = [
       {
+        title: 'ホーム',
+        items: [
+          { icon: LayoutDashboard, label: 'ダッシュボード (一覧)', badge: 0, state: AppState.DASHBOARD },
+        ],
+      },
+      {
         title: 'クラウド組版',
         items: [
           { icon: CreditCard, label: '名刺', badge: 0, state: AppState.KUMIHAN_MEISHI },
