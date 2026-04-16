@@ -249,6 +249,7 @@ const App: React.FC = () => {
   const [mdShowPreview, setMdShowPreview] = useState(true);
   const mdFileRef = useRef<HTMLInputElement>(null);
   const [mdTheme, setMdTheme] = useState<'default' | 'academic' | 'business'>('default');
+  const [mdFont, setMdFont] = useState<'auto' | 'serif' | 'sans-serif'>('auto');
   const [mdFormat, setMdFormat] = useState<'A4' | 'A5' | 'B5' | 'Letter'>('A4');
   const [mdVertical, setMdVertical] = useState(false);
   const [mdAccuracy, setMdAccuracy] = useState(0);
@@ -4851,6 +4852,17 @@ JSONのみ返してください。` },
                         <option value="business">ビジネス</option>
                       </select>
                       <select
+                        value={mdFont}
+                        onChange={(e) => setMdFont(e.target.value as any)}
+                        className="text-xs px-2 py-1.5 rounded-lg border bg-white focus:outline-none"
+                        style={{ borderColor: C.border }}
+                        title="フォント (自動検出でWebFont適用)"
+                      >
+                        <option value="auto">自動 (自動判別)</option>
+                        <option value="serif">明朝 (Noto Serif)</option>
+                        <option value="sans-serif">ゴシック (Noto Sans)</option>
+                      </select>
+                      <select
                         value={mdFormat}
                         onChange={(e) => setMdFormat(e.target.value as any)}
                         className="text-xs px-2 py-1.5 rounded-lg border bg-white focus:outline-none"
@@ -4888,7 +4900,7 @@ JSONのみ返してください。` },
                             mdPageMM,
                             mdPdfB64 || undefined,
                             undefined,
-                            { theme: mdTheme, format: mdFormat, vertical: mdVertical },
+                            { theme: mdTheme, format: mdFormat, vertical: mdVertical, font_family_override: mdFont === 'auto' ? undefined : mdFont },
                           );
                           setMdOutputPdfB64(data.pdf_b64);
                           setMdOutputPreviews(data.preview_pngs);

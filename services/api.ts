@@ -250,6 +250,7 @@ export interface MarkdownToPdfOptions {
   page_numbers?: boolean;
   toc?: boolean;
   custom_css?: string;
+  font_family_override?: string;
 }
 
 export const markdownToPdf = async (
