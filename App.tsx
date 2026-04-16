@@ -4382,7 +4382,13 @@ JSONのみ返してください。` },
                         flash('PDF → Markdown 変換中...', 'info');
                         try {
                           const buf = await file.arrayBuffer();
-                          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                          const bytes = new Uint8Array(buf);
+                          let binary = '';
+                          const chunk = 8192;
+                          for (let i = 0; i < bytes.length; i += chunk) {
+                            binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+                          }
+                          const b64 = btoa(binary);
                           setMdPdfB64(b64);
                           const data = await analyzeMarkdown(b64);
                           setMdMarkdown(data.markdown);
@@ -4432,7 +4438,13 @@ JSONのみ返してください。` },
                         flash('PDF → Markdown 変換中...', 'info');
                         try {
                           const buf = await file.arrayBuffer();
-                          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                          const bytes2 = new Uint8Array(buf);
+                          let binary2 = '';
+                          const chk2 = 8192;
+                          for (let i = 0; i < bytes2.length; i += chk2) {
+                            binary2 += String.fromCharCode(...bytes2.subarray(i, i + chk2));
+                          }
+                          const b64 = btoa(binary2);
                           setMdPdfB64(b64);
                           const data = await analyzeMarkdown(b64);
                           setMdMarkdown(data.markdown);
