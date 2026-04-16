@@ -55,6 +55,13 @@ export interface SpanOverride {
   h_pct?: number;
 }
 
+export interface SpanBbox {
+  bbox: [number, number, number, number];
+  origin: [number, number];
+  font_class: string;
+  size_pt: number;
+}
+
 export const rebuildPdf = async (
   pdfB64: string,
   edits: Record<string, string>,
@@ -65,6 +72,7 @@ export const rebuildPdf = async (
   overrides?: Record<string, SpanOverride>,
   originalTexts?: Record<string, string>,
   imageReplacements?: Record<string, { xref: number; data_b64: string; mime_type?: string }>,
+  spanBboxes?: Record<string, SpanBbox>,
 ): Promise<RebuildResponse> => {
   const res = await fetch(`${getApiUrl()}/rebuild`, {
     method: 'POST',
@@ -75,6 +83,7 @@ export const rebuildPdf = async (
       original_texts: originalTexts || {},
       overrides: overrides || {},
       image_replacements: imageReplacements || {},
+      span_bboxes: spanBboxes || {},
       raw_id_map: rawIdMap,
       dpi,
       page_index: pageIndex,
@@ -171,6 +180,74 @@ export const visionAnalyze = async (imageB64: string): Promise<VisionAnalyzeResu
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throw new Error(e.detail || `Vision API Error: HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
+// ── MarkItDown Pipeline ──
+
+export interface MarkdownPage {
+  page_index: number;
+  width_mm: number;
+  height_mm: number;
+  width_px: number;
+  height_px: number;
+  preview_b64: string;
+}
+
+export interface AnalyzeMarkdownResponse {
+  markdown: string;
+  pages: MarkdownPage[];
+  total_pages: number;
+  source?: string;
+  markitdown_md?: string;
+  gemini_md?: string;
+}
+
+export const analyzeMarkdown = async (pdfB64: string): Promise<AnalyzeMarkdownResponse> => {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const geminiKey = getConfig('VITE_GOOGLE_AI_KEY');
+  if (geminiKey) {
+    headers['X-Gemini-API-Key'] = geminiKey;
+  }
+  const res = await fetch(`${getApiUrl()}/analyze-markdown`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ pdf_b64: pdfB64 }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail || `Markdown 解析エラー: HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
+export interface MarkdownToPdfResponse {
+  pdf_b64: string;
+  preview_pngs: string[];
+  html: string;
+  css: string;
+}
+
+export const markdownToPdf = async (
+  markdownText: string,
+  pageMM: [number, number],
+  originalPdfB64?: string,
+  bgImageB64?: string,
+): Promise<MarkdownToPdfResponse> => {
+  const res = await fetch(`${getApiUrl()}/markdown-to-pdf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      markdown: markdownText,
+      page_mm: pageMM,
+      original_pdf_b64: originalPdfB64 || null,
+      bg_image_b64: bgImageB64 || null,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail || `PDF生成エラー: HTTP ${res.status}`);
   }
   return res.json();
 };

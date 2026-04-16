@@ -170,6 +170,8 @@ export enum AppState {
   TOOL_VALIDATE_MS = 'TOOL_VALIDATE_MS',
   // AIインデザイン
   AI_INDESIGN = 'AI_INDESIGN',
+  // Markdown 修正
+  MARKDOWN_EDIT = 'MARKDOWN_EDIT',
 }
 
 // ── 原稿検証 & 第一レポート ──

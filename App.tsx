@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent, ManuscriptChunk, ValidationReportResponse, ChunkDetail, FeedbackInput, FeedbackResponse, FeedbackActionType, ImageInfo, LayoutBlock, BarcodeInfo, DetectedLanguage } from './types';
-import { analyzePdf, rebuildPdf, SpanOverride, vivliostyleBuild, visionAnalyze, VisionAnalyzeResult } from './services/api';
+import { analyzePdf, rebuildPdf, SpanOverride, SpanBbox, vivliostyleBuild, visionAnalyze, VisionAnalyzeResult, analyzeMarkdown, markdownToPdf } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
@@ -205,6 +205,18 @@ const App: React.FC = () => {
   const [msFeedbackActions, setMsFeedbackActions] = useState<Record<string, { action: FeedbackActionType; editedText?: string }>>({});
   const [msFeedbackSent, setMsFeedbackSent] = useState(false);
   const [msFeedbackResult, setMsFeedbackResult] = useState<FeedbackResponse | null>(null);
+
+  // ── Markdown Mode ──
+  const [mdMarkdown, setMdMarkdown] = useState('');
+  const [mdOriginalMarkdown, setMdOriginalMarkdown] = useState('');
+  const [mdPreviewPngs, setMdPreviewPngs] = useState<string[]>([]);
+  const [mdPageMM, setMdPageMM] = useState<[number, number]>([210, 297]);
+  const [mdPdfB64, setMdPdfB64] = useState<string | null>(null);
+  const [mdOutputPdfB64, setMdOutputPdfB64] = useState<string | null>(null);
+  const [mdOutputPreviews, setMdOutputPreviews] = useState<string[]>([]);
+  const [mdLoading, setMdLoading] = useState(false);
+  const [mdShowPreview, setMdShowPreview] = useState(true);
+  const mdFileRef = useRef<HTMLInputElement>(null);
 
   // ── Derived ──
   const flash = (text: string, type: 'info' | 'ok' | 'error' = 'info') => {
@@ -463,11 +475,24 @@ const App: React.FC = () => {
         ovMap[s.id] = ov;
       }
     });
+    // Phase 2: originalSpans から bbox データを構築して送信
+    const spanBboxes: Record<string, SpanBbox> = {};
+    originalSpans.forEach(s => {
+      if (edits[s.id] || ovMap[s.id]) {
+        spanBboxes[s.id] = {
+          bbox: s.bbox,
+          origin: s.origin,
+          font_class: s.font_class,
+          size_pt: s.size_pt,
+        };
+      }
+    });
+
     const totalChanges = Object.keys(edits).length + Object.keys(ovMap).length + Object.keys(imageReplacements).length;
     if (!totalChanges) { flash('変更がありません', 'info'); return; }
     flash(`再構築中 (テキスト${Object.keys(edits).length}件 + 画像${Object.keys(imageReplacements).length}件)...`, 'info');
     try {
-      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect, ovMap, originalTexts, imageReplacements);
+      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect, ovMap, originalTexts, imageReplacements, spanBboxes);
       if (data.png_b64) { setRebuiltPng(`data:image/png;base64,${data.png_b64}`); setPreviewTab('rebuilt'); }
 
       // Auto-save to DB with rebuilt PDF
@@ -733,6 +758,12 @@ const App: React.FC = () => {
           { icon: Monitor, label: 'InDesign連携', badge: 0, state: AppState.AI_INDESIGN },
         ],
       },
+      {
+        title: 'PDF修正',
+        items: [
+          { icon: FileEdit, label: 'Markdown修正 (PDF→MD→PDF)', badge: 0, state: AppState.MARKDOWN_EDIT },
+        ],
+      },
     ];
 
     const isActive = (state: AppState) =>
@@ -924,6 +955,12 @@ const App: React.FC = () => {
         {view === AppState.KUMIHAN_NEWSPAPER && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜新聞</h2>}
         {view === AppState.KUMIHAN_COMMERCIAL && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜商業出版</h2>}
         {view === AppState.AI_INDESIGN && <h2 className="text-[15px] font-bold text-gray-900">AIインデザイン</h2>}
+        {view === AppState.MARKDOWN_EDIT && (
+          <div className="flex items-center gap-2">
+            <FileEdit size={15} style={{ color: C.accent }} />
+            <h2 className="text-[15px] font-bold text-gray-900">Markdown修正（PDF → Markdown → PDF）</h2>
+          </div>
+        )}
         {view === AppState.EDIT && (
           <div className="flex items-center gap-2">
             <CreditCard size={15} className="text-gray-400" />
@@ -4225,12 +4262,32 @@ JSONのみ返してください。` },
                       AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '新聞' : '商業出版'}
                     </h2>
                     <p className="text-gray-500">
-                      {view === AppState.KUMIHAN_MEISHI && 'Google Driveから名刺PDFを入稿。AI構造解析→自動組版→校了PDFまでワンストップ。'}
-                      {view === AppState.KUMIHAN_NEWSPAPER && 'Google Driveから新聞原稿を入稿。段組み・見出し・写真配置をAIが自動レイアウト。'}
-                      {view === AppState.KUMIHAN_COMMERCIAL && 'Google Driveから書籍原稿を入稿。章立て・目次・索引をAIが構造解析し自動組版。'}
+                      {view === AppState.KUMIHAN_MEISHI && 'PDFを入稿してAI構造解析→自動組版→校了PDFまでワンストップ。'}
+                      {view === AppState.KUMIHAN_NEWSPAPER && '新聞原稿を入稿。段組み・見出し・写真配置をAIが自動レイアウト。'}
+                      {view === AppState.KUMIHAN_COMMERCIAL && '書籍原稿を入稿。章立て・目次・索引をAIが構造解析し自動組版。'}
                     </p>
                   </div>
-                  <div className="flex justify-center">
+                  <div className="flex justify-center gap-4 flex-wrap">
+                    {/* ローカルPCからアップロード */}
+                    <input
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      id="local-pdf-upload"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleUpload(file);
+                        e.target.value = '';
+                      }}
+                    />
+                    <button
+                      onClick={() => document.getElementById('local-pdf-upload')?.click()}
+                      className="px-8 py-4 rounded-xl text-[15px] font-bold flex items-center gap-3 text-white shadow-lg transition-all hover:opacity-90"
+                      style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : view === AppState.KUMIHAN_NEWSPAPER ? 'linear-gradient(135deg, #3b82f6, #60a5fa)' : C.gradientPrimary }}
+                    >
+                      <Upload size={20} /> ローカルPCから入稿
+                    </button>
+                    {/* Google Driveから */}
                     <button
                       onClick={async () => {
                         try {
@@ -4238,12 +4295,17 @@ JSONのみ返してください。` },
                           if (file) handleUpload(file);
                         } catch (err: any) { flash(err.message, 'error'); }
                       }}
-                      className="px-8 py-4 rounded-xl text-[15px] font-bold flex items-center gap-3 text-white shadow-lg transition-all hover:opacity-90"
-                      style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : view === AppState.KUMIHAN_NEWSPAPER ? 'linear-gradient(135deg, #3b82f6, #60a5fa)' : C.gradientPrimary }}
+                      className="px-8 py-4 rounded-xl text-[15px] font-bold flex items-center gap-3 border-2 shadow-lg transition-all hover:opacity-90"
+                      style={{
+                        borderColor: view === AppState.KUMIHAN_MEISHI ? '#10b981' : view === AppState.KUMIHAN_NEWSPAPER ? '#3b82f6' : '#8b5cf6',
+                        color: view === AppState.KUMIHAN_MEISHI ? '#10b981' : view === AppState.KUMIHAN_NEWSPAPER ? '#3b82f6' : '#8b5cf6',
+                        background: 'white',
+                      }}
                     >
                       <HardDrive size={20} /> Google Driveから入稿
                     </button>
                   </div>
+                  <p className="text-center text-xs text-gray-400 mt-4">PDFファイルをこのエリアにドラッグ＆ドロップすることもできます</p>
                 </div>
               </div>
             </div>
@@ -4287,6 +4349,244 @@ JSONのみ返してください。` },
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+        {view === AppState.MARKDOWN_EDIT && (
+          <div className="flex-1 overflow-auto p-6" style={{ background: C.bg }}>
+            <div className="max-w-[1600px] mx-auto space-y-4">
+              {/* Upload Area */}
+              {!mdMarkdown && (
+                <div className="rounded-2xl p-1" style={{ background: C.gradientPrimary }}>
+                  <div className="bg-white rounded-[14px] p-8 text-center">
+                    <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center" style={{ background: C.gradientPrimary }}>
+                      <FileEdit size={32} className="text-white" />
+                    </div>
+                    <h2 className="text-xl font-bold text-gray-900 mb-2">PDF → Markdown → PDF</h2>
+                    <p className="text-sm text-gray-500 mb-6 leading-relaxed">
+                      PDFをアップロードすると、MarkItDown + Gemini Vision OCRでMarkdownに変換。<br/>
+                      テキストを自由に編集し、修正PDFを出力できます。
+                    </p>
+                    <input
+                      ref={mdFileRef}
+                      type="file"
+                      accept=".pdf"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setMdLoading(true);
+                        flash('PDF → Markdown 変換中...', 'info');
+                        try {
+                          const buf = await file.arrayBuffer();
+                          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                          setMdPdfB64(b64);
+                          const data = await analyzeMarkdown(b64);
+                          setMdMarkdown(data.markdown);
+                          setMdOriginalMarkdown(data.markdown);
+                          if (data.pages.length > 0) {
+                            setMdPageMM([data.pages[0].width_mm, data.pages[0].height_mm]);
+                            setMdPreviewPngs(data.pages.map(p => p.preview_b64));
+                          }
+                          flash(`変換完了（${data.source || 'auto'}） — テキストを編集してください`, 'ok');
+                        } catch (err: any) {
+                          flash(`変換エラー: ${err.message}`, 'error');
+                        } finally {
+                          setMdLoading(false);
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => mdFileRef.current?.click()}
+                      disabled={mdLoading}
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-white font-bold text-sm"
+                      style={{ background: C.gradientPrimary, opacity: mdLoading ? 0.5 : 1 }}
+                    >
+                      <Upload size={18} />
+                      PDFをアップロード
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Editor + Preview */}
+              {mdMarkdown && (
+                <>
+                  {/* Toolbar */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <button
+                      onClick={() => mdFileRef.current?.click()}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border"
+                      style={{ borderColor: C.border, color: C.text }}
+                    >
+                      <Upload size={14} /> 別のPDF
+                    </button>
+                    <input ref={mdFileRef} type="file" accept=".pdf" className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setMdLoading(true);
+                        flash('PDF → Markdown 変換中...', 'info');
+                        try {
+                          const buf = await file.arrayBuffer();
+                          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                          setMdPdfB64(b64);
+                          const data = await analyzeMarkdown(b64);
+                          setMdMarkdown(data.markdown);
+                          setMdOriginalMarkdown(data.markdown);
+                          if (data.pages.length > 0) {
+                            setMdPageMM([data.pages[0].width_mm, data.pages[0].height_mm]);
+                            setMdPreviewPngs(data.pages.map(p => p.preview_b64));
+                          }
+                          setMdOutputPdfB64(null);
+                          setMdOutputPreviews([]);
+                          flash(`変換完了`, 'ok');
+                        } catch (err: any) {
+                          flash(`変換エラー: ${err.message}`, 'error');
+                        } finally {
+                          setMdLoading(false);
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => setMdShowPreview(!mdShowPreview)}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border"
+                      style={{ borderColor: C.border, color: C.text }}
+                    >
+                      {mdShowPreview ? <EyeOff size={14} /> : <Eye size={14} />}
+                      {mdShowPreview ? 'プレビュー非表示' : 'プレビュー表示'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setMdMarkdown(mdOriginalMarkdown);
+                        flash('元のMarkdownに戻しました', 'info');
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border"
+                      style={{ borderColor: C.border, color: C.text }}
+                    >
+                      <RefreshCw size={14} /> リセット
+                    </button>
+                    <div className="flex-1" />
+                    <button
+                      onClick={async () => {
+                        if (!mdMarkdown.trim()) return;
+                        setMdLoading(true);
+                        flash('Markdown → PDF 変換中...', 'info');
+                        try {
+                          const data = await markdownToPdf(
+                            mdMarkdown,
+                            mdPageMM,
+                            mdPdfB64 || undefined,
+                          );
+                          setMdOutputPdfB64(data.pdf_b64);
+                          setMdOutputPreviews(data.preview_pngs);
+                          flash('PDF生成完了！', 'ok');
+                          // ダウンロード
+                          const a = document.createElement('a');
+                          a.href = `data:application/pdf;base64,${data.pdf_b64}`;
+                          a.download = 'edited_document.pdf';
+                          a.click();
+                        } catch (err: any) {
+                          flash(`PDF生成エラー: ${err.message}`, 'error');
+                        } finally {
+                          setMdLoading(false);
+                        }
+                      }}
+                      disabled={mdLoading}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm shadow-lg hover:shadow-xl transition-all"
+                      style={{ background: C.gradientPrimary, opacity: mdLoading ? 0.5 : 1 }}
+                    >
+                      <Download size={16} />
+                      修正PDF出力
+                    </button>
+                  </div>
+
+                  {/* Main Editor Area */}
+                  <div className="flex gap-4" style={{ minHeight: 'calc(100vh - 220px)' }}>
+                    {/* Markdown Editor */}
+                    <div className="flex-1 flex flex-col min-w-0">
+                      <div className="text-xs font-bold text-gray-500 mb-1.5 flex items-center gap-2">
+                        <FileText size={13} />
+                        Markdown テキスト（直接編集可能）
+                      </div>
+                      <textarea
+                        value={mdMarkdown}
+                        onChange={(e) => setMdMarkdown(e.target.value)}
+                        className="flex-1 w-full p-4 rounded-xl border font-mono text-[13px] leading-relaxed resize-none focus:outline-none focus:ring-2"
+                        style={{
+                          borderColor: C.border,
+                          background: '#fafbfc',
+                          minHeight: '500px',
+                        }}
+                        spellCheck={false}
+                      />
+                      <div className="text-xs text-gray-400 mt-1">
+                        {mdMarkdown.length} 文字 | {mdMarkdown.split('\n').length} 行
+                        {mdMarkdown !== mdOriginalMarkdown && (
+                          <span className="text-amber-500 font-bold ml-2">● 変更あり</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Preview Panel */}
+                    {mdShowPreview && (
+                      <div className="w-[480px] flex flex-col shrink-0">
+                        <div className="text-xs font-bold text-gray-500 mb-1.5 flex items-center gap-2">
+                          <Eye size={13} />
+                          元PDFプレビュー
+                        </div>
+                        <div className="flex-1 rounded-xl border overflow-auto" style={{ borderColor: C.border, background: '#f8f8f8' }}>
+                          {mdOutputPreviews.length > 0 ? (
+                            <div className="space-y-2 p-2">
+                              <div className="text-xs font-bold text-green-600 text-center py-1">▼ 出力プレビュー</div>
+                              {mdOutputPreviews.map((png, idx) => (
+                                <img
+                                  key={`out-${idx}`}
+                                  src={`data:image/png;base64,${png}`}
+                                  alt={`Output page ${idx + 1}`}
+                                  className="w-full rounded-lg shadow-sm"
+                                />
+                              ))}
+                            </div>
+                          ) : mdPreviewPngs.length > 0 ? (
+                            <div className="space-y-2 p-2">
+                              <div className="text-xs font-bold text-gray-500 text-center py-1">▼ 元PDF</div>
+                              {mdPreviewPngs.map((png, idx) => (
+                                <img
+                                  key={`orig-${idx}`}
+                                  src={`data:image/png;base64,${png}`}
+                                  alt={`Page ${idx + 1}`}
+                                  className="w-full rounded-lg shadow-sm"
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+                              プレビューなし
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* Loading Overlay */}
+              {mdLoading && (
+                <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm z-50 flex items-center justify-center">
+                  <div className="bg-white rounded-2xl p-8 shadow-2xl text-center">
+                    <div
+                      className="animate-spin w-10 h-10 border-3 border-slate-200 rounded-full mx-auto mb-4"
+                      style={{ borderTopColor: C.accent }}
+                    />
+                    <p className="text-base font-bold text-slate-700">変換中...</p>
+                    <p className="text-xs mt-1" style={{ color: C.muted }}>
+                      MarkItDown + Gemini Vision OCRでテキスト抽出中
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -30,7 +30,7 @@ steps:
       - '--set-env-vars'
       - 'GOOGLE_AI_KEY=${_GOOGLE_AI_KEY}'
       - '--memory'
-      - '1Gi'
+      - '2Gi'
       - '--timeout'
       - '180'
 

@@ -353,8 +353,140 @@ def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
             })
             span_counter += 1
 
-    print(f"PyMuPDF direct extraction: {len(result_spans)} spans")
+    print(f"PyMuPDF direct extraction (raw): {len(result_spans)} spans")
     return result_spans
+
+
+def _merge_context_spans(spans: list[dict[str, Any]],
+                         page_w_pt: float, page_h_pt: float) -> list[dict[str, Any]]:
+    """近接スパンをコンテキストベースでマージ（字間の広いテキスト統合）
+
+    「経 営 計 画 書」のように各文字が独立したスパンになっている場合、
+    同一行・同一フォントの近接スパンを1つの論理ブロックに統合する。
+    """
+    if not spans or len(spans) <= 1:
+        return spans
+
+    # pt座標で作業（正規化座標より正確）
+    working = []
+    for s in spans:
+        working.append({
+            **s,
+            "_x0": (s["x_pct"] / 100) * page_w_pt,
+            "_y0": (s["y_pct"] / 100) * page_h_pt,
+            "_x1": ((s["x_pct"] + s["w_pct"]) / 100) * page_w_pt,
+            "_y1": ((s["y_pct"] + s["h_pct"]) / 100) * page_h_pt,
+        })
+
+    # Y座標でソートしてから行グループ化
+    working.sort(key=lambda s: (s["_y0"], s["_x0"]))
+
+    merged = True
+    iteration = 0
+    while merged and iteration < 20:
+        merged = False
+        iteration += 1
+        new_list: list[dict] = []
+        used = set()
+
+        for i in range(len(working)):
+            if i in used:
+                continue
+            current = dict(working[i])
+
+            for j in range(i + 1, len(working)):
+                if j in used:
+                    continue
+                other = working[j]
+
+                # ── 同一行判定: Y中心が近い ──
+                cy1 = (current["_y0"] + current["_y1"]) / 2
+                cy2 = (other["_y0"] + other["_y1"]) / 2
+                h_max = max(current["_y1"] - current["_y0"],
+                            other["_y1"] - other["_y0"], 1)
+                if abs(cy1 - cy2) > h_max * 0.6:
+                    # yが離れすぎ → 別行 → スキップ
+                    # ただし、yがさらに離れたら全体breakで高速化
+                    if other["_y0"] - current["_y1"] > h_max * 2:
+                        break
+                    continue
+
+                # ── フォント一致 ──
+                if current.get("font_class") != other.get("font_class"):
+                    continue
+
+                # ── フォントサイズ近似 (±40%) ──
+                sz1 = current.get("size_pt", 9)
+                sz2 = other.get("size_pt", 9)
+                sz_max = max(sz1, sz2, 1)
+                if abs(sz1 - sz2) / sz_max > 0.4:
+                    continue
+
+                # ── X方向の距離: 字間の広いテキストも許容 ──
+                right1 = current["_x1"]
+                left2 = other["_x0"]
+                x_gap = left2 - right1
+
+                # 最大許容ギャップ = フォントサイズ × 4（字間の広い文字スペーシング対応）
+                max_gap = max(sz_max * 4, 30)  # 最低30pt
+                if x_gap > max_gap:
+                    continue
+                # 逆方向の重なりも許容（最大50%）
+                if x_gap < -(current["_x1"] - current["_x0"]) * 0.5:
+                    continue
+
+                # ── マージ実行 ──
+                new_x0 = min(current["_x0"], other["_x0"])
+                new_y0 = min(current["_y0"], other["_y0"])
+                new_x1 = max(current["_x1"], other["_x1"])
+                new_y1 = max(current["_y1"], other["_y1"])
+
+                # テキスト結合（X順序で）
+                if other["_x0"] >= current["_x0"]:
+                    merged_text = current["text"] + other["text"]
+                else:
+                    merged_text = other["text"] + current["text"]
+
+                current["text"] = merged_text
+                current["_x0"] = new_x0
+                current["_y0"] = new_y0
+                current["_x1"] = new_x1
+                current["_y1"] = new_y1
+                current["size_pt"] = round(max(sz1, sz2), 1)
+
+                # font_original: 最初のものを保持
+                if not current.get("font_original") and other.get("font_original"):
+                    current["font_original"] = other["font_original"]
+
+                used.add(j)
+                merged = True
+
+            # 正規化座標を再計算
+            current["x_pct"] = round((current["_x0"] / page_w_pt) * 100, 2)
+            current["y_pct"] = round((current["_y0"] / page_h_pt) * 100, 2)
+            current["w_pct"] = round(((current["_x1"] - current["_x0"]) / page_w_pt) * 100, 2)
+            current["h_pct"] = round(((current["_y1"] - current["_y0"]) / page_h_pt) * 100, 2)
+            current["origin"] = [round(current["_x0"], 2), round(current["_y1"], 2)]
+            current["bbox"] = [round(current["_x0"], 2), round(current["_y0"], 2),
+                               round(current["_x1"] - current["_x0"], 2),
+                               round(current["_y1"] - current["_y0"], 2)]
+
+            new_list.append(current)
+
+        working = sorted(new_list, key=lambda s: (s["_y0"], s["_x0"]))
+
+    # 内部ワーク用キーを除去 & ID再割り当て
+    result = []
+    for idx, s in enumerate(working):
+        s.pop("_x0", None)
+        s.pop("_y0", None)
+        s.pop("_x1", None)
+        s.pop("_y1", None)
+        s["id"] = f"ctx_{idx}"
+        result.append(s)
+
+    print(f"Context merge: {len(spans)} → {len(result)} spans")
+    return result
 
 
 def _merge_font_info(docai_spans: list[dict], pymupdf_spans: list[dict],
@@ -695,11 +827,11 @@ async def analyze_pdf(
             width_mm = rect.width * 0.352778
             height_mm = rect.height * 0.352778
 
-            # 適応的スケーリング: 名刺等の小さい文書は高解像度に
+            # 適応的スケーリング: 高品質プレビュー用
             long_side_pt = max(rect.width, rect.height)
-            min_target_px = 1500
-            scale_factor = max(2, min_target_px / long_side_pt)
-            scale_factor = min(scale_factor, 6)  # 上限6倍
+            min_target_px = 3000
+            scale_factor = max(3, min_target_px / long_side_pt)
+            scale_factor = min(scale_factor, 8)  # 上限8倍
             pix = page.get_pixmap(matrix=fitz.Matrix(scale_factor, scale_factor))
             png_bytes = pix.tobytes("png")
             original_png_b64 = base64.b64encode(png_bytes).decode("utf-8")
@@ -747,7 +879,9 @@ async def analyze_pdf(
                     spans = _extract_spans_gemini(
                         png_bytes, rect.width, rect.height, api_key=x_gemini_api_key
                     )
-                else:
+                # コンテキストベースのスパン統合
+                spans = _merge_context_spans(spans, rect.width, rect.height)
+                if spans:
                     print(f"Page {i}: PyMuPDF direct → {len(spans)} spans")
             else:
                 # スキャンPDF + Document AI 未使用 → Gemini Vision フォールバック
@@ -755,6 +889,8 @@ async def analyze_pdf(
                 spans = _extract_spans_gemini(
                     png_bytes, rect.width, rect.height, api_key=x_gemini_api_key
                 )
+                # コンテキストベースのスパン統合（Gemini結果にも適用）
+                spans = _merge_context_spans(spans, rect.width, rect.height)
 
             # ── 画像抽出 ──
             images_data = []
@@ -1122,16 +1258,106 @@ async def vision_analyze(req: dict[str, Any]):
         raise HTTPException(500, f"Vision解析失敗: {e}")
 
 
+# ── /rebuild ヘルパー ──────────────────────────────────────────────────────────
+
+# Phase 1: フォントマッピング
+FONT_PATHS = [
+    "/usr/share/fonts/google",   # Docker
+    "/app/fonts",                # Docker fallback
+]
+
+FONT_MAP = {
+    "gothic":      "NotoSansJP.ttf",
+    "light":       "NotoSansJP.ttf",
+    "gothic_bold": "NotoSansJP.ttf",
+    "mincho":      "NotoSerifJP.ttf",
+}
+
+
+def _resolve_font(font_class: str) -> str | None:
+    """font_class から実フォントファイルパスを解決（なければ None）"""
+    fname = FONT_MAP.get(font_class, FONT_MAP["gothic"])
+    for d in FONT_PATHS:
+        p = os.path.join(d, fname)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+# Phase 3: 背景色サンプリング
+def _sample_bg_color(page: fitz.Page, rect: fitz.Rect) -> tuple[float, float, float]:
+    """rect 四隅のピクセルから背景色を推定"""
+    clip = fitz.Rect(rect)
+    clip.normalize()
+    # rect が空の場合はデフォルト白
+    if clip.is_empty or clip.is_infinite:
+        return (1.0, 1.0, 1.0)
+    try:
+        pix = page.get_pixmap(clip=clip, dpi=72)
+        if pix.width < 2 or pix.height < 2:
+            return (1.0, 1.0, 1.0)
+        corners = [
+            pix.pixel(0, 0),
+            pix.pixel(pix.width - 1, 0),
+            pix.pixel(0, pix.height - 1),
+            pix.pixel(pix.width - 1, pix.height - 1),
+        ]
+        r = sum(c[0] for c in corners) / (4 * 255)
+        g = sum(c[1] for c in corners) / (4 * 255)
+        b = sum(c[2] for c in corners) / (4 * 255)
+        return (r, g, b)
+    except Exception:
+        return (1.0, 1.0, 1.0)
+
+
+# Phase 4: テキスト色マップ構築
+def _build_color_map(page: fitz.Page) -> dict[tuple[int, int], tuple[float, float, float]]:
+    """ページ内テキストの (x0,y0) → (r,g,b) マップを構築"""
+    color_map: dict[tuple[int, int], tuple[float, float, float]] = {}
+    try:
+        text_dict = page.get_text("dict")
+        for block in text_dict.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    bbox = span.get("bbox", (0, 0, 0, 0))
+                    c = span.get("color", 0)
+                    rgb = (
+                        ((c >> 16) & 0xFF) / 255,
+                        ((c >> 8) & 0xFF) / 255,
+                        (c & 0xFF) / 255,
+                    )
+                    color_map[(round(bbox[0]), round(bbox[1]))] = rgb
+    except Exception:
+        pass
+    return color_map
+
+
+def _lookup_text_color(
+    color_map: dict[tuple[int, int], tuple[float, float, float]],
+    x0: float, y0: float,
+    tolerance: int = 4,
+) -> tuple[float, float, float]:
+    """近傍マッチで元テキストの色を取得（見つからなければ黒）"""
+    rx, ry = round(x0), round(y0)
+    for dx in range(-tolerance, tolerance + 1):
+        for dy in range(-tolerance, tolerance + 1):
+            key = (rx + dx, ry + dy)
+            if key in color_map:
+                return color_map[key]
+    return (0.0, 0.0, 0.0)
+
+
 # ── /rebuild エンドポイント ────────────────────────────────────────────────────
 
 @app.post("/rebuild")
 async def rebuild_pdf(req: dict[str, Any]):
-    """PyMuPD でテキストを置換して修正PDF + プレビュー PNG を返す"""
+    """PyMuPDF でテキストを置換して修正PDF + プレビュー PNG を返す"""
     pdf_b64 = req.get("pdf_b64", "")
     edits = req.get("edits", {})
     original_texts = req.get("original_texts", {})
     overrides = req.get("overrides", {})
     image_replacements = req.get("image_replacements", {})
+    span_bboxes = req.get("span_bboxes", {})  # Phase 2: bbox直接指定
     page_index = req.get("page_index", 0)
     dpi = req.get("dpi", 300)
 
@@ -1148,8 +1374,11 @@ async def rebuild_pdf(req: dict[str, Any]):
         changes_applied = 0
         skipped_edits = []
 
-        # ── Phase 1: 全編集の検索矩形を先に取得（apply_redactions前に全検索） ──
-        edit_plan = []  # [(span_id, new_text, rect, size_pt, writing_dir)]
+        # Phase 4: 色マップを先に構築（redaction 前）
+        color_map = _build_color_map(page)
+
+        # ── 全編集の矩形を取得 ──
+        edit_plan = []  # [(span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class)]
         for span_id, new_text in edits.items():
             old_text = original_texts.get(span_id, "")
             if not old_text or old_text == new_text:
@@ -1157,49 +1386,52 @@ async def rebuild_pdf(req: dict[str, Any]):
 
             import re
             ov = overrides.get(span_id, {})
+            sb = span_bboxes.get(span_id, {})  # Phase 2: bbox直接指定
             x_pct = ov.get("x_pct")
             y_pct = ov.get("y_pct")
             w_pct = ov.get("w_pct")
             h_pct = ov.get("h_pct")
             has_pct = (x_pct is not None and y_pct is not None and w_pct and h_pct)
 
-            # ── 戦略A: pct座標が存在する場合、まず完全一致をsearch_forで試す ──
-            # 完全一致が見つかった場合のみsearch_forを採用（部分一致は使わない）
-            # 完全一致がなければpct座標を使用（画像内テキストの可能性が高い）
             rects = []
             use_method = ""
 
-            # Step 1: 完全一致検索（exact match only）
-            exact_rects = page.search_for(old_text)
-            if exact_rects:
-                # pct座標がある場合は、search_for結果がpct位置に近いか検証
-                if has_pct:
-                    page_rect = page.rect
-                    expected_cx = (x_pct / 100) * page_rect.width + (w_pct / 200) * page_rect.width
-                    expected_cy = (y_pct / 100) * page_rect.height + (h_pct / 200) * page_rect.height
-                    # 最も近いrectを選択
-                    best_rect = None
-                    best_dist = float('inf')
-                    for r in exact_rects:
-                        cx = (r.x0 + r.x1) / 2
-                        cy = (r.y0 + r.y1) / 2
-                        dist = ((cx - expected_cx) ** 2 + (cy - expected_cy) ** 2) ** 0.5
-                        if dist < best_dist:
-                            best_dist = dist
-                            best_rect = r
-                    # 距離が妥当な範囲内（ページ対角線の30%以内）なら使用
-                    diag = (page_rect.width ** 2 + page_rect.height ** 2) ** 0.5
-                    if best_dist < diag * 0.3:
-                        rects = [best_rect]
-                        use_method = f"exact-match (dist={best_dist:.0f})"
-                    else:
-                        # 完全一致が見つかったが位置が遠すぎる → pct座標を使用
-                        print(f"  Exact match found but too far (dist={best_dist:.0f} > {diag*0.3:.0f}): '{old_text[:30]}'")
-                else:
-                    rects = exact_rects
-                    use_method = "exact-match"
+            # ── Step 0 (NEW): span_bboxes から bbox を直接使用 ──
+            sb_bbox = sb.get("bbox")
+            if sb_bbox and len(sb_bbox) == 4:
+                bx, by, bw, bh = sb_bbox
+                if bw > 0 and bh > 0:
+                    rects = [fitz.Rect(bx, by, bx + bw, by + bh)]
+                    use_method = "span-bbox (direct)"
 
-            # Step 2: pct座標がある場合はそちらを優先（search_for失敗時）
+            # Step 1: 完全一致検索（exact match only）
+            if not rects:
+                exact_rects = page.search_for(old_text)
+                if exact_rects:
+                    if has_pct:
+                        page_rect = page.rect
+                        expected_cx = (x_pct / 100) * page_rect.width + (w_pct / 200) * page_rect.width
+                        expected_cy = (y_pct / 100) * page_rect.height + (h_pct / 200) * page_rect.height
+                        best_rect = None
+                        best_dist = float('inf')
+                        for r in exact_rects:
+                            cx = (r.x0 + r.x1) / 2
+                            cy = (r.y0 + r.y1) / 2
+                            dist = ((cx - expected_cx) ** 2 + (cy - expected_cy) ** 2) ** 0.5
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_rect = r
+                        diag = (page_rect.width ** 2 + page_rect.height ** 2) ** 0.5
+                        if best_dist < diag * 0.3:
+                            rects = [best_rect]
+                            use_method = f"exact-match (dist={best_dist:.0f})"
+                        else:
+                            print(f"  Exact match found but too far (dist={best_dist:.0f} > {diag*0.3:.0f}): '{old_text[:30]}'")
+                    else:
+                        rects = exact_rects
+                        use_method = "exact-match"
+
+            # Step 2: pct座標フォールバック
             if not rects and has_pct:
                 page_rect = page.rect
                 x0 = (x_pct / 100) * page_rect.width
@@ -1207,18 +1439,15 @@ async def rebuild_pdf(req: dict[str, Any]):
                 x1 = x0 + (w_pct / 100) * page_rect.width
                 y1 = y0 + (h_pct / 100) * page_rect.height
                 rects = [fitz.Rect(x0, y0, x1, y1)]
-                use_method = "★ pct-bbox (OCR coordinates) ★"
-                print(f"Using pct-bbox for: '{old_text[:30]}' → rect={rects[0]}")
+                use_method = "pct-bbox"
 
-            # Step 3: pct座標がない場合のみ、部分一致やフォールバック検索
+            # Step 3: テキスト検索フォールバック
             if not rects and not has_pct:
-                # スペース除去で検索
                 no_spaces = re.sub(r'\s+', '', old_text)
                 if no_spaces != old_text and len(no_spaces) >= 2:
                     rects = page.search_for(no_spaces)
                     if rects:
                         use_method = "no-spaces"
-                        print(f"Found via no-spaces: '{no_spaces[:30]}'")
 
             if not rects and not has_pct:
                 chars = [c for c in old_text if c != ' ']
@@ -1231,13 +1460,11 @@ async def rebuild_pdf(req: dict[str, Any]):
                             rects = page.search_for(restored_with_space)
                             if rects:
                                 use_method = "restored"
-                                print(f"Found via restored: '{restored_with_space[:30]}'")
                                 break
                     if not rects:
                         rects = page.search_for(restored)
                         if rects:
                             use_method = "char-join"
-                            print(f"Found via char-join: '{restored[:30]}'")
 
             if not rects and not has_pct:
                 no_spaces = re.sub(r'\s+', '', old_text)
@@ -1246,7 +1473,6 @@ async def rebuild_pdf(req: dict[str, Any]):
                     rects = page.search_for(chunk)
                     if rects:
                         use_method = f"prefix-chunk({chunk})"
-                        print(f"Found via prefix chunk: '{chunk}'")
                         break
 
             if not rects and not has_pct:
@@ -1257,11 +1483,11 @@ async def rebuild_pdf(req: dict[str, Any]):
                             use_method = f"word({word})"
                             break
 
-            # bbox座標フォールバック（overridesにorigin情報がある場合）
+            # origin フォールバック
             if not rects:
-                origin = ov.get("origin")
+                origin = ov.get("origin") or sb.get("origin")
                 if origin and len(origin) >= 2:
-                    size_pt_fb = ov.get("size_pt", 9.0)
+                    size_pt_fb = ov.get("size_pt") or sb.get("size_pt") or 9.0
                     wd = ov.get("writing_direction", "horizontal")
                     if wd == "vertical":
                         est_height = len(old_text) * size_pt_fb * 1.5
@@ -1277,7 +1503,6 @@ async def rebuild_pdf(req: dict[str, Any]):
                         )
                     rects = [rect_fb]
                     use_method = f"origin-bbox ({wd})"
-                    print(f"Using origin-bbox fallback ({wd}) for: '{old_text[:20]}...'")
 
             if not rects:
                 print(f"Text not found + no position data: '{old_text[:30]}' (span_id={span_id})")
@@ -1286,37 +1511,42 @@ async def rebuild_pdf(req: dict[str, Any]):
 
             print(f"  [{span_id}] method={use_method}: '{old_text[:25]}' → '{new_text[:25]}'")
 
-            if not rects:
-                print(f"Text not found (all methods): '{old_text[:30]}'")
-                skipped_edits.append({"span_id": span_id, "text": old_text[:30]})
-                continue
-
             rect = rects[0]
-            ov = overrides.get(span_id, {})
-            # size_pt: overrides > 元テキストの推定サイズ > デフォルト
-            size_pt = ov.get("size_pt", 0)
+            size_pt = ov.get("size_pt") or sb.get("size_pt") or 0
             if not size_pt:
-                # 元テキストの高さからフォントサイズを推定
                 size_pt = max(round(rect.height * 0.75, 1), 6.0)
             writing_dir = ov.get("writing_direction", "horizontal")
+            font_class = ov.get("font_class") or sb.get("font_class") or "gothic"
 
-            # 矩形を少し拡張（CJKグリフがはみ出す対策）
             expanded = fitz.Rect(
                 rect.x0 - 1, rect.y0 - 1,
                 rect.x1 + 1, rect.y1 + 1
             )
-            edit_plan.append((span_id, new_text, expanded, rect, size_pt, writing_dir))
+            edit_plan.append((span_id, new_text, expanded, rect, size_pt, writing_dir, font_class))
 
-        # ── Phase 2: 全redact annotationを一括追加してからapply ──
-        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir in edit_plan:
-            page.add_redact_annot(expanded, fill=(1, 1, 1))
+        # ── 全 redact annotation を一括追加 → apply ──
+        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class in edit_plan:
+            # Phase 3: 背景色サンプリング
+            bg_color = _sample_bg_color(page, expanded)
+            page.add_redact_annot(expanded, fill=bg_color)
 
         if edit_plan:
-            page.apply_redactions()
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
-        # ── Phase 3: 新テキストを元の位置に挿入 ──
-        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir in edit_plan:
+        # ── 新テキストを元の位置に挿入 ──
+        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class in edit_plan:
             try:
+                # Phase 1: フォント解決
+                fontfile = _resolve_font(font_class)
+                font_kwargs: dict[str, Any] = {}
+                if fontfile:
+                    font_kwargs["fontfile"] = fontfile
+                else:
+                    font_kwargs["fontname"] = "japan"
+
+                # Phase 4: 元テキスト色を取得
+                text_color = _lookup_text_color(color_map, orig_rect.x0, orig_rect.y0)
+
                 if writing_dir == "vertical":
                     char_h = size_pt * 1.5
                     x_pos = orig_rect.x0 + (orig_rect.width - size_pt) / 2
@@ -1325,19 +1555,18 @@ async def rebuild_pdf(req: dict[str, Any]):
                         page.insert_text(
                             fitz.Point(x_pos, y_start + ci * char_h),
                             ch,
-                            fontname="japan",
                             fontsize=size_pt,
-                            color=(0, 0, 0),
+                            color=text_color,
+                            **font_kwargs,
                         )
                     changes_applied += 1
                 else:
-                    # 横書き: 元のrect位置に挿入（ベースライン = rect.y1 - descent余白）
                     page.insert_text(
                         fitz.Point(orig_rect.x0, orig_rect.y1 - 1),
                         new_text,
-                        fontname="japan",
                         fontsize=size_pt,
-                        color=(0, 0, 0),
+                        color=text_color,
+                        **font_kwargs,
                     )
                     changes_applied += 1
             except Exception as e:
@@ -1575,6 +1804,420 @@ async def vivliostyle_build(req: VivliostyleBuildRequest):
         raise HTTPException(500, f"Vivliostyle build 失敗: {e}")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ── MarkItDown ベース: PDF → Markdown → 編集 → PDF パイプライン ──────────────
+
+@app.post("/analyze-markdown")
+async def analyze_markdown(
+    req: dict[str, Any],
+    x_gemini_api_key: str = Header(None, alias="X-Gemini-API-Key"),
+):
+    """PDF → Markdown変換（MarkItDown + Gemini Vision OCR ハイブリッド）
+    
+    1. テキスト埋め込みPDF → MarkItDown（高速・高精度）
+    2. スキャンPDF/画像PDF → Gemini Vision OCR（pdf-ocr-obsidian方式）
+    3. 元PDFのページ画像をそのまま背景保持 → 100% 再現
+    """
+    from markitdown import MarkItDown
+
+    pdf_b64 = req.get("pdf_b64", "")
+    if not pdf_b64:
+        raise HTTPException(400, "pdf_b64 is required")
+
+    api_key = x_gemini_api_key or GEMINI_API_KEY
+
+    try:
+        pdf_bytes = base64.b64decode(pdf_b64)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+        # テキスト埋め込みの有無を判定
+        total_text_chars = 0
+        for i in range(len(doc)):
+            p = doc.load_page(i)
+            total_text_chars += len(p.get_text("text").strip())
+
+        has_embedded_text = total_text_chars > 50
+
+        # ── Step 1: MarkItDown でテキスト抽出を試行 ──
+        markitdown_md = ""
+        try:
+            md_converter = MarkItDown()
+            result = md_converter.convert_stream(BytesIO(pdf_bytes), file_extension=".pdf")
+            markitdown_md = (result.text_content or "").strip()
+            print(f"MarkItDown: {len(markitdown_md)} chars")
+        except Exception as mit_err:
+            print(f"MarkItDown failed: {mit_err}")
+
+        # ── Step 2: Gemini Vision OCR で各ページをOCR（pdf-ocr-obsidian方式） ──
+        gemini_pages_md = []
+        pages = []
+
+        for i in range(len(doc)):
+            page = doc.load_page(i)
+            rect = page.rect
+            width_mm = rect.width * 0.352778
+            height_mm = rect.height * 0.352778
+
+            # 高品質ページ画像
+            long_side_pt = max(rect.width, rect.height)
+            min_target_px = 3000
+            scale_factor = max(3, min_target_px / long_side_pt)
+            scale_factor = min(scale_factor, 8)
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale_factor, scale_factor))
+            png_bytes_page = pix.tobytes("png")
+            preview_b64 = base64.b64encode(png_bytes_page).decode("utf-8")
+
+            # Gemini Vision OCR（各ページを画像としてOCR → Markdown）
+            page_md = ""
+            if api_key:
+                try:
+                    page_md = _ocr_page_to_markdown(png_bytes_page, api_key, i + 1)
+                except Exception as ocr_err:
+                    print(f"Gemini OCR page {i} failed: {ocr_err}")
+
+            gemini_pages_md.append(page_md)
+
+            pages.append({
+                "page_index": i,
+                "width_mm": round(width_mm, 2),
+                "height_mm": round(height_mm, 2),
+                "width_px": pix.width,
+                "height_px": pix.height,
+                "preview_b64": preview_b64,
+            })
+
+        doc.close()
+
+        # ── Step 3: 最良のMarkdownを選択 ──
+        # Gemini OCRの結果を結合
+        gemini_combined = "\n\n---\n\n".join(
+            [md for md in gemini_pages_md if md.strip()]
+        )
+
+        # MarkItDown vs Gemini: より内容が豊富な方を採用
+        if len(gemini_combined) > len(markitdown_md) * 0.8 and len(gemini_combined) > 100:
+            # Gemini OCRがより良いコンテンツを持っている
+            final_markdown = gemini_combined
+            source = "gemini_vision_ocr"
+        elif len(markitdown_md) > 100:
+            final_markdown = markitdown_md
+            source = "markitdown"
+        elif gemini_combined:
+            final_markdown = gemini_combined
+            source = "gemini_vision_ocr"
+        else:
+            final_markdown = markitdown_md or "(テキストを抽出できません)"
+            source = "fallback"
+
+        print(f"Final markdown: {source}, {len(final_markdown)} chars, {len(pages)} pages")
+
+        return {
+            "markdown": final_markdown,
+            "pages": pages,
+            "total_pages": len(pages),
+            "source": source,
+            "markitdown_md": markitdown_md,
+            "gemini_md": gemini_combined,
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Markdown変換失敗: {e}")
+
+
+def _ocr_page_to_markdown(png_bytes: bytes, api_key: str, page_num: int) -> str:
+    """Gemini Vision で1ページ画像をOCRし、構造化Markdownを返す（pdf-ocr-obsidian方式）"""
+    import google.generativeai as genai_local
+    genai_local.configure(api_key=api_key)
+
+    model = genai_local.GenerativeModel("gemini-2.0-flash")
+
+    prompt = f"""あなたはOCR専門のAIです。この画像はPDFのページ {page_num} です。
+
+画像内の全テキストを **正確に** Markdown形式で抽出してください。
+
+ルール:
+1. テキストは100%正確に抽出すること（1文字も漏らさない）
+2. 見出しは # ## ### で表現
+3. 箇条書きは - で表現
+4. 表はMarkdownテーブル形式で表現  
+5. テキストの順序は元の文書のレイアウトに従う（上から下、左から右）
+6. 装飾テキスト（太字、下線等）はMarkdownの ** で表現
+7. 空行やセクションの区切りも再現する  
+8. 画像や図表は [画像: 説明] で示す
+9. 改行位置も原稿を正確に再現する
+10. Markdownのコードブロックで囲まないこと（純粋なMarkdownテキストのみ出力）
+
+テキストのみを出力してください。説明や注釈は不要です。"""
+
+    img_part = {
+        "mime_type": "image/png",
+        "data": png_bytes,
+    }
+
+    response = model.generate_content(
+        [prompt, img_part],
+        generation_config={"temperature": 0.1, "max_output_tokens": 8192},
+    )
+
+    text = response.text.strip()
+    # コードブロック内にMarkdownが返された場合、外す
+    if text.startswith("```markdown"):
+        text = text[len("```markdown"):].strip()
+    if text.startswith("```"):
+        text = text[3:].strip()
+    if text.endswith("```"):
+        text = text[:-3].strip()
+
+    print(f"  OCR page {page_num}: {len(text)} chars")
+    return text
+
+
+@app.post("/markdown-to-pdf")
+async def markdown_to_pdf(req: dict[str, Any]):
+    """編集済み Markdown を HTML に変換し、Vivliostyle で PDF 生成"""
+    import markdown as md_lib
+
+    markdown_text = req.get("markdown", "")
+    page_mm = req.get("page_mm", [210, 297])  # デフォルト A4
+    bg_image_b64 = req.get("bg_image_b64")
+    original_pdf_b64 = req.get("original_pdf_b64")  # 元PDF（背景用）
+
+    if not markdown_text:
+        raise HTTPException(400, "markdown is required")
+
+    try:
+        w_mm = page_mm[0] if len(page_mm) > 0 else 210
+        h_mm = page_mm[1] if len(page_mm) > 1 else 297
+
+        # Markdown → HTML
+        html_body = md_lib.markdown(
+            markdown_text,
+            extensions=["tables", "fenced_code", "nl2br"],
+        )
+
+        # 背景画像の準備
+        bg_css = ""
+        if bg_image_b64:
+            bg_css = f"""
+.page-bg {{
+  position: fixed;
+  top: 0;  left: 0;
+  width: {w_mm}mm;  height: {h_mm}mm;
+  background-image: url(data:image/png;base64,{bg_image_b64});
+  background-size: cover;
+  z-index: -1;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}}"""
+        elif original_pdf_b64:
+            # 元PDFから背景画像を生成
+            try:
+                orig_bytes = base64.b64decode(original_pdf_b64)
+                orig_doc = fitz.open(stream=orig_bytes, filetype="pdf")
+                if len(orig_doc) > 0:
+                    orig_page = orig_doc.load_page(0)
+                    orig_rect = orig_page.rect
+                    scale = max(3, 2000 / max(orig_rect.width, orig_rect.height))
+                    scale = min(scale, 6)
+                    orig_pix = orig_page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+                    orig_png = orig_pix.tobytes("png")
+                    orig_b64 = base64.b64encode(orig_png).decode("utf-8")
+                    bg_css = f"""
+.page-bg {{
+  position: fixed;
+  top: 0;  left: 0;
+  width: {w_mm}mm;  height: {h_mm}mm;
+  background-image: url(data:image/png;base64,{orig_b64});
+  background-size: cover;
+  z-index: -1;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}}"""
+                orig_doc.close()
+            except Exception as bg_err:
+                print(f"Background generation error: {bg_err}")
+
+        css_content = f"""@page {{
+  size: {w_mm}mm {h_mm}mm;
+  margin: 10mm 12mm;
+  marks: crop cross;
+}}
+
+@font-face {{
+  font-family: 'Noto Sans JP';
+  src: local('Noto Sans JP'), local('NotoSansJP');
+  font-weight: 100 900;
+}}
+
+@font-face {{
+  font-family: 'Noto Serif JP';
+  src: local('Noto Serif JP'), local('NotoSerifJP');
+  font-weight: 100 900;
+}}
+
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
+body {{
+  font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+  font-size: 10pt;
+  line-height: 1.8;
+  color: #222;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}}
+
+h1 {{ font-size: 20pt; margin: 0.5em 0 0.3em; font-weight: 700; }}
+h2 {{ font-size: 16pt; margin: 0.4em 0 0.2em; font-weight: 700; }}
+h3 {{ font-size: 13pt; margin: 0.3em 0 0.2em; font-weight: 600; }}
+h4, h5, h6 {{ font-size: 11pt; margin: 0.2em 0; font-weight: 600; }}
+
+p {{ margin: 0.4em 0; }}
+ul, ol {{ margin: 0.3em 0 0.3em 1.5em; }}
+li {{ margin: 0.1em 0; }}
+
+table {{
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  width: 100%;
+}}
+th, td {{
+  border: 1px solid #999;
+  padding: 4pt 6pt;
+  text-align: left;
+  font-size: 9pt;
+}}
+th {{
+  background: #f0f0f0;
+  font-weight: 600;
+}}
+
+blockquote {{
+  border-left: 3pt solid #ccc;
+  padding-left: 8pt;
+  margin: 0.3em 0;
+  color: #555;
+}}
+
+code {{
+  font-family: 'Noto Sans JP', monospace;
+  background: #f5f5f5;
+  padding: 1pt 3pt;
+  font-size: 9pt;
+}}
+
+pre code {{
+  display: block;
+  padding: 6pt;
+  overflow-x: auto;
+}}
+
+hr {{
+  border: none;
+  border-top: 1px solid #ccc;
+  margin: 0.5em 0;
+}}
+{bg_css}
+"""
+
+        bg_div = '<div class="page-bg"></div>' if bg_css else ""
+
+        html_content = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Document</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+{bg_div}
+{html_body}
+</body>
+</html>"""
+
+        # Vivliostyle で PDF 生成
+        vivliostyle_cmd = shutil.which("vivliostyle")
+        use_npx = False
+        if not vivliostyle_cmd:
+            npx_cmd = shutil.which("npx")
+            if npx_cmd:
+                use_npx = True
+                vivliostyle_cmd = npx_cmd
+            else:
+                raise HTTPException(500, "vivliostyle CLI が見つかりません")
+
+        tmpdir = tempfile.mkdtemp(prefix="md2pdf_")
+        try:
+            html_path = os.path.join(tmpdir, "index.html")
+            css_path = os.path.join(tmpdir, "style.css")
+            pdf_path = os.path.join(tmpdir, "output.pdf")
+
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            with open(css_path, "w", encoding="utf-8") as f:
+                f.write(css_content)
+
+            if use_npx:
+                cmd = [
+                    vivliostyle_cmd, "-y", "@vivliostyle/cli",
+                    "build", html_path, "-o", pdf_path
+                ]
+            else:
+                cmd = [
+                    vivliostyle_cmd, "build", html_path, "-o", pdf_path
+                ]
+
+            print(f"Markdown→PDF: {' '.join(cmd)}")
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=tmpdir,
+            )
+
+            if proc.returncode != 0:
+                raise HTTPException(
+                    500, f"Vivliostyle エラー: {proc.stderr[:500]}"
+                )
+
+            if not os.path.exists(pdf_path):
+                raise HTTPException(500, "PDF が生成されませんでした")
+
+            with open(pdf_path, "rb") as f:
+                out_pdf_bytes = f.read()
+
+            # プレビュー PNG 生成
+            out_doc = fitz.open(stream=out_pdf_bytes, filetype="pdf")
+            previews = []
+            for pi in range(len(out_doc)):
+                p = out_doc.load_page(pi)
+                pr = p.rect
+                s = max(2, 2000 / max(pr.width, pr.height))
+                s = min(s, 6)
+                ppix = p.get_pixmap(matrix=fitz.Matrix(s, s))
+                ppng = ppix.tobytes("png")
+                previews.append(base64.b64encode(ppng).decode("utf-8"))
+            out_doc.close()
+
+            return {
+                "pdf_b64": base64.b64encode(out_pdf_bytes).decode("utf-8"),
+                "preview_pngs": previews,
+                "html": html_content,
+                "css": css_content,
+            }
+
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Markdown→PDF 変換失敗: {e}")
 
 
 if __name__ == "__main__":

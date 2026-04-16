@@ -8,3 +8,5 @@ google-generativeai>=0.8.3
 google-cloud-documentai
 google-cloud-vision
 Pillow
+markitdown[pdf]
+markdown
