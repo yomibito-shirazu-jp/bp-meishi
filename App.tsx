@@ -217,6 +217,9 @@ const App: React.FC = () => {
   const [mdLoading, setMdLoading] = useState(false);
   const [mdShowPreview, setMdShowPreview] = useState(true);
   const mdFileRef = useRef<HTMLInputElement>(null);
+  const [mdTheme, setMdTheme] = useState<'default' | 'academic' | 'business'>('default');
+  const [mdFormat, setMdFormat] = useState<'A4' | 'A5' | 'B5' | 'Letter'>('A4');
+  const [mdVertical, setMdVertical] = useState(false);
 
   // ── Derived ──
   const flash = (text: string, type: 'info' | 'ok' | 'error' = 'info') => {
@@ -4466,6 +4469,46 @@ JSONのみ返してください。` },
                     >
                       <RefreshCw size={14} /> リセット
                     </button>
+
+                    {/* md2pdf-ja オプション */}
+                    <div className="flex items-center gap-2 ml-3">
+                      <select
+                        value={mdTheme}
+                        onChange={(e) => setMdTheme(e.target.value as any)}
+                        className="text-xs px-2 py-1.5 rounded-lg border bg-white focus:outline-none"
+                        style={{ borderColor: C.border }}
+                        title="テーマ"
+                      >
+                        <option value="default">標準</option>
+                        <option value="academic">学術</option>
+                        <option value="business">ビジネス</option>
+                      </select>
+                      <select
+                        value={mdFormat}
+                        onChange={(e) => setMdFormat(e.target.value as any)}
+                        className="text-xs px-2 py-1.5 rounded-lg border bg-white focus:outline-none"
+                        style={{ borderColor: C.border }}
+                        title="用紙サイズ"
+                      >
+                        <option value="A4">A4</option>
+                        <option value="A5">A5</option>
+                        <option value="B5">B5</option>
+                        <option value="Letter">Letter</option>
+                      </select>
+                      <button
+                        onClick={() => setMdVertical(!mdVertical)}
+                        className={`text-xs px-3 py-1.5 rounded-lg border font-bold transition-all ${
+                          mdVertical
+                            ? 'bg-purple-600 text-white border-purple-600'
+                            : 'bg-white text-gray-600'
+                        }`}
+                        style={{ borderColor: mdVertical ? undefined : C.border }}
+                        title="縦書きモード (writing-mode: vertical-rl)"
+                      >
+                        {mdVertical ? '縦書' : '横書'}
+                      </button>
+                    </div>
+
                     <div className="flex-1" />
                     <button
                       onClick={async () => {
@@ -4477,6 +4520,8 @@ JSONのみ返してください。` },
                             mdMarkdown,
                             mdPageMM,
                             mdPdfB64 || undefined,
+                            undefined,
+                            { theme: mdTheme, format: mdFormat, vertical: mdVertical },
                           );
                           setMdOutputPdfB64(data.pdf_b64);
                           setMdOutputPreviews(data.preview_pngs);

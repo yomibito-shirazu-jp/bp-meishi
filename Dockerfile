@@ -16,8 +16,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Vivliostyle CLI globally
-RUN npm install -g @vivliostyle/cli
+# Install Vivliostyle CLI and md2pdf-ja globally
+RUN npm install -g @vivliostyle/cli @j2masamitu/md2pdf-ja
 
 # Download Google Fonts (Noto Sans JP / Noto Serif JP)
 RUN mkdir -p /usr/share/fonts/google \

@@ -225,8 +225,18 @@ export const analyzeMarkdown = async (pdfB64: string): Promise<AnalyzeMarkdownRe
 export interface MarkdownToPdfResponse {
   pdf_b64: string;
   preview_pngs: string[];
-  html: string;
-  css: string;
+  engine?: string;
+}
+
+export interface MarkdownToPdfOptions {
+  theme?: 'default' | 'academic' | 'business';
+  format?: 'A4' | 'A5' | 'B5' | 'Letter';
+  vertical?: boolean;
+  title?: string;
+  author?: string;
+  page_numbers?: boolean;
+  toc?: boolean;
+  custom_css?: string;
 }
 
 export const markdownToPdf = async (
@@ -234,6 +244,7 @@ export const markdownToPdf = async (
   pageMM: [number, number],
   originalPdfB64?: string,
   bgImageB64?: string,
+  options?: MarkdownToPdfOptions,
 ): Promise<MarkdownToPdfResponse> => {
   const res = await fetch(`${getApiUrl()}/markdown-to-pdf`, {
     method: 'POST',
@@ -243,6 +254,7 @@ export const markdownToPdf = async (
       page_mm: pageMM,
       original_pdf_b64: originalPdfB64 || null,
       bg_image_b64: bgImageB64 || null,
+      ...(options || {}),
     }),
   });
   if (!res.ok) {

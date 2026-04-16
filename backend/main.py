@@ -1977,11 +1977,22 @@ def _ocr_page_to_markdown(png_bytes: bytes, api_key: str, page_num: int) -> str:
 
 @app.post("/markdown-to-pdf")
 async def markdown_to_pdf(req: dict[str, Any]):
-    """編集済み Markdown を HTML に変換し、Vivliostyle で PDF 生成"""
-    import markdown as md_lib
+    """編集済み Markdown → PDF（md2pdf-ja + Vivliostyle フォールバック）
 
+    md2pdf-ja: Puppeteer + marked ベース。日本語（Noto Sans/Serif JP）に最適化。
+    GFM / KaTeX / GitHub Alerts / 脚注 / シンタックスハイライト対応。
+    縦書き（writing-mode: vertical-rl）オプション対応。
+    """
     markdown_text = req.get("markdown", "")
     page_mm = req.get("page_mm", [210, 297])  # デフォルト A4
+    theme = req.get("theme", "default")  # default / academic / business
+    paper_format = req.get("format", "A4")  # A4 / A5 / B5 / Letter
+    vertical = req.get("vertical", False)  # 縦書きモード
+    custom_css = req.get("custom_css", "")  # 追加CSS
+    title = req.get("title", "")
+    author = req.get("author", "")
+    page_numbers = req.get("page_numbers", False)
+    toc = req.get("toc", False)
     bg_image_b64 = req.get("bg_image_b64")
     original_pdf_b64 = req.get("original_pdf_b64")  # 元PDF（背景用）
 
@@ -1989,23 +2000,15 @@ async def markdown_to_pdf(req: dict[str, Any]):
         raise HTTPException(400, "markdown is required")
 
     try:
-        w_mm = page_mm[0] if len(page_mm) > 0 else 210
-        h_mm = page_mm[1] if len(page_mm) > 1 else 297
-
-        # Markdown → HTML
-        html_body = md_lib.markdown(
-            markdown_text,
-            extensions=["tables", "fenced_code", "nl2br"],
-        )
-
-        # 背景画像の準備
-        bg_css = ""
+        # ── 背景画像CSS生成 ──
+        bg_extra_css = ""
         if bg_image_b64:
-            bg_css = f"""
-.page-bg {{
+            bg_extra_css = f"""
+body::before {{
+  content: "";
   position: fixed;
-  top: 0;  left: 0;
-  width: {w_mm}mm;  height: {h_mm}mm;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
   background-image: url(data:image/png;base64,{bg_image_b64});
   background-size: cover;
   z-index: -1;
@@ -2013,7 +2016,6 @@ async def markdown_to_pdf(req: dict[str, Any]):
   print-color-adjust: exact;
 }}"""
         elif original_pdf_b64:
-            # 元PDFから背景画像を生成
             try:
                 orig_bytes = base64.b64decode(original_pdf_b64)
                 orig_doc = fitz.open(stream=orig_bytes, filetype="pdf")
@@ -2025,11 +2027,12 @@ async def markdown_to_pdf(req: dict[str, Any]):
                     orig_pix = orig_page.get_pixmap(matrix=fitz.Matrix(scale, scale))
                     orig_png = orig_pix.tobytes("png")
                     orig_b64 = base64.b64encode(orig_png).decode("utf-8")
-                    bg_css = f"""
-.page-bg {{
+                    bg_extra_css = f"""
+body::before {{
+  content: "";
   position: fixed;
-  top: 0;  left: 0;
-  width: {w_mm}mm;  height: {h_mm}mm;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
   background-image: url(data:image/png;base64,{orig_b64});
   background-size: cover;
   z-index: -1;
@@ -2040,10 +2043,174 @@ async def markdown_to_pdf(req: dict[str, Any]):
             except Exception as bg_err:
                 print(f"Background generation error: {bg_err}")
 
-        css_content = f"""@page {{
+        # ── 縦書きCSS ──
+        vertical_css = ""
+        if vertical:
+            vertical_css = """
+/* 縦書きモード (writing-mode) */
+html {
+  writing-mode: vertical-rl;
+  -webkit-writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+body {
+  writing-mode: vertical-rl;
+  -webkit-writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+h1, h2, h3, h4, h5, h6 {
+  text-combine-upright: none;
+}
+/* 半角英数字の縦中横 */
+.tcy {
+  text-combine-upright: all;
+  -webkit-text-combine: horizontal;
+}
+"""
+
+        # カスタムCSS 統合
+        all_custom_css = "\n".join([bg_extra_css, vertical_css, custom_css]).strip()
+
+        tmpdir = tempfile.mkdtemp(prefix="md2pdfja_")
+        try:
+            md_path = os.path.join(tmpdir, "input.md")
+            pdf_path = os.path.join(tmpdir, "output.pdf")
+
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(markdown_text)
+
+            # カスタムCSS を一時ファイルに書き出し
+            css_path = None
+            if all_custom_css:
+                css_path = os.path.join(tmpdir, "custom.css")
+                with open(css_path, "w", encoding="utf-8") as f:
+                    f.write(all_custom_css)
+
+            # md2pdf-ja CLI を実行
+            md2pdf_cmd = shutil.which("md2pdf-ja")
+            if not md2pdf_cmd:
+                # npx フォールバック
+                npx = shutil.which("npx")
+                if npx:
+                    md2pdf_cmd = npx
+                    cmd = [md2pdf_cmd, "-y", "@j2masamitu/md2pdf-ja"]
+                else:
+                    raise HTTPException(500, "md2pdf-ja CLI が見つかりません")
+            else:
+                cmd = [md2pdf_cmd]
+
+            cmd += [md_path, "-o", pdf_path]
+
+            # テーマ
+            if theme in ("academic", "business", "default"):
+                cmd += ["--theme", theme]
+
+            # 用紙サイズ
+            if paper_format in ("A4", "A5", "B5", "Letter"):
+                cmd += ["--format", paper_format]
+
+            # タイトル・著者
+            if title:
+                cmd += ["-t", title]
+            if author:
+                cmd += ["-a", author]
+
+            # ページ番号
+            if page_numbers:
+                cmd += ["--page-numbers"]
+
+            # 目次
+            if toc:
+                cmd += ["--toc"]
+
+            # カスタムCSS
+            if css_path:
+                cmd += ["--css", css_path]
+
+            print(f"md2pdf-ja: {' '.join(cmd)}")
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=tmpdir,
+                env={**os.environ, "PUPPETEER_CHROMIUM_REVISION": "latest"},
+            )
+
+            if proc.returncode != 0:
+                stderr_msg = proc.stderr[:500] if proc.stderr else "unknown error"
+                print(f"md2pdf-ja stderr: {proc.stderr}")
+                print(f"md2pdf-ja stdout: {proc.stdout}")
+                # Vivliostyle フォールバック
+                print("md2pdf-ja 失敗 → Vivliostyle フォールバック")
+                return await _vivliostyle_fallback(
+                    markdown_text, page_mm, bg_extra_css, vertical_css, custom_css
+                )
+
+            if not os.path.exists(pdf_path):
+                print("md2pdf-ja: PDF 未生成 → Vivliostyle フォールバック")
+                return await _vivliostyle_fallback(
+                    markdown_text, page_mm, bg_extra_css, vertical_css, custom_css
+                )
+
+            with open(pdf_path, "rb") as f:
+                out_pdf_bytes = f.read()
+
+            # プレビュー PNG 生成
+            out_doc = fitz.open(stream=out_pdf_bytes, filetype="pdf")
+            previews = []
+            for pi in range(len(out_doc)):
+                p = out_doc.load_page(pi)
+                pr = p.rect
+                s = max(2, 2000 / max(pr.width, pr.height))
+                s = min(s, 6)
+                ppix = p.get_pixmap(matrix=fitz.Matrix(s, s))
+                ppng = ppix.tobytes("png")
+                previews.append(base64.b64encode(ppng).decode("utf-8"))
+            out_doc.close()
+
+            return {
+                "pdf_b64": base64.b64encode(out_pdf_bytes).decode("utf-8"),
+                "preview_pngs": previews,
+                "engine": "md2pdf-ja",
+            }
+
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Markdown→PDF 変換失敗: {e}")
+
+
+async def _vivliostyle_fallback(
+    markdown_text: str,
+    page_mm: list,
+    bg_css: str,
+    vertical_css: str,
+    custom_css: str,
+):
+    """md2pdf-ja 失敗時の Vivliostyle フォールバック"""
+    import markdown as md_lib
+
+    w_mm = page_mm[0] if len(page_mm) > 0 else 210
+    h_mm = page_mm[1] if len(page_mm) > 1 else 297
+
+    html_body = md_lib.markdown(
+        markdown_text,
+        extensions=["tables", "fenced_code", "nl2br"],
+    )
+
+    v_css = ""
+    if vertical_css:
+        v_css = vertical_css
+
+    css_content = f"""@page {{
   size: {w_mm}mm {h_mm}mm;
   margin: 10mm 12mm;
-  marks: crop cross;
 }}
 
 @font-face {{
@@ -2072,59 +2239,18 @@ body {{
 h1 {{ font-size: 20pt; margin: 0.5em 0 0.3em; font-weight: 700; }}
 h2 {{ font-size: 16pt; margin: 0.4em 0 0.2em; font-weight: 700; }}
 h3 {{ font-size: 13pt; margin: 0.3em 0 0.2em; font-weight: 600; }}
-h4, h5, h6 {{ font-size: 11pt; margin: 0.2em 0; font-weight: 600; }}
 
 p {{ margin: 0.4em 0; }}
-ul, ol {{ margin: 0.3em 0 0.3em 1.5em; }}
-li {{ margin: 0.1em 0; }}
-
-table {{
-  border-collapse: collapse;
-  margin: 0.5em 0;
-  width: 100%;
-}}
-th, td {{
-  border: 1px solid #999;
-  padding: 4pt 6pt;
-  text-align: left;
-  font-size: 9pt;
-}}
-th {{
-  background: #f0f0f0;
-  font-weight: 600;
-}}
-
-blockquote {{
-  border-left: 3pt solid #ccc;
-  padding-left: 8pt;
-  margin: 0.3em 0;
-  color: #555;
-}}
-
-code {{
-  font-family: 'Noto Sans JP', monospace;
-  background: #f5f5f5;
-  padding: 1pt 3pt;
-  font-size: 9pt;
-}}
-
-pre code {{
-  display: block;
-  padding: 6pt;
-  overflow-x: auto;
-}}
-
-hr {{
-  border: none;
-  border-top: 1px solid #ccc;
-  margin: 0.5em 0;
-}}
+table {{ border-collapse: collapse; margin: 0.5em 0; width: 100%; }}
+th, td {{ border: 1px solid #999; padding: 4pt 6pt; text-align: left; font-size: 9pt; }}
+th {{ background: #f0f0f0; font-weight: 600; }}
+blockquote {{ border-left: 3pt solid #ccc; padding-left: 8pt; margin: 0.3em 0; color: #555; }}
 {bg_css}
+{v_css}
+{custom_css}
 """
 
-        bg_div = '<div class="page-bg"></div>' if bg_css else ""
-
-        html_content = f"""<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -2132,92 +2258,63 @@ hr {{
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-{bg_div}
 {html_body}
 </body>
 </html>"""
 
-        # Vivliostyle で PDF 生成
-        vivliostyle_cmd = shutil.which("vivliostyle")
-        use_npx = False
-        if not vivliostyle_cmd:
-            npx_cmd = shutil.which("npx")
-            if npx_cmd:
-                use_npx = True
-                vivliostyle_cmd = npx_cmd
-            else:
-                raise HTTPException(500, "vivliostyle CLI が見つかりません")
+    vivliostyle_cmd = shutil.which("vivliostyle")
+    use_npx = False
+    if not vivliostyle_cmd:
+        npx_cmd = shutil.which("npx")
+        if npx_cmd:
+            use_npx = True
+            vivliostyle_cmd = npx_cmd
+        else:
+            raise HTTPException(500, "vivliostyle CLI が見つかりません")
 
-        tmpdir = tempfile.mkdtemp(prefix="md2pdf_")
-        try:
-            html_path = os.path.join(tmpdir, "index.html")
-            css_path = os.path.join(tmpdir, "style.css")
-            pdf_path = os.path.join(tmpdir, "output.pdf")
+    tmpdir = tempfile.mkdtemp(prefix="vivlio_fb_")
+    try:
+        html_path = os.path.join(tmpdir, "index.html")
+        css_path = os.path.join(tmpdir, "style.css")
+        pdf_path = os.path.join(tmpdir, "output.pdf")
 
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-            with open(css_path, "w", encoding="utf-8") as f:
-                f.write(css_content)
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        with open(css_path, "w", encoding="utf-8") as f:
+            f.write(css_content)
 
-            if use_npx:
-                cmd = [
-                    vivliostyle_cmd, "-y", "@vivliostyle/cli",
-                    "build", html_path, "-o", pdf_path
-                ]
-            else:
-                cmd = [
-                    vivliostyle_cmd, "build", html_path, "-o", pdf_path
-                ]
+        if use_npx:
+            cmd = [vivliostyle_cmd, "-y", "@vivliostyle/cli", "build", html_path, "-o", pdf_path]
+        else:
+            cmd = [vivliostyle_cmd, "build", html_path, "-o", pdf_path]
 
-            print(f"Markdown→PDF: {' '.join(cmd)}")
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                cwd=tmpdir,
-            )
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=tmpdir)
 
-            if proc.returncode != 0:
-                raise HTTPException(
-                    500, f"Vivliostyle エラー: {proc.stderr[:500]}"
-                )
+        if proc.returncode != 0 or not os.path.exists(pdf_path):
+            raise HTTPException(500, f"PDF生成失敗（Vivliostyle）: {proc.stderr[:300]}")
 
-            if not os.path.exists(pdf_path):
-                raise HTTPException(500, "PDF が生成されませんでした")
+        with open(pdf_path, "rb") as f:
+            out_pdf_bytes = f.read()
 
-            with open(pdf_path, "rb") as f:
-                out_pdf_bytes = f.read()
+        out_doc = fitz.open(stream=out_pdf_bytes, filetype="pdf")
+        previews = []
+        for pi in range(len(out_doc)):
+            p = out_doc.load_page(pi)
+            pr = p.rect
+            s = max(2, 2000 / max(pr.width, pr.height))
+            s = min(s, 6)
+            ppix = p.get_pixmap(matrix=fitz.Matrix(s, s))
+            ppng = ppix.tobytes("png")
+            previews.append(base64.b64encode(ppng).decode("utf-8"))
+        out_doc.close()
 
-            # プレビュー PNG 生成
-            out_doc = fitz.open(stream=out_pdf_bytes, filetype="pdf")
-            previews = []
-            for pi in range(len(out_doc)):
-                p = out_doc.load_page(pi)
-                pr = p.rect
-                s = max(2, 2000 / max(pr.width, pr.height))
-                s = min(s, 6)
-                ppix = p.get_pixmap(matrix=fitz.Matrix(s, s))
-                ppng = ppix.tobytes("png")
-                previews.append(base64.b64encode(ppng).decode("utf-8"))
-            out_doc.close()
-
-            return {
-                "pdf_b64": base64.b64encode(out_pdf_bytes).decode("utf-8"),
-                "preview_pngs": previews,
-                "html": html_content,
-                "css": css_content,
-            }
-
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(500, f"Markdown→PDF 変換失敗: {e}")
+        return {
+            "pdf_b64": base64.b64encode(out_pdf_bytes).decode("utf-8"),
+            "preview_pngs": previews,
+            "engine": "vivliostyle_fallback",
+        }
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
