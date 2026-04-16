@@ -82,36 +82,92 @@ title, heading, body, label, value, date, number, address, name, note, other
   }
 }
 
-async function callGemini(imageBase64: string, prompt: string): Promise<string> {
-  const res = await fetch(geminiUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'image/png',
-              data: imageBase64,
-            },
-          },
-          { text: prompt },
-        ],
-      }],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 4000,
-      },
-    }),
-  });
+async function resizeImageForGemini(base64: string, maxDimension = 2048): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      // Already small enough
+      if (width <= maxDimension && height <= maxDimension) {
+        resolve(base64);
+        return;
+      }
+      // Scale down proportionally
+      const scale = maxDimension / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${err}`);
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(base64); return; }
+      ctx.drawImage(img, 0, 0, width, height);
+      // Use JPEG for smaller payload
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const resized = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+      console.log(`[resizeImageForGemini] ${img.naturalWidth}x${img.naturalHeight} → ${width}x${height} (${(resized.length / 1024).toFixed(0)}KB)`);
+      resolve(resized);
+    };
+    img.onerror = () => {
+      console.warn('[resizeImageForGemini] Failed to load image, using original');
+      resolve(base64);
+    };
+    img.src = `data:image/png;base64,${base64}`;
+  });
+}
+
+async function callGemini(imageBase64: string, prompt: string): Promise<string> {
+  // Resize image to avoid Gemini API 400 errors on large images
+  const resizedBase64 = await resizeImageForGemini(imageBase64);
+  // Detect MIME type based on whether we resized (JPEG) or kept original (PNG)
+  const mimeType = resizedBase64 !== imageBase64 ? 'image/jpeg' : 'image/png';
+
+  let retries = 3;
+  let lastError: Error | null = null;
+
+  while (retries > 0) {
+    try {
+      const res = await fetch(geminiUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              {
+                inlineData: {
+                  mimeType,
+                  data: resizedBase64,
+                },
+              },
+              { text: prompt },
+            ],
+          }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 4000,
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Gemini API error ${res.status}: ${err}`);
+      }
+
+      const data = await res.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } catch (e: any) {
+      lastError = e;
+      retries--;
+      if (retries > 0) {
+        console.warn(`AI API call failed, retrying (${retries} retries left):`, e);
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
   }
 
-  const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  throw lastError || new Error('Gemini API call failed after retries');
 }
 
 /**

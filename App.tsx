@@ -9,6 +9,7 @@ import { pickPdfFromDrive, pickFileFromDrive } from './services/gdrive';
 import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
 import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './services/detect';
 import { chunkManuscript, validateManuscript, submitFeedback } from './services/validate';
+import TemplateDesigner from './components/TemplateDesigner';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
@@ -995,6 +996,13 @@ const App: React.FC = () => {
               <Wand2 size={15} /> AIで作成
             </button>
             <button
+              onClick={() => fileRef.current?.click()}
+              className="px-4 py-2 rounded-xl text-[13px] font-semibold flex items-center gap-2 transition-all hover:bg-indigo-50 border text-white shadow-md hover:shadow-lg"
+              style={{ background: 'linear-gradient(135deg, #10b981, #34d399)', borderColor: 'transparent' }}
+            >
+              <Upload size={15} /> ローカルPDF
+            </button>
+            <button
               onClick={async () => {
                 try {
                   const file = await pickPdfFromDrive();
@@ -1169,11 +1177,11 @@ const App: React.FC = () => {
                   className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg"
                   style={{ background: C.gradientPrimary }}
                 >
-                  <HardDrive size={32} className="text-white" />
+                  <Upload size={32} className="text-white" />
                 </div>
-                <h3 className="text-2xl font-bold text-gray-900 mb-2">Google Driveから入稿</h3>
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">PDFを入稿</h3>
                 <p className="text-[15px] text-gray-500 leading-relaxed mb-8">
-                  Google Drive上のPDFを選択してください<br />
+                  ローカルPC または Google Drive からPDFを選択してください<br />
                   AI が自動で構造解析・テキスト抽出を行います
                 </p>
 
@@ -1194,20 +1202,32 @@ const App: React.FC = () => {
                   ))}
                 </div>
 
-                <button
-                  onClick={async () => {
-                    try {
-                      const file = await pickPdfFromDrive();
-                      if (file) handleUpload(file);
-                    } catch (err: any) {
-                      flash(err.message || 'Google Drive接続エラー', 'error');
-                    }
-                  }}
-                  className="px-8 py-3.5 rounded-xl text-[14px] font-bold flex items-center gap-2 mx-auto transition-all hover:opacity-90 text-white shadow-lg"
-                  style={{ background: C.gradientPrimary }}
-                >
-                  <HardDrive size={18} /> Google Driveから選択
-                </button>
+                <div className="flex items-center justify-center gap-4 flex-wrap">
+                  {/* ローカルPCからアップロード */}
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    className="px-8 py-3.5 rounded-xl text-[14px] font-bold flex items-center gap-2 transition-all hover:opacity-90 text-white shadow-lg hover:shadow-xl hover:scale-[1.02]"
+                    style={{ background: 'linear-gradient(135deg, #10b981, #34d399)' }}
+                  >
+                    <Upload size={18} /> ローカルPCから入稿
+                  </button>
+                  {/* Google Driveから */}
+                  <button
+                    onClick={async () => {
+                      try {
+                        const file = await pickPdfFromDrive();
+                        if (file) handleUpload(file);
+                      } catch (err: any) {
+                        flash(err.message || 'Google Drive接続エラー', 'error');
+                      }
+                    }}
+                    className="px-8 py-3.5 rounded-xl text-[14px] font-bold flex items-center gap-2 transition-all hover:opacity-90 text-white shadow-lg hover:shadow-xl hover:scale-[1.02]"
+                    style={{ background: C.gradientPrimary }}
+                  >
+                    <HardDrive size={18} /> Google Driveから入稿
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 mt-4">PDFファイルをこの画面にドラッグ＆ドロップすることもできます</p>
               </div>
             </div>
           </div>
@@ -4312,10 +4332,53 @@ JSONのみ返してください。` },
                     </button>
                   </div>
                   <p className="text-center text-xs text-gray-400 mt-4">PDFファイルをこのエリアにドラッグ＆ドロップすることもできます</p>
+
+                  {/* テンプレート作成ボタン */}
+                  <div className="mt-8 pt-6 border-t border-gray-100">
+                    <button
+                      onClick={() => {
+                        if (view === AppState.KUMIHAN_MEISHI) setView(AppState.TEMPLATE_MEISHI);
+                        else if (view === AppState.KUMIHAN_NEWSPAPER) setView(AppState.TEMPLATE_NEWSPAPER);
+                        else setView(AppState.TEMPLATE_BOOK);
+                      }}
+                      className="flex items-center gap-2 mx-auto px-6 py-3 rounded-xl text-[14px] font-semibold border-2 transition-all hover:shadow-md"
+                      style={{
+                        borderColor: view === AppState.KUMIHAN_MEISHI ? '#10b981' : view === AppState.KUMIHAN_NEWSPAPER ? '#3b82f6' : '#8b5cf6',
+                        color: view === AppState.KUMIHAN_MEISHI ? '#10b981' : view === AppState.KUMIHAN_NEWSPAPER ? '#3b82f6' : '#8b5cf6',
+                      }}
+                    >
+                      <LayoutTemplate size={18} /> テンプレートを作成・編集
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
+        )}
+        {/* テンプレートデザイナー */}
+        {view === AppState.TEMPLATE_MEISHI && (
+          <TemplateDesigner
+            category="meishi"
+            onBack={() => setView(AppState.KUMIHAN_MEISHI)}
+            flash={flash}
+            colors={C}
+          />
+        )}
+        {view === AppState.TEMPLATE_NEWSPAPER && (
+          <TemplateDesigner
+            category="newspaper"
+            onBack={() => setView(AppState.KUMIHAN_NEWSPAPER)}
+            flash={flash}
+            colors={C}
+          />
+        )}
+        {view === AppState.TEMPLATE_BOOK && (
+          <TemplateDesigner
+            category="book"
+            onBack={() => setView(AppState.KUMIHAN_COMMERCIAL)}
+            flash={flash}
+            colors={C}
+          />
         )}
         {/* AIインデザイン */}
         {view === AppState.AI_INDESIGN && (
@@ -4679,6 +4742,19 @@ JSONのみ返してください。` },
           </div>
         )}
       </div>
+
+      {/* Hidden file input for local PDF upload */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".pdf,application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleUpload(file);
+          e.target.value = '';
+        }}
+      />
 
       {/* Global drag & drop overlay */}
       {globalDrag && (

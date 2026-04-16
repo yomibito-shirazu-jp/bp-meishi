@@ -136,6 +136,28 @@ GEMINI_SPAN_SCHEMA = {
 }
 
 
+def _resize_for_gemini(png_bytes: bytes, max_dim: int = 2048) -> bytes:
+    """Gemini API用に画像をリサイズ（大きすぎるとINVALID_ARGUMENTエラーになる）"""
+    if not PILImage:
+        return png_bytes
+    try:
+        img = PILImage.open(BytesIO(png_bytes))
+        w, h = img.size
+        if w <= max_dim and h <= max_dim:
+            return png_bytes
+        scale = max_dim / max(w, h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        img = img.resize((new_w, new_h), getattr(PILImage, 'LANCZOS', PILImage.BILINEAR))
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        resized = buf.getvalue()
+        print(f"  Gemini image resize: {w}x{h} → {new_w}x{new_h} ({len(resized)//1024}KB)")
+        return resized
+    except Exception as e:
+        print(f"  Image resize failed: {e}")
+        return png_bytes
+
+
 def _extract_spans_gemini(
     png_bytes: bytes,
     page_w_pt: float,
@@ -148,12 +170,15 @@ def _extract_spans_gemini(
         print("Error: Gemini API key is not set.")
         return []
 
+    # 大きすぎる画像をリサイズ
+    resized_bytes = _resize_for_gemini(png_bytes)
+
     try:
         genai.configure(api_key=active_key)
         model = genai.GenerativeModel("gemini-2.5-flash")
         img_part = {
             "mime_type": "image/png",
-            "data": base64.b64encode(png_bytes).decode(),
+            "data": base64.b64encode(resized_bytes).decode(),
         }
         response = model.generate_content(
             [GEMINI_EXTRACT_PROMPT, img_part],
@@ -173,7 +198,7 @@ def _extract_spans_gemini(
             model = genai.GenerativeModel("gemini-2.0-flash")
             img_part = {
                 "mime_type": "image/png",
-                "data": base64.b64encode(png_bytes).decode(),
+                "data": base64.b64encode(resized_bytes).decode(),
             }
             response = model.generate_content(
                 [GEMINI_EXTRACT_PROMPT, img_part],
@@ -1889,11 +1914,12 @@ async def analyze_markdown(
             png_bytes_page = pix.tobytes("png")
             preview_b64 = base64.b64encode(png_bytes_page).decode("utf-8")
 
-            # Gemini Vision OCR
+            # Gemini Vision OCR（リサイズ版でAPIエラー回避）
             page_md = ""
             if api_key:
                 try:
-                    page_md = _ocr_page_to_markdown(png_bytes_page, api_key, i + 1)
+                    resized_page = _resize_for_gemini(png_bytes_page)
+                    page_md = _ocr_page_to_markdown(resized_page, api_key, i + 1)
                 except Exception as ocr_err:
                     print(f"Gemini OCR page {i} failed: {ocr_err}")
 
@@ -2002,6 +2028,7 @@ def _ocr_page_to_markdown(png_bytes: bytes, api_key: str, page_num: int) -> str:
 
 テキストのみを出力してください。説明や注釈は不要です。"""
 
+    # リサイズ済み画像を使用（呼び出し元で _resize_for_gemini 済み）
     img_part = {
         "mime_type": "image/png",
         "data": png_bytes,
@@ -2064,9 +2091,12 @@ BEST: [候補名]
 SCORE: [0-100の精度スコア]
 NOTES: [簡潔な検証コメント（日本語）]"""
 
+    # プレビュー画像をリサイズ（大きすぎるとGemini APIエラー）
+    raw_preview = base64.b64decode(page_preview_b64)
+    resized_preview = _resize_for_gemini(raw_preview, max_dim=1536)
     img_part = {
         "mime_type": "image/png",
-        "data": base64.b64decode(page_preview_b64),
+        "data": resized_preview,
     }
 
     try:
