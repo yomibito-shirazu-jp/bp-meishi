@@ -892,10 +892,43 @@ async def analyze_pdf(
                     if pymupdf_spans:
                         _merge_font_info(spans, pymupdf_spans, rect.width, rect.height)
                         print(f"Page {i}: Document AI + PyMuPDF font merge → {len(spans)} spans")
-                    else:
-                        print(f"Page {i}: Document AI OCR → {len(spans)} spans")
-                else:
-                    print(f"Page {i}: Document AI OCR → {len(spans)} spans")
+
+                # ── Gemini Vision で補完マージ ──
+                # Document AIが取りこぼすテキスト（ハンコ内文字・装飾テキスト等）をGeminiで補完
+                active_gemini_key = x_gemini_api_key or GEMINI_API_KEY
+                if active_gemini_key:
+                    try:
+                        gemini_spans = _extract_spans_gemini(
+                            png_bytes, rect.width, rect.height, api_key=active_gemini_key
+                        )
+                        if gemini_spans:
+                            # Document AIの既存spanと位置が重複しないGeminiのspanだけ追加
+                            added = 0
+                            for gs in gemini_spans:
+                                gx_center = gs["x_pct"] + gs["w_pct"] / 2
+                                gy_center = gs["y_pct"] + gs["h_pct"] / 2
+                                g_text = gs.get("text", "").strip()
+                                # 既存spanとの重複チェック
+                                is_duplicate = False
+                                for ds in spans:
+                                    dx_center = ds["x_pct"] + ds["w_pct"] / 2
+                                    dy_center = ds["y_pct"] + ds["h_pct"] / 2
+                                    dist = abs(gx_center - dx_center) + abs(gy_center - dy_center)
+                                    text_sim = _text_similarity(g_text, ds.get("text", ""))
+                                    # 位置が近い(10%以内) or テキストが類似(50%以上)なら重複
+                                    if dist < 10 or text_sim > 0.5:
+                                        is_duplicate = True
+                                        break
+                                if not is_duplicate and g_text:
+                                    gs["source"] = "gemini"
+                                    spans.append(gs)
+                                    added += 1
+                            if added:
+                                print(f"Page {i}: Gemini補完 +{added} spans (total {len(spans)})")
+                    except Exception as gemini_merge_err:
+                        print(f"Page {i}: Gemini補完スキップ: {gemini_merge_err}")
+
+                print(f"Page {i}: Document AI + Gemini hybrid → {len(spans)} spans")
             elif has_text:
                 # Document AI 未使用 + テキスト埋め込みPDF → PyMuPDF
                 spans = _extract_spans_pymupdf(page)
