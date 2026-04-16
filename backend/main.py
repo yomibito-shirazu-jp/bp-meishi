@@ -216,12 +216,12 @@ class GeminiAnalyzer:
 
     async def extract_and_map_fields(self, image_bytes: bytes, context_text: str = "") -> list[dict]:
         prompt = """
-        あなたは名刺解析のプロです。画像からすべてのテキスト（ロゴ内、手書き修正含む）を抽出し、
-        正確な field_type (company_name, person_name, tel, email, handwritten等) に分類してJSONで返してください。
+        あなたは名刺解析と組版指示のプロです。画像からすべてのテキスト（ロゴ内、手書きの修正指示・メモ等の「赤字指示」含む）を抽出し、
+        正確な field_type (company_name, person_name, tel, email, handwritten 等) に分類してJSONで返してください。
         位置(x_pct, y_pct, w_pct, h_pct)も0-100の範囲で正確に指定してください。
         """
         if context_text:
-            prompt += f"\n【参考テキスト(Document AI抽出)】\n{context_text}"
+            prompt += f"\n【参考テキスト(AI/OCR抽出結果・手書き文字含む)】\n{context_text}"
 
         img_part = {"mime_type": "image/png", "data": base64.b64encode(image_bytes).decode()}
         
@@ -277,8 +277,11 @@ class KumihanService:
         # 2. Geminiによる最終インテリジェント・マッピング
         for i in range(len(doc)):
             page = doc.load_page(i)
-            # Document AIの結果をコンテキストとしてGeminiへ
-            context = "\n".join([s['text'] for s in docai_results[i].get('spans', [])])
+            # Document AIの結果とCloud Visionの結果（手書き等に強い）をコンテキストとしてGeminiへ
+            docai_text = "\n".join([s['text'] for s in docai_results[i].get('spans', [])])
+            vision_text = vision_results[i].get("full_text", "")
+            
+            context = f"【Document AI抽出テキスト】\n{docai_text}\n\n【Cloud Vision抽出テキスト(手書き・高密度OCR含む)】\n{vision_text}"
             
             gemini_spans = await self.gemini.extract_and_map_fields(page_images[i], context)
             

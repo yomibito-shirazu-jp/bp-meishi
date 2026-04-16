@@ -62,8 +62,8 @@ chapter, heading, body, page_number, header, footer, caption, note, other
 ### その他:
 title, heading, body, label, value, date, number, address, name, note, other
 
-6. テスト用の赤い数字（123等）は除外
-7. OCR結果にない視覚要素（ロゴ等）は無視
+6. テスト用の赤い数字（123等）は除外しますが、それ以外の入力されたOCR領域（ID）は**必ず全て出力**に含めてください。
+7. ロゴ、装飾文字、透かしなどの文字要素も、決して削除せずに category: 'company' または 'other' として必ず出力に含めてください。
 
 ## 出力（JSONのみ、他のテキスト不要）:
 [{"id":"元のspan ID","text":"修正後テキスト","category":"カテゴリ名"}]

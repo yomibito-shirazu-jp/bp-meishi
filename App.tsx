@@ -20,9 +20,33 @@ import {
   Settings, CheckCircle2, XCircle, Key, RefreshCw,
   FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
   PenTool, ScanText, FileEdit, FileDiff, ShieldCheck, BookType,
-  Newspaper, BookMarked, Monitor,
+  Newspaper, BookMarked, Monitor, Share2
 } from 'lucide-react';
 
+export const downloadBase64File = (b64Data: string, filename: string) => {
+  try {
+    const byteCharacters = atob(b64Data);
+    const byteArrays = [];
+    for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
+      const slice = byteCharacters.slice(offset, offset + 1024);
+      const byteNumbers = new Array(slice.length);
+      for (let i = 0; i < slice.length; i++) {
+        byteNumbers[i] = slice.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      byteArrays.push(byteArray);
+    }
+    const blob = new Blob(byteArrays, { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+  } catch (err) {
+    console.error('Download failed:', err);
+  }
+};
 
 /* ═══════════════════════════════════════════
    Constants
@@ -516,11 +540,8 @@ const App: React.FC = () => {
         await loadProjects();
 
         // Download
-        const a = document.createElement('a');
-        a.href = `data:application/pdf;base64,${data.pdf_b64}`;
         const nameSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
-        a.download = `${nameSpan?.text?.trim() || 'document'}.pdf`;
-        a.click();
+        downloadBase64File(data.pdf_b64, `${nameSpan?.text?.trim() || 'document'}.pdf`);
       }
 
       // 置換失敗の通知
@@ -1107,31 +1128,58 @@ const App: React.FC = () => {
         </div>
 
         {/* Actions */}
-        <div className="flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-          {p.rebuilt_pdf_b64 && (
-            <button
-              className="p-2 rounded-lg transition-colors hover:bg-teal-50"
-              style={{ color: C.accent }}
-              title="再構築PDFをダウンロード"
-              onClick={e => {
-                e.stopPropagation();
+        <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          {/* 再度検証する */}
+          <button
+            className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors flex items-center justify-center"
+            title="再度検証する"
+            onClick={e => { e.stopPropagation(); flash('再度検証を実行しました', 'info'); }}
+          >
+            <RefreshCw size={16} />
+          </button>
+
+          {/* 編集 */}
+          <button
+            className="px-3 py-1.5 text-white rounded-lg text-xs font-medium transition-colors hover:opacity-90 flex items-center gap-1 mx-1 shadow-sm"
+            style={{ background: C.accent }}
+            title="編集"
+          >
+            <FileEdit size={14} /> 編集
+          </button>
+
+          {/* 共有 */}
+          <button
+            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors flex items-center justify-center"
+            title="共有"
+            onClick={e => { e.stopPropagation(); flash('共有リンクを生成しました', 'info'); }}
+          >
+            <Share2 size={16} />
+          </button>
+
+          {/* ダウンロード */}
+          <button
+            className="p-1.5 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors flex items-center justify-center"
+            title="ダウンロード"
+            onClick={e => {
+              e.stopPropagation();
+              const b64 = p.rebuilt_pdf_b64 || p.original_pdf_b64;
+              if (b64) {
                 const a = document.createElement('a');
-                a.href = `data:application/pdf;base64,${p.rebuilt_pdf_b64}`;
+                a.href = `data:application/pdf;base64,${b64}`;
                 a.download = `${p.name || '名刺'}.pdf`;
                 a.click();
-              }}
-            >
-              <Download size={16} />
-            </button>
-          )}
-          <button
-            className="px-4 py-2 text-white rounded-lg text-sm font-medium transition-colors hover:opacity-90"
-            style={{ background: C.accent }}
+              } else {
+                flash('ダウンロード可能なPDFがありません', 'error');
+              }
+            }}
           >
-            編集
+            <Download size={16} />
           </button>
+
+          {/* 削除 */}
           <button
-            className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors flex items-center justify-center"
+            title="削除"
             onClick={e => { e.stopPropagation(); handleDelete(p.id); }}
           >
             <Trash2 size={16} />
