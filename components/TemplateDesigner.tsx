@@ -100,11 +100,12 @@ const TemplateDesigner: React.FC<Props> = ({ category, onBack, flash, colors: C 
   const [templateName, setTemplateName] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load saved templates from localStorage
   useEffect(() => {
     try {
       const saved = localStorage.getItem(`pdfme_templates_${category}`);
-      if (saved) setSavedTemplates(JSON.parse(saved));
+      if (saved) {
+        Promise.resolve().then(() => setSavedTemplates(JSON.parse(saved)));
+      }
     } catch {}
   }, [category]);
 

@@ -9,6 +9,7 @@ import { pickPdfFromDrive, pickFileFromDrive } from './services/gdrive';
 import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
 import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './services/detect';
 import { chunkManuscript, validateManuscript, submitFeedback } from './services/validate';
+import { fetchFontList, injectFontFace } from './components/fontHelper';
 import TemplateDesigner from './components/TemplateDesigner';
 import PdfEditor from './components/PdfEditor';
 import CommercialPublishing from './components/CommercialPublishing';
@@ -20,14 +21,8 @@ import {
   Settings, CheckCircle2, XCircle, Key, RefreshCw,
   FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
   PenTool, ScanText, FileEdit, FileDiff, ShieldCheck, BookType,
-<<<<<<< HEAD
-  Newspaper, BookMarked, Monitor, Share2
+  Newspaper, BookMarked, Monitor, Share2, Copy
 } from 'lucide-react';
-=======
-  Newspaper, BookMarked, Monitor,
-  Copy,
-} from 'lucide-react';
->>>>>>> origin/main
 
 export const downloadBase64File = (b64Data: string, filename: string) => {
   try {
@@ -151,6 +146,11 @@ const App: React.FC = () => {
   // ── Navigation ──
   const [view, setView] = useState<AppState>(AppState.DASHBOARD);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [availableFonts, setAvailableFonts] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetchFontList().then(setAvailableFonts).catch(err => console.error('Failed to fetch fonts', err));
+  }, []);
 
   // ── Dashboard ──
   const [projects, setProjects] = useState<CardProject[]>([]);
@@ -158,8 +158,6 @@ const App: React.FC = () => {
   const [toast, setToast] = useState<{ text: string; type: 'info' | 'ok' | 'error' } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-<<<<<<< HEAD
-=======
   // ── Editor ──
   const [spans, setSpans] = useState<Span[]>([]);
   const [originalSpans, setOriginalSpans] = useState<Span[]>([]);
@@ -1496,10 +1494,19 @@ const App: React.FC = () => {
                 className="w-full px-2.5 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
                 style={{ background: '#1a1a2e', border: '1px solid #2a2a4a', color: '#e0e0f0' }}
               >
-                <option value="gothic">ゴシック</option>
-                <option value="mincho">明朝</option>
-                <option value="light">ライト</option>
-                <option value="gothic_bold">ゴシック太</option>
+                <optgroup label="Basic">
+                  <option value="gothic">ゴシック</option>
+                  <option value="mincho">明朝</option>
+                  <option value="light">ライト</option>
+                  <option value="gothic_bold">ゴシック太</option>
+                </optgroup>
+                {availableFonts.length > 0 && (
+                  <optgroup label="Local Fonts">
+                    {availableFonts.map(f => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
             <div>
@@ -1882,9 +1889,17 @@ const App: React.FC = () => {
                   const changed = originalSpans[i] && s.text !== originalSpans[i].text;
                   const posChanged = originalSpans[i] && (s.x_pct !== originalSpans[i].x_pct || s.y_pct !== originalSpans[i].y_pct);
                   const isModified = changed || posChanged;
-                  const fontFamily = s.font_class === 'mincho'
-                    ? "'Noto Serif JP', 'Hiragino Mincho ProN', serif"
-                    : "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif";
+                  
+                  let fontFamily = "'Noto Sans JP', sans-serif";
+                  if (s.font_class === 'mincho') {
+                    fontFamily = "'Noto Serif JP', 'Hiragino Mincho ProN', serif";
+                  } else if (s.font_class === 'gothic' || s.font_class === 'light' || s.font_class === 'gothic_bold') {
+                    fontFamily = "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif";
+                  } else if (s.font_class) {
+                    injectFontFace(s.font_class);
+                    fontFamily = `'${s.font_class}', 'Noto Sans JP', sans-serif`;
+                  }
+
                   const fontWeight = s.font_class === 'gothic_bold' ? 700
                     : s.font_class === 'light' ? 300 : 400;
                   return (

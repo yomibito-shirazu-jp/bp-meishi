@@ -22,6 +22,36 @@ export const PDFUpload: React.FC<PDFUploadProps> = ({ onProcessingComplete, onEr
   const [processedFile, setProcessedFile] = useState<File | null>(null);
   const [result, setResult] = useState<ProcessingResult | null>(null);
 
+  async function processPDF(file: File) {
+    setIsProcessing(true);
+    setProcessedFile(file);
+    setResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch('/documentai-business-card', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Processing failed: ${errorText}`);
+      }
+
+      const result: ProcessingResult = await response.json();
+      setResult(result);
+      onProcessingComplete?.(result);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      onError?.(errorMessage);
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -55,35 +85,7 @@ export const PDFUpload: React.FC<PDFUploadProps> = ({ onProcessingComplete, onEr
     }
   }, [onError]);
 
-  const processPDF = async (file: File) => {
-    setIsProcessing(true);
-    setProcessedFile(file);
-    setResult(null);
 
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const response = await fetch('/documentai-business-card', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Processing failed: ${errorText}`);
-      }
-
-      const result: ProcessingResult = await response.json();
-      setResult(result);
-      onProcessingComplete?.(result);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      onError?.(errorMessage);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
 
   const resetUpload = () => {
     setProcessedFile(null);

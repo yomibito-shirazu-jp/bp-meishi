@@ -19,6 +19,22 @@ export const fetchFontList = async (): Promise<string[]> => {
 };
 
 // Load a specific font dynamically from the backend and add it to pdfme font config
+const injectedFonts = new Set<string>();
+
+export const injectFontFace = (fontName: string) => {
+  if (injectedFonts.has(fontName)) return;
+  const fontUrl = `http://127.0.0.1:8000/fonts/${encodeURIComponent(fontName)}`;
+  const style = document.createElement('style');
+  style.innerHTML = `
+    @font-face {
+      font-family: '${fontName}';
+      src: url('${fontUrl}');
+    }
+  `;
+  document.head.appendChild(style);
+  injectedFonts.add(fontName);
+};
+
 export const loadDynamicFont = async (fontName: string) => {
   if (!cachedFont) {
     cachedFont = getDefaultFont();

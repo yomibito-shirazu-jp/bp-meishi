@@ -212,6 +212,7 @@ class GeminiAnalyzer:
                     "x_pct": {"type": "NUMBER"}, "y_pct": {"type": "NUMBER"},
                     "w_pct": {"type": "NUMBER"}, "h_pct": {"type": "NUMBER"},
                     "writing_direction": {"type": "STRING", "enum": ["horizontal", "vertical"]},
+                    "font_class": {"type": "STRING"},
                 },
                 "required": ["text", "field_type", "x_pct", "y_pct", "w_pct", "h_pct"]
             }
@@ -222,6 +223,7 @@ class GeminiAnalyzer:
         あなたは名刺解析と組版指示のプロです。画像からすべてのテキスト（ロゴ内、手書きの修正指示・メモ等の「赤字指示」含む）を抽出し、
         正確な field_type (company_name, person_name, tel, email, handwritten 等) に分類してJSONで返してください。
         位置(x_pct, y_pct, w_pct, h_pct)も0-100の範囲で正確に指定してください。
+        また、各テキストのフォント名（例: mincho, gothic, light, gothic_bold）または具体的なフォントファイル名（例: A-OTF-RyuminPro-Regular.otf 等）を推測し、font_classとして指定してください。
         """
         if context_text:
             prompt += f"\n【参考テキスト(AI/OCR抽出結果・手書き文字含む)】\n{context_text}"
@@ -255,8 +257,16 @@ class KumihanService:
         """非同期並列処理による超高速・高精度マッピング抽出"""
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         
-        # 縦型名刺（portrait）であっても無条件に90度回転させず、オリジナルの向きを維持する
-        # （これにより縦型名刺が正しく縦方向にレンダリング・OCRされるようになる）
+        # 縦型名刺に対応するため、高さが幅より大きい場合は自動的に90度回転する
+        rotated = False
+        for i in range(len(doc)):
+            page = doc.load_page(i)
+            if page.rect.height > page.rect.width:
+                page.set_rotation(page.rotation + 90)
+                rotated = True
+                
+        if rotated:
+            pdf_bytes = doc.tobytes()
 
         # 1. ページ画像生成 & Document AI 並列実行
         docai_task = asyncio.create_task(self.docai.analyze(pdf_bytes))
@@ -300,7 +310,17 @@ class KumihanService:
                 "preview_b64": base64.b64encode(page_images[i]).decode()
             })
 
-        return {"pages": pages_data, "pdf_b64": base64.b64encode(pdf_bytes).decode()}
+        # 第一ページの寸法から縦型かどうかを判定
+        is_vertical = False
+        if len(doc) > 0:
+            first_page_rect = doc[0].rect
+            is_vertical = first_page_rect.height > first_page_rect.width
+
+        return {
+            "pages": pages_data,
+            "pdf_b64": base64.b64encode(pdf_bytes).decode(),
+            "is_vertical": is_vertical
+        }
 
 
 class MarkdownService:
