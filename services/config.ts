@@ -24,6 +24,10 @@ export const CONFIG_KEYS = [
   'VITE_DOCUMENT_AI_PROCESSOR_ID',
   'VITE_DOCUMENT_AI_VERSION_ID',
   'VITE_USE_DOCUMENT_AI',
+  'VITE_MCP_BRIDGE_URL',
+  'VITE_ADB_PROXY_WS_URL',
+  'VITE_ADB_MCP_SCRIPT',
+  'VITE_ADB_TARGET_APPS',
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
