@@ -4429,7 +4429,6 @@ JSONのみ返してください。` },
                   if (localRootsDraft) saveConfig('VITE_LOCAL_FONT_ROOTS', localRootsDraft);
                   if (nextcloudBaseDraft) saveConfig('VITE_NEXTCLOUD_BASE_URL', nextcloudBaseDraft);
                   if (nextcloudUserDraft) saveConfig('VITE_NEXTCLOUD_USERNAME', nextcloudUserDraft);
-                  if (nextcloudPassDraft) saveConfig('VITE_NEXTCLOUD_APP_PASSWORD', nextcloudPassDraft);
                   if (nextcloudPathsDraft) saveConfig('VITE_NEXTCLOUD_FONT_PATHS', nextcloudPathsDraft);
                   setSettingsDraft(prev => ({
                     ...prev,
@@ -4465,7 +4464,16 @@ JSONのみ返してください。` },
                   setIndesignTesting(true);
                   setIndesignStatus(null);
                   try {
-                    const data = await fetchFontCatalog(AbortSignal.timeout(8000));
+                    const data = await fetchFontCatalog(AbortSignal.timeout(8000), {
+                      mode: (fontMode || 'hybrid') as 'local' | 'nextcloud' | 'hybrid',
+                      localRoots: localRoots.split(',').map(v => v.trim()).filter(Boolean),
+                      nextcloud: {
+                        baseUrl: nextcloudBase,
+                        username: nextcloudUser,
+                        appPassword: nextcloudPassDraft || getConfig('VITE_NEXTCLOUD_APP_PASSWORD'),
+                        paths: nextcloudPaths.split(',').map(v => v.trim()).filter(Boolean),
+                      },
+                    });
                     setIndesignStatus({ ok: true, msg: `フォント参照OK: ${data.fonts.length}件` });
                   } catch (err: any) {
                     setIndesignStatus({ ok: false, msg: err?.message || 'フォントカタログ取得に失敗しました' });

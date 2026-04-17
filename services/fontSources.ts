@@ -16,29 +16,43 @@ export interface FontCatalogResponse {
   warnings: string[];
 }
 
+export interface FontCatalogOverrides {
+  mode?: FontSourceMode;
+  localRoots?: string[];
+  nextcloud?: {
+    baseUrl?: string;
+    username?: string;
+    appPassword?: string;
+    paths?: string[];
+  };
+}
+
 const csvToList = (value: string): string[] =>
   value
     .split(',')
     .map(v => v.trim())
     .filter(Boolean);
 
-export const buildFontCatalogRequest = () => ({
-  mode: (getConfig('VITE_FONT_SOURCE_MODE') || 'hybrid') as FontSourceMode,
-  localRoots: csvToList(getConfig('VITE_LOCAL_FONT_ROOTS')),
-  nextcloud: {
-    baseUrl: getConfig('VITE_NEXTCLOUD_BASE_URL'),
-    username: getConfig('VITE_NEXTCLOUD_USERNAME'),
-    appPassword: getConfig('VITE_NEXTCLOUD_APP_PASSWORD'),
-    paths: csvToList(getConfig('VITE_NEXTCLOUD_FONT_PATHS')),
-  },
-});
+export const buildFontCatalogRequest = (overrides?: FontCatalogOverrides) => {
+  const nextcloudOverrides = overrides?.nextcloud || {};
+  return {
+    mode: overrides?.mode ?? ((getConfig('VITE_FONT_SOURCE_MODE') || 'hybrid') as FontSourceMode),
+    localRoots: overrides?.localRoots ?? csvToList(getConfig('VITE_LOCAL_FONT_ROOTS')),
+    nextcloud: {
+      baseUrl: nextcloudOverrides.baseUrl ?? getConfig('VITE_NEXTCLOUD_BASE_URL'),
+      username: nextcloudOverrides.username ?? getConfig('VITE_NEXTCLOUD_USERNAME'),
+      appPassword: nextcloudOverrides.appPassword ?? getConfig('VITE_NEXTCLOUD_APP_PASSWORD'),
+      paths: nextcloudOverrides.paths ?? csvToList(getConfig('VITE_NEXTCLOUD_FONT_PATHS')),
+    },
+  };
+};
 
-export async function fetchFontCatalog(signal?: AbortSignal): Promise<FontCatalogResponse> {
+export async function fetchFontCatalog(signal?: AbortSignal, overrides?: FontCatalogOverrides): Promise<FontCatalogResponse> {
   const base = (getConfig('VITE_MCP_BRIDGE_URL') || 'http://127.0.0.1:8787').replace(/\/$/, '');
   const res = await fetch(`${base}/fonts/catalog`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(buildFontCatalogRequest()),
+    body: JSON.stringify(buildFontCatalogRequest(overrides)),
     signal,
   });
   if (!res.ok) {
@@ -47,4 +61,3 @@ export async function fetchFontCatalog(signal?: AbortSignal): Promise<FontCatalo
   }
   return res.json();
 }
-

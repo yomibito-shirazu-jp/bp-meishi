@@ -27,12 +27,23 @@ describe('fontSources', () => {
     expect(req.nextcloud.paths).toEqual(['/Fonts/A', '/Fonts/B']);
   });
 
+  it('builds request with runtime overrides', () => {
+    const req = buildFontCatalogRequest({
+      mode: 'local',
+      localRoots: ['/tmp/fonts'],
+      nextcloud: { appPassword: 'runtime-secret' },
+    });
+    expect(req.mode).toBe('local');
+    expect(req.localRoots).toEqual(['/tmp/fonts']);
+    expect(req.nextcloud.appPassword).toBe('runtime-secret');
+  });
+
   it('fetches catalog from bridge endpoint', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ fonts: [{ id: '1' }], warnings: [] }),
     });
-    vi.stubGlobal('fetch', mockFetch as any);
+    vi.stubGlobal('fetch', mockFetch as unknown as typeof fetch);
     const data = await fetchFontCatalog();
     expect(mockFetch).toHaveBeenCalledWith(
       'http://127.0.0.1:8787/fonts/catalog',
@@ -41,4 +52,3 @@ describe('fontSources', () => {
     expect(data.fonts).toHaveLength(1);
   });
 });
-
