@@ -323,26 +323,37 @@ class MarkdownService:
 
             cmd += [md_path, "-o", pdf_path, "--format", req.format]
             
-            font_type = "mincho" if req.theme in ["academic", "business"] else "gothic"
-            if req.font_family_override == "serif": font_type = "mincho"
-            elif req.font_family_override == "sans-serif": font_type = "gothic"
+            # WebFont動的マッピング
+            override = req.font_family_override or ""
+            font_name = "Noto Sans JP"
+            font_url_name = "Noto+Sans+JP"
+            fallback_fonts = '"Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif'
+            
+            if "Shippori Mincho" in override or "Mincho" in override or "Serif" in override or req.theme in ["academic", "business"]:
+                font_name = override if override else "Shippori Mincho"
+                font_url_name = font_name.replace(" ", "+")
+                fallback_fonts = '"Hiragino Mincho ProN", "Yu Mincho", "MS PMincho", serif'
+            elif "Maru" in override:
+                font_name = override if override else "Zen Maru Gothic"
+                font_url_name = font_name.replace(" ", "+")
+                fallback_fonts = '"Hiragino Maru Gothic ProN", sans-serif'
+            elif "Zen Kaku Gothic" in override or "Gothic" in override or "Sans" in override:
+                font_name = override if override else "Zen Kaku Gothic New"
+                font_url_name = font_name.replace(" ", "+")
+                fallback_fonts = '"Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif'
+            elif override:
+                # Custom requested web font
+                font_name = override
+                font_url_name = font_name.replace(" ", "+")
             
             css_path = os.path.join(tmpdir, "custom.css")
             with open(css_path, "w", encoding="utf-8") as f:
-                if font_type == "mincho":
-                    font_css = """
-                    @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&display=swap');
-                    body, p, div, span, h1, h2, h3, h4, h5, h6 {
-                        font-family: 'Noto Serif JP', "Hiragino Mincho ProN", "Yu Mincho", "MS PMincho", serif !important;
-                    }
-                    """
-                else:
-                    font_css = """
-                    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap');
-                    body, p, div, span, h1, h2, h3, h4, h5, h6 {
-                        font-family: 'Noto Sans JP', "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif !important;
-                    }
-                    """
+                font_css = f"""
+                @import url('https://fonts.googleapis.com/css2?family={font_url_name}:wght@400;700&display=swap');
+                body, p, div, span, h1, h2, h3, h4, h5, h6 {{
+                    font-family: '{font_name}', {fallback_fonts} !important;
+                }}
+                """
                 
                 vertical_css = """
                 body {
@@ -365,7 +376,18 @@ class MarkdownService:
             with open(pdf_path, "rb") as f:
                 pdf_bytes = f.read()
 
-            return {"pdf_b64": base64.b64encode(pdf_bytes).decode(), "engine": "md2pdf-ja"}
+            import fitz
+            preview_pngs = []
+            with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+                for page in doc:
+                    pix = page.get_pixmap(dpi=150)
+                    preview_pngs.append(base64.b64encode(pix.tobytes("png")).decode())
+
+            return {
+                "pdf_b64": base64.b64encode(pdf_bytes).decode(),
+                "preview_pngs": preview_pngs,
+                "engine": "md2pdf-ja"
+            }
 
         except Exception as e:
             raise Exception(f"md2pdf-ja Build Failed: {e}")
@@ -994,13 +1016,33 @@ async def analyze_markdown(
         pdf_bytes = base64.b64decode(pdf_b64)
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-        # テキスト埋め込みの有無を判定
+        # テキスト埋め込みの有無とフォントを判定
         total_text_chars = 0
+        detected_fonts = set()
         for i in range(len(doc)):
             p = doc.load_page(i)
             total_text_chars += len(p.get_text("text").strip())
+            for f in doc.get_page_fonts(i):
+                if len(f) >= 4 and f[3]:
+                    detected_fonts.add(f[3].lower())
 
         has_embedded_text = total_text_chars > 50
+
+        # 検出されたフォント名から最適なWebFontをマッピング
+        detected_webfonts = []
+        for df in detected_fonts:
+            if "mincho" in df or "ryumin" in df or "serif" in df:
+                if "Shippori Mincho" not in detected_webfonts:
+                    detected_webfonts.append("Shippori Mincho")
+            elif "maru" in df:
+                if "Zen Maru Gothic" not in detected_webfonts:
+                    detected_webfonts.append("Zen Maru Gothic")
+            elif "gothic" in df or "sans" in df or "shingo" in df:
+                if "Zen Kaku Gothic New" not in detected_webfonts:
+                    detected_webfonts.append("Zen Kaku Gothic New")
+        
+        if not detected_webfonts:
+            detected_webfonts = ["Noto Sans JP"] # Fallback
 
         # ── Step 1: MarkItDown でテキスト抽出 ──
         markitdown_md = ""
@@ -1132,6 +1174,7 @@ async def analyze_markdown(
             "gemini_md": gemini_combined,
             "docai_md": docai_md,
             "sources_available": list(candidates.keys()),
+            "detected_webfonts": detected_webfonts,
         }
 
     except Exception as e:

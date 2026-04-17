@@ -215,6 +215,7 @@ export interface AnalyzeMarkdownResponse {
   gemini_md?: string;
   docai_md?: string;
   sources_available?: string[];
+  detected_webfonts?: string[];
 }
 
 export const analyzeMarkdown = async (pdfB64: string): Promise<AnalyzeMarkdownResponse> => {

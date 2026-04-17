@@ -249,7 +249,8 @@ const App: React.FC = () => {
   const [mdShowPreview, setMdShowPreview] = useState(true);
   const mdFileRef = useRef<HTMLInputElement>(null);
   const [mdTheme, setMdTheme] = useState<'default' | 'academic' | 'business'>('default');
-  const [mdFont, setMdFont] = useState<'auto' | 'serif' | 'sans-serif'>('auto');
+  const [mdDetectedFonts, setMdDetectedFonts] = useState<string[]>([]);
+  const [mdFont, setMdFont] = useState<string>('auto');
   const [mdFormat, setMdFormat] = useState<'A4' | 'A5' | 'B5' | 'Letter'>('A4');
   const [mdVertical, setMdVertical] = useState(false);
   const [mdAccuracy, setMdAccuracy] = useState(0);
@@ -1200,6 +1201,34 @@ const App: React.FC = () => {
     <div className="flex-1 overflow-auto" style={{ background: C.bg }}>
       <div className="max-w-6xl mx-auto p-8">
 
+        {/* Header and Upload actions (Always visible) */}
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-slate-800">ダッシュボード（一覧）</h2>
+          <div className="flex gap-2">
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all hover:opacity-90 text-white shadow-sm"
+              style={{ background: 'linear-gradient(135deg, #10b981, #34d399)' }}
+            >
+              <Upload size={16} /> ローカルから入稿
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const file = await pickPdfFromDrive();
+                  if (file) handleUpload(file);
+                } catch (err: any) {
+                  flash(err.message || 'Google Drive接続エラー', 'error');
+                }
+              }}
+              className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all hover:opacity-90 text-white shadow-sm"
+              style={{ background: C.gradientPrimary }}
+            >
+              <HardDrive size={16} /> Driveから入稿
+            </button>
+          </div>
+        </div>
+
         {/* Search bar */}
         <div className="mb-6">
           <div className="relative max-w-lg">
@@ -1229,7 +1258,6 @@ const App: React.FC = () => {
         {/* Empty state — URL入稿 */}
         {projects.length === 0 && !loading && (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">ダッシュボード（一覧）</h2>
             <div
               className="rounded-2xl p-1 animate-fadeIn"
             style={{ background: C.gradientPrimary }}
@@ -4735,6 +4763,13 @@ JSONのみ返してください。` },
                           }
                           setMdAccuracy(data.accuracy_score || 0);
                           setMdSourcesAvail(data.sources_available || []);
+                          if (data.detected_webfonts && data.detected_webfonts.length > 0) {
+                            setMdDetectedFonts(data.detected_webfonts);
+                            setMdFont(data.detected_webfonts[0]);
+                          } else {
+                            setMdDetectedFonts([]);
+                            setMdFont('auto');
+                          }
                           if (data.docai_md) setMdDocaiMd(data.docai_md);
                           const scoreEmoji = (data.accuracy_score || 0) >= 95 ? '🟢' : (data.accuracy_score || 0) >= 80 ? '🟡' : '🔴';
                           flash(`${scoreEmoji} 精度 ${data.accuracy_score || '?'}%（${data.source || 'auto'}）${data.verification_notes ? ' — ' + data.verification_notes : ''}`, 'ok');
@@ -4809,6 +4844,16 @@ JSONのみ返してください。` },
                             setMdPageMM([data.pages[0].width_mm, data.pages[0].height_mm]);
                             setMdPreviewPngs(data.pages.map(p => p.preview_b64));
                           }
+                          setMdAccuracy(data.accuracy_score || 0);
+                          setMdSourcesAvail(data.sources_available || []);
+                          if (data.detected_webfonts && data.detected_webfonts.length > 0) {
+                            setMdDetectedFonts(data.detected_webfonts);
+                            setMdFont(data.detected_webfonts[0]);
+                          } else {
+                            setMdDetectedFonts([]);
+                            setMdFont('auto');
+                          }
+                          if (data.docai_md) setMdDocaiMd(data.docai_md);
                           setMdOutputPdfB64(null);
                           setMdOutputPreviews([]);
                           flash(`変換完了`, 'ok');
@@ -4858,9 +4903,16 @@ JSONのみ返してください。` },
                         style={{ borderColor: C.border }}
                         title="フォント (自動検出でWebFont適用)"
                       >
-                        <option value="auto">自動 (自動判別)</option>
-                        <option value="serif">明朝 (Noto Serif)</option>
-                        <option value="sans-serif">ゴシック (Noto Sans)</option>
+                        <option value="auto">自動 (デフォルト)</option>
+                        {mdDetectedFonts.map((f, idx) => (
+                           <option key={idx} value={f}>{f} (検出)</option>
+                        ))}
+                        <option disabled>──────</option>
+                        <option value="Shippori Mincho">明朝 (Shippori)</option>
+                        <option value="Zen Kaku Gothic New">ゴシック (Zen)</option>
+                        <option value="Zen Maru Gothic">丸ゴシック (Zen)</option>
+                        <option value="Noto Serif JP">Noto Serif JP</option>
+                        <option value="Noto Sans JP">Noto Sans JP</option>
                       </select>
                       <select
                         value={mdFormat}
@@ -4903,7 +4955,7 @@ JSONのみ返してください。` },
                             { theme: mdTheme, format: mdFormat, vertical: mdVertical, font_family_override: mdFont === 'auto' ? undefined : mdFont },
                           );
                           setMdOutputPdfB64(data.pdf_b64);
-                          setMdOutputPreviews(data.preview_pngs);
+                          setMdOutputPreviews(data.preview_pngs || []);
                           flash('PDF生成完了！', 'ok');
                           // ダウンロード
                           const a = document.createElement('a');
