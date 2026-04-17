@@ -2309,6 +2309,13 @@ const App: React.FC = () => {
 
     const hasDraft = Object.keys(settingsDraft).some(k => settingsDraft[k as ConfigKey] !== '');
 
+    const getSettingsInputValue = (key: ConfigKey, sensitive: boolean): string => {
+      if (Object.prototype.hasOwnProperty.call(settingsDraft, key)) {
+        return settingsDraft[key] ?? '';
+      }
+      return sensitive ? '' : getConfig(key);
+    };
+
     const handleSaveAll = () => {
       Object.entries(settingsDraft).forEach(([k, v]) => {
         if (v !== undefined) saveConfig(k as ConfigKey, v as string);
@@ -2343,6 +2350,7 @@ const App: React.FC = () => {
           <div className="space-y-4">
             {fields.map(({ key, label, description, placeholder, sensitive, testFn }) => {
               const draftVal = settingsDraft[key] ?? '';
+              const inputVal = getSettingsInputValue(key, sensitive);
               const savedVal = getConfig(key);
               const isOverridden = getAllOverrides()[key] !== undefined;
               const testStatus = settingsTestStatus[key];
@@ -2403,7 +2411,7 @@ const App: React.FC = () => {
                   {/* Input */}
                   <input
                     type={sensitive ? 'password' : 'text'}
-                    value={draftVal}
+                    value={inputVal}
                     onChange={e => setSettingsDraft(prev => ({ ...prev, [key]: e.target.value }))}
                     placeholder={
                       savedVal
@@ -2481,6 +2489,7 @@ const App: React.FC = () => {
             <div className="space-y-4">
               {oauthFields.map(({ key, label, description, placeholder, sensitive }) => {
                 const draftVal = settingsDraft[key] ?? '';
+                const inputVal = getSettingsInputValue(key, sensitive);
                 const savedVal = getConfig(key);
                 const isOverridden = getAllOverrides()[key] !== undefined;
 
@@ -2513,7 +2522,7 @@ const App: React.FC = () => {
                     <p className="text-xs" style={{ color: C.muted }}>{description}</p>
                     <input
                       type={sensitive ? 'password' : 'text'}
-                      value={draftVal}
+                      value={inputVal}
                       onChange={e => setSettingsDraft(prev => ({ ...prev, [key]: e.target.value }))}
                       placeholder={
                         savedVal
@@ -2541,6 +2550,7 @@ const App: React.FC = () => {
             <div className="space-y-4">
               {docaiFields.map(({ key, label, description, placeholder, sensitive }) => {
                 const draftVal = settingsDraft[key] ?? '';
+                const inputVal = getSettingsInputValue(key, sensitive);
                 const savedVal = getConfig(key);
                 const isOverridden = getAllOverrides()[key] !== undefined;
 
@@ -2573,7 +2583,7 @@ const App: React.FC = () => {
                     <p className="text-xs" style={{ color: C.muted }}>{description}</p>
                     <input
                       type={sensitive ? 'password' : 'text'}
-                      value={draftVal}
+                      value={inputVal}
                       onChange={e => setSettingsDraft(prev => ({ ...prev, [key]: e.target.value }))}
                       placeholder={
                         savedVal
