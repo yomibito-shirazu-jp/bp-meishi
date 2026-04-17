@@ -7,6 +7,7 @@ import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
 import { pickPdfFromDrive, pickFileFromDrive } from './services/gdrive';
 import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
+import { fetchFontCatalog } from './services/fontSources';
 import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './services/detect';
 import { chunkManuscript, validateManuscript, submitFeedback } from './services/validate';
 import { getFontRenderStyle } from './utils';
@@ -4390,12 +4391,26 @@ JSONのみ返してください。` },
                 const proxyDraft = settingsDraft.VITE_ADB_PROXY_WS_URL ?? '';
                 const scriptDraft = settingsDraft.VITE_ADB_MCP_SCRIPT ?? '';
                 const appsDraft = settingsDraft.VITE_ADB_TARGET_APPS ?? '';
+                const fontModeDraft = settingsDraft.VITE_FONT_SOURCE_MODE ?? '';
+                const localRootsDraft = settingsDraft.VITE_LOCAL_FONT_ROOTS ?? '';
+                const nextcloudBaseDraft = settingsDraft.VITE_NEXTCLOUD_BASE_URL ?? '';
+                const nextcloudUserDraft = settingsDraft.VITE_NEXTCLOUD_USERNAME ?? '';
+                const nextcloudPassDraft = settingsDraft.VITE_NEXTCLOUD_APP_PASSWORD ?? '';
+                const nextcloudPathsDraft = settingsDraft.VITE_NEXTCLOUD_FONT_PATHS ?? '';
                 const bridgeUrl = bridgeDraft || getConfig('VITE_MCP_BRIDGE_URL') || 'http://127.0.0.1:8787';
                 const proxyUrl = proxyDraft || getConfig('VITE_ADB_PROXY_WS_URL') || 'ws://127.0.0.1:3001';
                 const scriptName = scriptDraft || getConfig('VITE_ADB_MCP_SCRIPT') || 'id-mcp.py';
                 const selectedAppsRaw = appsDraft || getConfig('VITE_ADB_TARGET_APPS') || 'id,ai,ps';
+                const fontMode = fontModeDraft || getConfig('VITE_FONT_SOURCE_MODE') || 'hybrid';
+                const localRoots = localRootsDraft || getConfig('VITE_LOCAL_FONT_ROOTS');
+                const nextcloudBase = nextcloudBaseDraft || getConfig('VITE_NEXTCLOUD_BASE_URL');
+                const nextcloudUser = nextcloudUserDraft || getConfig('VITE_NEXTCLOUD_USERNAME');
+                const nextcloudPaths = nextcloudPathsDraft || getConfig('VITE_NEXTCLOUD_FONT_PATHS');
                 const selectedApps = selectedAppsRaw.split(',').map(v => v.trim()).filter(v => adobeApps.some(app => app.id === v));
-                const hasDraft = !!(bridgeDraft || proxyDraft || scriptDraft || appsDraft);
+                const hasDraft = !!(
+                  bridgeDraft || proxyDraft || scriptDraft || appsDraft ||
+                  fontModeDraft || localRootsDraft || nextcloudBaseDraft || nextcloudUserDraft || nextcloudPassDraft || nextcloudPathsDraft
+                );
                 const allSet = !!(bridgeUrl && proxyUrl && selectedApps.length > 0);
                 const mcpCommands = adobeApps
                   .filter(app => selectedApps.includes(app.id))
@@ -4410,12 +4425,24 @@ JSONのみ返してください。` },
                   if (proxyDraft) saveConfig('VITE_ADB_PROXY_WS_URL', proxyDraft);
                   if (scriptDraft) saveConfig('VITE_ADB_MCP_SCRIPT', scriptDraft);
                   if (appsDraft) saveConfig('VITE_ADB_TARGET_APPS', appsDraft);
+                  if (fontModeDraft) saveConfig('VITE_FONT_SOURCE_MODE', fontModeDraft);
+                  if (localRootsDraft) saveConfig('VITE_LOCAL_FONT_ROOTS', localRootsDraft);
+                  if (nextcloudBaseDraft) saveConfig('VITE_NEXTCLOUD_BASE_URL', nextcloudBaseDraft);
+                  if (nextcloudUserDraft) saveConfig('VITE_NEXTCLOUD_USERNAME', nextcloudUserDraft);
+                  if (nextcloudPassDraft) saveConfig('VITE_NEXTCLOUD_APP_PASSWORD', nextcloudPassDraft);
+                  if (nextcloudPathsDraft) saveConfig('VITE_NEXTCLOUD_FONT_PATHS', nextcloudPathsDraft);
                   setSettingsDraft(prev => ({
                     ...prev,
                     VITE_MCP_BRIDGE_URL: '',
                     VITE_ADB_PROXY_WS_URL: '',
                     VITE_ADB_MCP_SCRIPT: '',
                     VITE_ADB_TARGET_APPS: '',
+                    VITE_FONT_SOURCE_MODE: '',
+                    VITE_LOCAL_FONT_ROOTS: '',
+                    VITE_NEXTCLOUD_BASE_URL: '',
+                    VITE_NEXTCLOUD_USERNAME: '',
+                    VITE_NEXTCLOUD_APP_PASSWORD: '',
+                    VITE_NEXTCLOUD_FONT_PATHS: '',
                   }));
                   flash('Adobe連携設定を保存しました', 'ok');
                 };
@@ -4429,6 +4456,19 @@ JSONのみ返してください。` },
                     setIndesignStatus({ ok: true, msg: 'MCPブリッジ接続成功（/health 応答あり）' });
                   } catch (err: any) {
                     setIndesignStatus({ ok: false, msg: err?.message || 'MCPブリッジに接続できませんでした' });
+                  } finally {
+                    setIndesignTesting(false);
+                  }
+                };
+
+                const handleFontCatalogTest = async () => {
+                  setIndesignTesting(true);
+                  setIndesignStatus(null);
+                  try {
+                    const data = await fetchFontCatalog(AbortSignal.timeout(8000));
+                    setIndesignStatus({ ok: true, msg: `フォント参照OK: ${data.fonts.length}件` });
+                  } catch (err: any) {
+                    setIndesignStatus({ ok: false, msg: err?.message || 'フォントカタログ取得に失敗しました' });
                   } finally {
                     setIndesignTesting(false);
                   }
@@ -4531,6 +4571,41 @@ JSONのみ返してください。` },
                         })}
                       </div>
                     </div>
+                    <div className="mt-4 pt-4 border-t" style={{ borderColor: C.border }}>
+                      <p className="text-[11px] font-semibold text-slate-600 mb-2">フォント参照モード</p>
+                      <select
+                        value={fontModeDraft}
+                        onChange={e => setSettingsDraft(prev => ({ ...prev, VITE_FONT_SOURCE_MODE: e.target.value }))}
+                        className="w-full px-3 py-2 rounded-lg border text-xs font-mono"
+                        style={{ borderColor: C.border }}
+                      >
+                        <option value="">現在: {fontMode}</option>
+                        <option value="local">local（ローカルフォルダ）</option>
+                        <option value="nextcloud">nextcloud（WebDAV）</option>
+                        <option value="hybrid">hybrid（両方）</option>
+                      </select>
+                      <div className="grid grid-cols-1 gap-2 mt-2">
+                        {[
+                          { key: 'VITE_LOCAL_FONT_ROOTS' as const, label: 'Local Font Roots (CSV)', value: localRootsDraft, placeholder: localRoots || '/Users/me/fonts,/Volumes/shared/fonts' },
+                          { key: 'VITE_NEXTCLOUD_BASE_URL' as const, label: 'Nextcloud Base URL', value: nextcloudBaseDraft, placeholder: nextcloudBase || 'https://cloud.example.com' },
+                          { key: 'VITE_NEXTCLOUD_USERNAME' as const, label: 'Nextcloud Username', value: nextcloudUserDraft, placeholder: nextcloudUser || 'user' },
+                          { key: 'VITE_NEXTCLOUD_APP_PASSWORD' as const, label: 'Nextcloud App Password', value: nextcloudPassDraft, placeholder: 'app-password' },
+                          { key: 'VITE_NEXTCLOUD_FONT_PATHS' as const, label: 'Nextcloud Font Paths (CSV)', value: nextcloudPathsDraft, placeholder: nextcloudPaths || '/Fonts,/Shared/Fonts' },
+                        ].map(item => (
+                          <div key={item.key}>
+                            <p className="text-[11px] font-semibold text-slate-600 mb-1">{item.label}</p>
+                            <input
+                              type={item.key === 'VITE_NEXTCLOUD_APP_PASSWORD' ? 'password' : 'text'}
+                              value={item.value}
+                              onChange={e => setSettingsDraft(prev => ({ ...prev, [item.key]: e.target.value }))}
+                              placeholder={item.placeholder}
+                              className="w-full px-3 py-2 rounded-lg border text-xs font-mono"
+                              style={{ borderColor: C.border }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                     <div className="mt-3 flex items-center gap-2">
                       <button
                         onClick={handleInDesignTest}
@@ -4539,6 +4614,14 @@ JSONのみ返してください。` },
                         style={{ borderColor: C.accentBorder, color: C.accent, background: C.accentBg }}
                       >
                         {indesignTesting ? '接続テスト中...' : '接続テスト'}
+                      </button>
+                      <button
+                        onClick={handleFontCatalogTest}
+                        disabled={indesignTesting || !bridgeUrl}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold border"
+                        style={{ borderColor: C.accentBorder, color: C.accent, background: C.accentBg }}
+                      >
+                        フォント参照テスト
                       </button>
                       {indesignStatus && (
                         <span className={`text-xs font-medium ${indesignStatus.ok ? 'text-green-700' : 'text-red-600'}`}>

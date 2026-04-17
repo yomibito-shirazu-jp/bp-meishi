@@ -1266,6 +1266,10 @@ FONT_PATHS = [
     "/app/fonts",                # Docker fallback
 ]
 
+_font_extra_paths = os.getenv("FONT_EXTRA_PATHS", "")
+if _font_extra_paths:
+    FONT_PATHS.extend([p.strip() for p in _font_extra_paths.split(",") if p.strip()])
+
 FONT_MAP = {
     "gothic":      "NotoSansJP.ttf",
     "light":       "NotoSansJP.ttf",
