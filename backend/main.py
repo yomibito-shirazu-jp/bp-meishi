@@ -25,6 +25,7 @@ except ImportError:
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from google.cloud import documentai
 from google.cloud import vision
@@ -254,6 +255,9 @@ class KumihanService:
         """非同期並列処理による超高速・高精度マッピング抽出"""
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         
+        # 縦型名刺（portrait）であっても無条件に90度回転させず、オリジナルの向きを維持する
+        # （これにより縦型名刺が正しく縦方向にレンダリング・OCRされるようになる）
+
         # 1. ページ画像生成 & Document AI 並列実行
         docai_task = asyncio.create_task(self.docai.analyze(pdf_bytes))
         vision_tasks = []
@@ -404,6 +408,24 @@ import httpx
 app = FastAPI(title="Kumihan API (Component & Parallelized)")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# Mount fonts directory
+fonts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fonts")
+if os.path.exists(fonts_dir):
+    app.mount("/fonts", StaticFiles(directory=fonts_dir), name="fonts")
+
+@app.get("/api/fonts")
+async def get_fonts():
+    """フロントエンドへローカルフォントの一覧を提供する"""
+    if not os.path.exists(fonts_dir):
+        return {"fonts": []}
+    
+    fonts = []
+    valid_exts = ('.otf', '.ttf', '.ttc', '.woff', '.woff2')
+    for f in os.listdir(fonts_dir):
+        if f.lower().endswith(valid_exts):
+            fonts.append(f)
+    return {"fonts": sorted(fonts)}
+
 @app.post("/analyze")
 async def analyze_endpoint(
     file: Optional[UploadFile] = File(None),
@@ -447,7 +469,19 @@ async def markdown_to_pdf_endpoint(req: MarkdownToPDFRequest):
 
 
 
+
+import os
+
+def _resolve_font(font_class: str):
+    fonts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fonts")
+    if font_class.endswith(('.otf', '.ttf', '.ttc', '.woff', '.woff2')):
+        path = os.path.join(fonts_dir, font_class)
+        if os.path.exists(path):
+            return path
+    return None
+
 @app.post("/rebuild")
+
 async def rebuild_pdf(req: dict[str, Any]):
     """PyMuPDF でテキストを置換して修正PDF + プレビュー PNG を返す"""
     pdf_b64 = req.get("pdf_b64", "")
