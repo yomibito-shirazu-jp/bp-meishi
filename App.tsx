@@ -112,6 +112,16 @@ const isUnprocessed = (p: CardProject): boolean => {
   return p.spans.every((s, i) => p.original_spans[i] && s.text === p.original_spans[i].text);
 };
 
+const hasVerticalSpans = (spans?: Span[]): boolean => {
+  if (!spans || spans.length === 0) return false;
+  return spans.some(s => s.writing_direction === 'vertical');
+};
+
+const isPortraitPage = (pageMM?: [number, number]): boolean => {
+  if (!pageMM || pageMM.length < 2) return false;
+  return pageMM[1] > pageMM[0];
+};
+
 /* ═══════════════════════════════════════════
    App Component
    ═══════════════════════════════════════════ */
@@ -1084,7 +1094,10 @@ const App: React.FC = () => {
   );
 
   // ── Project Card (shared between dashboard & inbox) ──
-  const renderProjectCard = (p: CardProject) => (
+  const renderProjectCard = (p: CardProject) => {
+    const verticalProject = hasVerticalSpans(p.spans);
+    const portraitPage = isPortraitPage(p.page_mm);
+    return (
     <div
       key={p.id}
       className="bg-white rounded-xl border shadow-sm hover:shadow-md transition-all overflow-hidden cursor-pointer group"
@@ -1094,7 +1107,7 @@ const App: React.FC = () => {
       <div className="flex items-center gap-5 p-5">
         {/* Thumbnail */}
         <div
-          className="w-28 h-16 rounded-lg border flex items-center justify-center overflow-hidden shrink-0"
+          className={`rounded-lg border flex items-center justify-center overflow-hidden shrink-0 ${portraitPage ? 'w-20 h-28' : 'w-28 h-16'}`}
           style={{ background: C.surface, borderColor: C.border }}
         >
           {p.original_png_b64 ? (
@@ -1121,6 +1134,11 @@ const App: React.FC = () => {
             {isUnprocessed(p) && (
               <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 shrink-0">
                 未処理
+              </span>
+            )}
+            {verticalProject && (
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full border shrink-0" style={{ color: '#b45309', background: '#fffbeb', borderColor: '#fcd34d' }}>
+                縦書き
               </span>
             )}
           </div>
@@ -1163,7 +1181,8 @@ const App: React.FC = () => {
         </div>
       </div>
     </div>
-  );
+    );
+  };
 
   const renderDashboard = () => (
     <div className="flex-1 overflow-auto" style={{ background: C.bg }}>
@@ -1909,11 +1928,14 @@ const App: React.FC = () => {
                         overflow: 'hidden',
                         fontFamily,
                         fontWeight,
-                        fontSize: `clamp(6px, ${s.h_pct * 0.65}vh, 48px)`,
+                        fontSize: `clamp(6px, ${(s.writing_direction === 'vertical' ? s.w_pct : s.h_pct) * 0.65}vh, 48px)`,
                         lineHeight: 1.1,
                         color: (isModified && fontsReady) ? '#1e293b' : 'transparent',
-                        whiteSpace: 'nowrap',
-                        padding: '0 2px',
+                        whiteSpace: s.writing_direction === 'vertical' ? 'normal' : 'nowrap',
+                        writingMode: s.writing_direction === 'vertical' ? 'vertical-rl' : 'horizontal-tb',
+                        textOrientation: s.writing_direction === 'vertical' ? 'upright' : 'mixed',
+                        padding: s.writing_direction === 'vertical' ? '2px 0' : '0 2px',
+                        justifyContent: s.writing_direction === 'vertical' ? 'flex-start' : 'center',
                       }}
                     >
                       {(isModified && fontsReady) && s.text}
