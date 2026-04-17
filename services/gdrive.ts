@@ -109,7 +109,7 @@ async function pickFromDrive(mimeTypes: string, title: string): Promise<File | n
   try {
     await Promise.all([loadPickerApi(), loadGis()]);
   } catch (err: any) {
-    throw new Error('Googleのスクリプト読み込みに失敗しました。広告ブロックが影響している場合があります。');
+    throw new Error('Googleのスクリプト読み込みに失敗しました。広告ブロックが影響している場合があります。', { cause: err });
   }
   
   const token = await getAccessToken();

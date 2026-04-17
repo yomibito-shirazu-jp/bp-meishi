@@ -32,30 +32,7 @@ export const PDFUpload: React.FC<PDFUploadProps> = ({ onProcessingComplete, onEr
     setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    
-    const files = Array.from(e.dataTransfer.files);
-    const pdfFile = files.find((file: File) => file.type === 'application/pdf');
-    
-    if (pdfFile) {
-      processPDF(pdfFile);
-    } else {
-      onError?.('Please upload a PDF file');
-    }
-  }, [onError]);
-
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type === 'application/pdf') {
-      processPDF(file);
-    } else {
-      onError?.('Please select a PDF file');
-    }
-  }, [onError]);
-
-  const processPDF = async (file: File) => {
+  const processPDF = useCallback(async (file: File) => {
     setIsProcessing(true);
     setProcessedFile(file);
     setResult(null);
@@ -83,7 +60,30 @@ export const PDFUpload: React.FC<PDFUploadProps> = ({ onProcessingComplete, onEr
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [onError, onProcessingComplete]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    
+    const files = Array.from(e.dataTransfer.files);
+    const pdfFile = files.find((file: File) => file.type === 'application/pdf');
+    
+    if (pdfFile) {
+      processPDF(pdfFile);
+    } else {
+      onError?.('Please upload a PDF file');
+    }
+  }, [onError, processPDF]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && file.type === 'application/pdf') {
+      processPDF(file);
+    } else {
+      onError?.('Please select a PDF file');
+    }
+  }, [onError, processPDF]);
 
   const resetUpload = () => {
     setProcessedFile(null);
