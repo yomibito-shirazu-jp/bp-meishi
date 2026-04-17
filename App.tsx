@@ -18,6 +18,7 @@ import {
   FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
   PenTool, ScanText, FileEdit, FileDiff, ShieldCheck, BookType,
   Newspaper, BookMarked, Monitor,
+  Copy,
 } from 'lucide-react';
 
 
@@ -183,6 +184,8 @@ const App: React.FC = () => {
   const [settingsDraft, setSettingsDraft] = useState<Partial<Record<ConfigKey, string>>>({});
   const [settingsTestStatus, setSettingsTestStatus] = useState<Partial<Record<ConfigKey, { ok: boolean; msg: string } | null>>>({});
   const [settingsTesting, setSettingsTesting] = useState<Partial<Record<ConfigKey, boolean>>>({});
+  const [indesignTesting, setIndesignTesting] = useState(false);
+  const [indesignStatus, setIndesignStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // ── Layout Detection ──
   const [detectPages, setDetectPages] = useState<Array<{ page_number: number; png_b64: string; page_mm: [number, number] }>>([]);
@@ -228,6 +231,15 @@ const App: React.FC = () => {
   const flash = (text: string, type: 'info' | 'ok' | 'error' = 'info') => {
     setToast({ text, type });
     if (type !== 'info') setTimeout(() => setToast(null), type === 'error' ? 6000 : 3000);
+  };
+
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      flash('コピーしました', 'ok');
+    } catch {
+      flash('コピーに失敗しました', 'error');
+    }
   };
 
   const editCount = spans.filter((s, i) => {
@@ -4321,6 +4333,61 @@ JSONのみ返してください。` },
         {view === AppState.AI_INDESIGN && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-4xl mx-auto space-y-6">
+              {(() => {
+                const adobeApps = [
+                  { id: 'id', label: 'InDesign', script: 'id-mcp.py', desc: '組版・テキスト流し込み' },
+                  { id: 'ai', label: 'Illustrator', script: 'ai-mcp.py', desc: 'ベクター編集・ロゴ調整' },
+                  { id: 'ps', label: 'Photoshop', script: 'ps-mcp.py', desc: '画像補正・合成' },
+                ] as const;
+                const bridgeDraft = settingsDraft.VITE_MCP_BRIDGE_URL ?? '';
+                const proxyDraft = settingsDraft.VITE_ADB_PROXY_WS_URL ?? '';
+                const scriptDraft = settingsDraft.VITE_ADB_MCP_SCRIPT ?? '';
+                const appsDraft = settingsDraft.VITE_ADB_TARGET_APPS ?? '';
+                const bridgeUrl = bridgeDraft || getConfig('VITE_MCP_BRIDGE_URL') || 'http://127.0.0.1:8787';
+                const proxyUrl = proxyDraft || getConfig('VITE_ADB_PROXY_WS_URL') || 'ws://127.0.0.1:3001';
+                const scriptName = scriptDraft || getConfig('VITE_ADB_MCP_SCRIPT') || 'id-mcp.py';
+                const selectedAppsRaw = appsDraft || getConfig('VITE_ADB_TARGET_APPS') || 'id,ai,ps';
+                const selectedApps = selectedAppsRaw.split(',').map(v => v.trim()).filter(v => adobeApps.some(app => app.id === v));
+                const hasDraft = !!(bridgeDraft || proxyDraft || scriptDraft || appsDraft);
+                const allSet = !!(bridgeUrl && proxyUrl && selectedApps.length > 0);
+                const mcpCommands = adobeApps
+                  .filter(app => selectedApps.includes(app.id))
+                  .map(app => ({
+                    title: `${app.label} MCP 起動`,
+                    cmd: `cd mcp/adb-mcp-main/adb-mcp-main/mcp && uv run ${app.script}`,
+                  }));
+                const proxyCmd = 'cd mcp/adb-mcp-main/adb-mcp-main/adb-proxy-socket && node proxy.js';
+
+                const handleSaveInDesignConfig = () => {
+                  if (bridgeDraft) saveConfig('VITE_MCP_BRIDGE_URL', bridgeDraft);
+                  if (proxyDraft) saveConfig('VITE_ADB_PROXY_WS_URL', proxyDraft);
+                  if (scriptDraft) saveConfig('VITE_ADB_MCP_SCRIPT', scriptDraft);
+                  if (appsDraft) saveConfig('VITE_ADB_TARGET_APPS', appsDraft);
+                  setSettingsDraft(prev => ({
+                    ...prev,
+                    VITE_MCP_BRIDGE_URL: '',
+                    VITE_ADB_PROXY_WS_URL: '',
+                    VITE_ADB_MCP_SCRIPT: '',
+                    VITE_ADB_TARGET_APPS: '',
+                  }));
+                  flash('Adobe連携設定を保存しました', 'ok');
+                };
+
+                const handleInDesignTest = async () => {
+                  setIndesignTesting(true);
+                  setIndesignStatus(null);
+                  try {
+                    const res = await fetch(`${bridgeUrl.replace(/\/$/, '')}/health`, { signal: AbortSignal.timeout(5000) });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    setIndesignStatus({ ok: true, msg: 'MCPブリッジ接続成功（/health 応答あり）' });
+                  } catch (err: any) {
+                    setIndesignStatus({ ok: false, msg: err?.message || 'MCPブリッジに接続できませんでした' });
+                  } finally {
+                    setIndesignTesting(false);
+                  }
+                };
+
+                return (
               <div className="rounded-2xl p-1" style={{ background: 'linear-gradient(135deg, #f59e0b, #fbbf24)' }}>
                 <div className="bg-white rounded-[14px] p-8">
                   <div className="flex items-center gap-3 mb-4">
@@ -4333,15 +4400,14 @@ JSONのみ返してください。` },
                     </div>
                   </div>
                   <p className="text-sm text-gray-600 mb-6 leading-relaxed">
-                    ローカルPCにインストールされたAdobe InDesignに接続し、<br/>
-                    組版指示書に基づいて自動でドキュメント生成・テキスト流し込み・スタイル適用を実行します。
+                    ローカルPCにインストールされたAdobe InDesign / Illustrator / Photoshop に接続し、<br/>
+                    MCP経由でドキュメント編集・ベクター調整・画像処理を自動実行します。
                   </p>
-                  <div className="grid grid-cols-2 gap-3 mb-6">
+                  <div className="grid grid-cols-3 gap-3 mb-6">
                     {[
-                      { label: 'ドキュメント新規作成', desc: '判型・マージン・段組みを自動設定' },
-                      { label: 'テキスト流し込み', desc: '原稿テキストをフレームに自動配置' },
-                      { label: 'スタイル適用', desc: '見出し・本文・キャプションのスタイル' },
-                      { label: 'PDF書き出し', desc: 'PDF/X-4入稿用データを自動生成' },
+                      { label: 'InDesign', desc: '組版・テキスト流し込み・PDF書き出し' },
+                      { label: 'Illustrator', desc: 'ロゴや図版のAI編集・整形' },
+                      { label: 'Photoshop', desc: '画像補正・リサイズ・合成' },
                     ].map(cmd => (
                       <div key={cmd.label} className="border rounded-xl p-4 hover:border-amber-300 transition-all cursor-pointer" style={{ borderColor: C.border }}>
                         <p className="text-sm font-bold text-gray-800">{cmd.label}</p>
@@ -4349,12 +4415,126 @@ JSONのみ返してください。` },
                       </div>
                     ))}
                   </div>
-                  <div className="flex items-center gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200">
-                    <div className="w-3 h-3 rounded-full bg-red-400 animate-pulse" />
-                    <span className="text-sm text-amber-800 font-medium">InDesign未接続 — ローカルMCPサーバーを起動してください</span>
+                  <div className="rounded-xl border p-4 mb-4" style={{ borderColor: C.border }}>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <p className="text-sm font-bold text-slate-800">この画面で設定完結（ADB MCP）</p>
+                      {hasDraft && (
+                        <button
+                          onClick={handleSaveInDesignConfig}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
+                          style={{ background: C.accent }}
+                        >
+                          保存
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500 mb-3">
+                      adb-mcp の起動に必要な URL / スクリプト名をここで設定できます。
+                    </p>
+                    <div className="space-y-3">
+                      {[
+                        { key: 'VITE_MCP_BRIDGE_URL' as const, label: 'MCP Bridge URL', value: bridgeDraft, placeholder: bridgeUrl },
+                        { key: 'VITE_ADB_PROXY_WS_URL' as const, label: 'ADB Proxy WS URL', value: proxyDraft, placeholder: proxyUrl },
+                        { key: 'VITE_ADB_MCP_SCRIPT' as const, label: 'MCP Script', value: scriptDraft, placeholder: scriptName },
+                      ].map(item => (
+                        <div key={item.key}>
+                          <p className="text-[11px] font-semibold text-slate-600 mb-1">{item.label}</p>
+                          <input
+                            type="text"
+                            value={item.value}
+                            onChange={e => setSettingsDraft(prev => ({ ...prev, [item.key]: e.target.value }))}
+                            placeholder={item.placeholder}
+                            className="w-full px-3 py-2 rounded-lg border text-xs font-mono"
+                            style={{ borderColor: C.border }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3">
+                      <p className="text-[11px] font-semibold text-slate-600 mb-1">対象アプリ (CSV: id,ai,ps)</p>
+                      <input
+                        type="text"
+                        value={appsDraft}
+                        onChange={e => setSettingsDraft(prev => ({ ...prev, VITE_ADB_TARGET_APPS: e.target.value }))}
+                        placeholder={selectedAppsRaw}
+                        className="w-full px-3 py-2 rounded-lg border text-xs font-mono"
+                        style={{ borderColor: C.border }}
+                      />
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        {adobeApps.map(app => {
+                          const active = selectedApps.includes(app.id);
+                          return (
+                            <button
+                              key={app.id}
+                              onClick={() => {
+                                const current = selectedApps;
+                                const next = active ? current.filter(v => v !== app.id) : [...current, app.id];
+                                setSettingsDraft(prev => ({ ...prev, VITE_ADB_TARGET_APPS: next.join(',') }));
+                              }}
+                              className="px-2.5 py-1 rounded-full text-[11px] font-semibold border"
+                              style={{
+                                borderColor: active ? C.accent : C.border,
+                                background: active ? C.accentBg : 'white',
+                                color: active ? C.accent : C.textSec,
+                              }}
+                            >
+                              {app.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        onClick={handleInDesignTest}
+                        disabled={indesignTesting || !allSet}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold border"
+                        style={{ borderColor: C.accentBorder, color: C.accent, background: C.accentBg }}
+                      >
+                        {indesignTesting ? '接続テスト中...' : '接続テスト'}
+                      </button>
+                      {indesignStatus && (
+                        <span className={`text-xs font-medium ${indesignStatus.ok ? 'text-green-700' : 'text-red-600'}`}>
+                          {indesignStatus.msg}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-2 mb-4">
+                    {[
+                      { title: '1) Proxy 起動', cmd: proxyCmd },
+                      ...mcpCommands.map((row, idx) => ({ title: `${idx + 2}) ${row.title}`, cmd: row.cmd })),
+                    ].map(row => (
+                      <div key={row.title} className="bg-slate-50 border rounded-xl p-3" style={{ borderColor: C.border }}>
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <p className="text-xs font-semibold text-slate-700">{row.title}</p>
+                          <button onClick={() => copyText(row.cmd)} className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1">
+                            <Copy size={12} /> コピー
+                          </button>
+                        </div>
+                        <code className="text-[11px] font-mono text-slate-700 break-all">{row.cmd}</code>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="bg-slate-50 border rounded-xl p-4 mb-4" style={{ borderColor: C.border }}>
+                    <p className="text-xs font-bold text-slate-700 mb-2">MCP起動手順</p>
+                    <ol className="list-decimal pl-4 space-y-1 text-xs text-slate-600">
+                      <li>Adobeアプリ（InDesign / Illustrator / Photoshop）を起動する</li>
+                      <li>Proxy を起動する（上の「1) Proxy 起動」コマンド）</li>
+                      <li>使うアプリ分の MCP スクリプトを起動する（上の 2) 以降）</li>
+                      <li>「接続テスト」を押して /health 応答を確認する</li>
+                    </ol>
+                  </div>
+                  <div className={`flex items-center gap-3 p-4 rounded-xl border ${indesignStatus?.ok ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
+                    <div className={`w-3 h-3 rounded-full ${indesignStatus?.ok ? 'bg-green-500' : 'bg-red-400 animate-pulse'}`} />
+                    <span className={`text-sm font-medium ${indesignStatus?.ok ? 'text-green-800' : 'text-amber-800'}`}>
+                      {indesignStatus?.ok ? 'InDesign接続準備OK' : 'InDesign未接続 — ローカルMCPサーバーを起動してください'}
+                    </span>
                   </div>
                 </div>
               </div>
+                );
+              })()}
             </div>
           </div>
         )}
