@@ -1,5 +1,40 @@
 import { Span, CardProject } from './types';
 
+export interface FontRenderStyle {
+  fontFamily: string;
+  fontWeight: number;
+}
+
+export const getFontRenderStyle = (
+  fontClass: Span['font_class'] | 'markdown_body' | 'markdown_heading' = 'gothic',
+): FontRenderStyle => {
+  if (fontClass === 'mincho' || fontClass === 'markdown_heading') {
+    return {
+      fontFamily: "'Noto Serif JP', 'Hiragino Mincho ProN', serif",
+      fontWeight: 400,
+    };
+  }
+
+  if (fontClass === 'light') {
+    return {
+      fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+      fontWeight: 300,
+    };
+  }
+
+  if (fontClass === 'gothic_bold') {
+    return {
+      fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+      fontWeight: 700,
+    };
+  }
+
+  return {
+    fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+    fontWeight: 400,
+  };
+};
+
 export const getCompanyName = (spans: Span[]): string => {
   if (!spans || spans.length === 0) return '未分類';
   const gothic = spans.filter(s => s.font_class === 'gothic' || s.font_class === 'gothic_bold');

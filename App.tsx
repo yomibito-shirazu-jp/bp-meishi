@@ -9,6 +9,7 @@ import { pickPdfFromDrive, pickFileFromDrive } from './services/gdrive';
 import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
 import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './services/detect';
 import { chunkManuscript, validateManuscript, submitFeedback } from './services/validate';
+import { getFontRenderStyle } from './utils';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
@@ -137,6 +138,10 @@ const App: React.FC = () => {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
+  const [fontsReady, setFontsReady] = useState(() => {
+    if (typeof document === 'undefined') return true;
+    return !('fonts' in document);
+  });
   const [previewTab, setPreviewTab] = useState<'edit' | 'original' | 'rebuilt'>('edit');
   const [fieldCategories, setFieldCategories] = useState<Record<string, string>>({});
   const [jobInstruction, setJobInstruction] = useState<JobInstruction | null>(null);
@@ -223,6 +228,27 @@ const App: React.FC = () => {
   const [mdAccuracy, setMdAccuracy] = useState(0);
   const [mdSourcesAvail, setMdSourcesAvail] = useState<string[]>([]);
   const [mdDocaiMd, setMdDocaiMd] = useState('');
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || !('fonts' in document)) {
+      setFontsReady(true);
+      return;
+    }
+
+    let cancelled = false;
+    setFontsReady(false);
+    document.fonts.ready
+      .then(() => {
+        if (!cancelled) setFontsReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setFontsReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ── Derived ──
   const flash = (text: string, type: 'info' | 'ok' | 'error' = 'info') => {
@@ -1836,11 +1862,7 @@ const App: React.FC = () => {
                   const changed = originalSpans[i] && s.text !== originalSpans[i].text;
                   const posChanged = originalSpans[i] && (s.x_pct !== originalSpans[i].x_pct || s.y_pct !== originalSpans[i].y_pct);
                   const isModified = changed || posChanged;
-                  const fontFamily = s.font_class === 'mincho'
-                    ? "'Noto Serif JP', 'Hiragino Mincho ProN', serif"
-                    : "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif";
-                  const fontWeight = s.font_class === 'gothic_bold' ? 700
-                    : s.font_class === 'light' ? 300 : 400;
+                  const { fontFamily, fontWeight } = getFontRenderStyle(s.font_class);
                   return (
                     <div
                       key={s.id}
@@ -1877,12 +1899,12 @@ const App: React.FC = () => {
                         fontWeight,
                         fontSize: `clamp(6px, ${s.h_pct * 0.65}vh, 48px)`,
                         lineHeight: 1.1,
-                        color: isModified ? '#1e293b' : 'transparent',
+                        color: (isModified && fontsReady) ? '#1e293b' : 'transparent',
                         whiteSpace: 'nowrap',
                         padding: '0 2px',
                       }}
                     >
-                      {isModified && s.text}
+                      {(isModified && fontsReady) && s.text}
                     </div>
                   );
                 })}
@@ -3481,7 +3503,32 @@ JSONのみ返してください。` },
                 </button>
               </div>
               <div className="prose prose-sm max-w-none text-slate-700 leading-relaxed bg-slate-50 rounded-xl p-4 border" style={{ borderColor: C.border }}>
-                <ReactMarkdown>{toolOutput}</ReactMarkdown>
+                <ReactMarkdown
+                  components={{
+                    h1: ({ node, ...props }) => {
+                      const style = getFontRenderStyle('markdown_heading');
+                      return <h1 {...props} style={{ fontFamily: style.fontFamily, fontWeight: style.fontWeight }} />;
+                    },
+                    h2: ({ node, ...props }) => {
+                      const style = getFontRenderStyle('markdown_heading');
+                      return <h2 {...props} style={{ fontFamily: style.fontFamily, fontWeight: style.fontWeight }} />;
+                    },
+                    h3: ({ node, ...props }) => {
+                      const style = getFontRenderStyle('markdown_heading');
+                      return <h3 {...props} style={{ fontFamily: style.fontFamily, fontWeight: style.fontWeight }} />;
+                    },
+                    p: ({ node, ...props }) => {
+                      const style = getFontRenderStyle('markdown_body');
+                      return <p {...props} style={{ fontFamily: style.fontFamily, fontWeight: style.fontWeight }} />;
+                    },
+                    li: ({ node, ...props }) => {
+                      const style = getFontRenderStyle('markdown_body');
+                      return <li {...props} style={{ fontFamily: style.fontFamily, fontWeight: style.fontWeight }} />;
+                    },
+                  }}
+                >
+                  {toolOutput}
+                </ReactMarkdown>
               </div>
             </div>
           )}
