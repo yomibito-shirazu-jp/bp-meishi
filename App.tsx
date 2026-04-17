@@ -519,9 +519,9 @@ const App: React.FC = () => {
       // 置換失敗の通知
       const skipped = (data as any).skipped_edits;
       if (skipped && skipped.length > 0) {
-        flash(`${data.changes_applied}件適用 / ${skipped.length}件スキップ（元テキスト不一致）`, 'error');
+        flash(`${(data as any).changes_applied}件適用 / ${skipped.length}件スキップ（元テキスト不一致）`, 'error');
       } else {
-        flash(`再構築完了（${data.changes_applied}件適用）`, 'ok');
+        flash(`再構築完了（${(data as any).changes_applied}件適用）`, 'ok');
       }
     } catch (e: any) {
       flash(`再構築エラー: ${e.message}`, 'error');
