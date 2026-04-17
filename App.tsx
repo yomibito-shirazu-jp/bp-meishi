@@ -1830,62 +1830,79 @@ const App: React.FC = () => {
                 onClick={() => { if (!draggingId) setSelectedId(null); }}
               >
                 <img src={originalPng} alt="プレビュー" className="w-full h-full object-contain" draggable={false} />
-                {showOverlay && spans.map((s, i) => {
-                  const isActive = selectedId === s.id;
-                  const isDragging = draggingId === s.id;
-                  const changed = originalSpans[i] && s.text !== originalSpans[i].text;
-                  const posChanged = originalSpans[i] && (s.x_pct !== originalSpans[i].x_pct || s.y_pct !== originalSpans[i].y_pct);
-                  const isModified = changed || posChanged;
-                  const fontFamily = s.font_class === 'mincho'
-                    ? "'Noto Serif JP', 'Hiragino Mincho ProN', serif"
-                    : "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif";
-                  const fontWeight = s.font_class === 'gothic_bold' ? 700
-                    : s.font_class === 'light' ? 300 : 400;
-                  return (
-                    <div
-                      key={s.id}
-                      onMouseDown={e => handleOverlayMouseDown(e, s.id)}
-                      onClick={e => { e.stopPropagation(); if (!draggingId) setSelectedId(isActive ? null : s.id); }}
-                      title={`${s.text}\nドラッグで移動`}
-                      style={{
-                        position: 'absolute',
-                        left: `${s.x_pct}%`,
-                        top: `${s.y_pct}%`,
-                        width: `${s.w_pct}%`,
-                        height: `${s.h_pct}%`,
-                        cursor: isDragging ? 'grabbing' : 'grab',
-                        border: isActive
-                          ? '2px solid #10b981'
-                          : isModified
-                            ? '2px dashed #10b981'
-                            : '1px solid rgba(255,255,255,0.15)',
-                        background: isDragging
-                          ? 'rgba(16,185,129,0.25)'
-                          : isActive
-                            ? 'rgba(16,185,129,0.1)'
+                {(() => {
+                  const renderedHeightPx = previewImgRef.current?.getBoundingClientRect().height ?? 0;
+                  const pageH_pt = (pageMM[1] / 25.4) * 72;
+                  const pxPerPt = pageH_pt > 0 ? renderedHeightPx / pageH_pt : 0;
+                  return showOverlay && spans.map((s, i) => {
+                    const fontSizePx = Math.max(1, s.size_pt * pxPerPt);
+                    const isVertical = s.writing_direction === 'vertical';
+                    const lineHeight = isVertical ? 1.0 : 1.1;
+                    const letterSpacing = isVertical ? '0.06em' : '0em';
+                    const writingMode = isVertical ? 'vertical-rl' : 'horizontal-tb';
+                    const textOrientation = isVertical ? 'upright' : 'mixed';
+                    const isActive = selectedId === s.id;
+                    const isDragging = draggingId === s.id;
+                    const changed = originalSpans[i] && s.text !== originalSpans[i].text;
+                    const posChanged = originalSpans[i] && (s.x_pct !== originalSpans[i].x_pct || s.y_pct !== originalSpans[i].y_pct);
+                    const isModified = changed || posChanged;
+                    const fontFamily = s.font_class === 'mincho'
+                      ? "'Noto Serif JP', 'Hiragino Mincho ProN', serif"
+                      : "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif";
+                    const fontWeight = s.font_class === 'gothic_bold' ? 700
+                      : s.font_class === 'light' ? 300 : 400;
+                    return (
+                      <div
+                        key={s.id}
+                        onMouseDown={e => handleOverlayMouseDown(e, s.id)}
+                        onClick={e => { e.stopPropagation(); if (!draggingId) setSelectedId(isActive ? null : s.id); }}
+                        title={`${s.text}\nドラッグで移動`}
+                        style={{
+                          position: 'absolute',
+                          left: `${s.x_pct}%`,
+                          top: `${s.y_pct}%`,
+                          width: `${s.w_pct}%`,
+                          height: `${s.h_pct}%`,
+                          cursor: isDragging ? 'grabbing' : 'grab',
+                          border: isActive
+                            ? '2px solid #10b981'
                             : isModified
-                              ? 'rgba(255,255,255,0.92)'
-                              : 'transparent',
-                        borderRadius: '2px',
-                        transition: isDragging ? 'none' : 'all 0.15s',
-                        zIndex: isDragging ? 30 : isActive ? 20 : 10,
-                        userSelect: 'none',
-                        display: 'flex',
-                        alignItems: 'center',
-                        overflow: 'hidden',
-                        fontFamily,
-                        fontWeight,
-                        fontSize: `clamp(6px, ${s.h_pct * 0.65}vh, 48px)`,
-                        lineHeight: 1.1,
-                        color: isModified ? '#1e293b' : 'transparent',
-                        whiteSpace: 'nowrap',
-                        padding: '0 2px',
-                      }}
-                    >
-                      {isModified && s.text}
-                    </div>
-                  );
-                })}
+                              ? '2px dashed #10b981'
+                              : '1px solid rgba(255,255,255,0.15)',
+                          background: isDragging
+                            ? 'rgba(16,185,129,0.25)'
+                            : isActive
+                              ? 'rgba(16,185,129,0.1)'
+                              : isModified
+                                ? 'rgba(255,255,255,0.92)'
+                                : 'transparent',
+                          borderRadius: '2px',
+                          transition: isDragging ? 'none' : 'all 0.15s',
+                          zIndex: isDragging ? 30 : isActive ? 20 : 10,
+                          userSelect: 'none',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: isVertical ? 'center' : 'flex-start',
+                          overflow: 'hidden',
+                          fontFamily,
+                          fontWeight,
+                          fontSize: `${fontSizePx}px`,
+                          lineHeight,
+                          letterSpacing,
+                          color: isModified ? '#1e293b' : 'transparent',
+                          whiteSpace: isVertical ? 'normal' : 'nowrap',
+                          padding: isVertical ? '2px 0' : '0 2px',
+                        }}
+                      >
+                        {isModified && (
+                          <span style={{ writingMode, textOrientation }}>
+                            {s.text}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             ) : (
               <div className="text-sm" style={{ color: '#6b6b8a' }}>プレビューなし</div>
