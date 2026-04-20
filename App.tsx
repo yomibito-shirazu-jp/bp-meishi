@@ -9,7 +9,12 @@ import { pickPdfFromDrive, pickFileFromDrive } from './services/gdrive';
 import { getConfig, saveConfig, getAllOverrides, ConfigKey } from './services/config';
 import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './services/detect';
 import { chunkManuscript, validateManuscript, submitFeedback } from './services/validate';
-import { getFontRenderStyle } from './utils';
+import { getFontRenderStyle, printCardAsPdf, REGISTERED_FONT_FAMILIES } from './utils';
+import { exportCardAsPdfBytes, downloadPdfBytes } from './services/pdfExport';
+import ProgressOverlay from './components/ProgressOverlay';
+import DetectionReview from './components/DetectionReview';
+import VerifyScreen from './components/VerifyScreen';
+import { SpanState, createSpanState, applySpanEdit } from './services/spanStore';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
   Download, LayoutDashboard, CreditCard, ChevronLeft,
@@ -19,7 +24,7 @@ import {
   FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
   PenTool, ScanText, FileEdit, FileDiff, ShieldCheck, BookType,
   Newspaper, BookMarked, Monitor,
-  Copy,
+  Copy, Share2,
 } from 'lucide-react';
 
 
@@ -157,9 +162,16 @@ const App: React.FC = () => {
   const [fieldCategories, setFieldCategories] = useState<Record<string, string>>({});
   const [jobInstruction, setJobInstruction] = useState<JobInstruction | null>(null);
 
+  // ── Detection Review (全件確認) ──
+  const [showDetectionReview, setShowDetectionReview] = useState(false);
+
+  // ── VERIFY フェーズ: Step 2 (情報抽出) の完了定義として HITL 確定を挟む ──
+  // 確定済 (verified/manual) の span は EDIT 以降で immutable として扱う
+  const [verifySpanState, setVerifySpanState] = useState<SpanState>(() => createSpanState([]));
+
   // ── Images ──
   const [pageImages, setPageImages] = useState<ImageInfo[]>([]);
-  const [imageReplacements, setImageReplacements] = useState<Record<string, { xref: number; data_b64: string; mime_type: string }>>({});
+  const [imageReplacements, setImageReplacements] = useState<Record<string, { xref: number; data_b64: string; mime_type: string; rect?: [number, number, number, number] }>>({});
   const imgFileRef = useRef<HTMLInputElement>(null);
   const [replacingImageId, setReplacingImageId] = useState<string | null>(null);
 
@@ -278,9 +290,64 @@ const App: React.FC = () => {
     }
   };
 
-  const editCount = spans.filter((s, i) => {
-    if (!originalSpans[i]) return false;
-    const o = originalSpans[i];
+  const originalSpanById = useMemo(
+    () => new Map(originalSpans.map(s => [s.id, s])),
+    [originalSpans],
+  );
+
+  // ── 装飾ウォーターマーク自動除外 ──
+  // カード面積の 1/4 以上 (w_pct * h_pct > 2500) かつ 30pt 超の span は
+  // 背景透かし文字とみなし、フィールド一覧・プレビュー・PDF 出力すべてから除く
+  const isDecorationSpan = (s: Span): boolean =>
+    (s.w_pct * s.h_pct) > 2500 && s.size_pt > 30;
+
+  const visibleSpans = useMemo(
+    () => spans.filter(s => !isDecorationSpan(s)),
+    [spans],
+  );
+
+  // 検出要素の総数と未確認数（loss-prevention 用の安全ゲート）
+  // 優先順位: span.status (VERIFY フローが設定) > localStorage (DetectionReview の旧フロー)
+  const detectionTotal = spans.length + pageImages.length + layoutBlocks.length + barcodes.length;
+  const verifiedIdsLS = useMemo<Set<string>>(() => {
+    if (!editingProjectId) return new Set();
+    try {
+      const raw = JSON.parse(localStorage.getItem('bp_meishi_detection_verified') || '{}') as Record<string, string[]>;
+      return new Set(raw[editingProjectId] || []);
+    } catch { return new Set(); }
+  }, [editingProjectId, showDetectionReview]);
+  const unverifiedCount = useMemo(() => {
+    let n = 0;
+    // spans: status が 'verified' または 'manual' なら確定扱い。
+    //        未設定 / 'inferred' は localStorage もフォールバック参照。
+    spans.forEach(s => {
+      if (s.status === 'verified' || s.status === 'manual') return;
+      if (verifiedIdsLS.has(s.id)) return;
+      n++;
+    });
+    // images / blocks / barcodes は span.status を持たないので localStorage のみ
+    pageImages.forEach(im => { if (!verifiedIdsLS.has(im.id)) n++; });
+    layoutBlocks.forEach(b => { if (!verifiedIdsLS.has(b.id)) n++; });
+    barcodes.forEach(bc => { if (!verifiedIdsLS.has(bc.id)) n++; });
+    return n;
+  }, [verifiedIdsLS, spans, pageImages, layoutBlocks, barcodes]);
+
+  // 「出力系」操作で未確認要素があれば、一度だけ確認ダイアログを挟む
+  const ensureVerifiedOrConfirm = (actionLabel: string): boolean => {
+    if (unverifiedCount === 0) return true;
+    const ok = window.confirm(
+      `⚠️ ${unverifiedCount}件の検出要素が未確認です。\n\n`
+      + `名刺の誤情報は刷り直し・誤配などの損失につながります。\n`
+      + `「検出一覧」で内容をすべてチェックしてから ${actionLabel} してください。\n\n`
+      + `それでも続行しますか？`
+    );
+    if (!ok) setShowDetectionReview(true);
+    return ok;
+  };
+
+  const editCount = spans.filter(s => {
+    const o = originalSpanById.get(s.id);
+    if (!o) return true; // AI 追加など、originalに無いスパンは常に「変更あり」
     return s.text !== o.text || s.font_class !== o.font_class || s.size_pt !== o.size_pt
       || s.x_pct !== o.x_pct || s.y_pct !== o.y_pct;
   }).length;
@@ -457,6 +524,7 @@ const App: React.FC = () => {
       // Load first page with AI correction
       console.log('[handleUpload] loading page 0, spans:', pages[0]?.spans?.length);
       await loadPage(pages, 0);
+      // 編集画面へ直行（VERIFY フェーズは廃止）
       setView(AppState.EDIT);
 
       if (pages.length > 1) {
@@ -519,6 +587,7 @@ const App: React.FC = () => {
         const ov: SpanOverride = {
           origin: s.origin,
           size_pt: s.size_pt,
+          font_original: s.font_original,
           writing_direction: s.writing_direction || 'horizontal',
           x_pct: s.x_pct,
           y_pct: s.y_pct,
@@ -537,6 +606,7 @@ const App: React.FC = () => {
           bbox: s.bbox,
           origin: s.origin,
           font_class: s.font_class,
+          font_original: s.font_original,
           size_pt: s.size_pt,
         };
       }
@@ -573,6 +643,58 @@ const App: React.FC = () => {
       }
     } catch (e: any) {
       flash(`再構築エラー: ${e.message}`, 'error');
+    }
+  };
+
+  // ── 再現PDF出力（クライアント側で完結） ──
+  // 元PDFや PyMuPDF に依存せず、フロントエンドで選んだフォント・位置・色で
+  // 新規PDFを生成する。出力は埋め込みフォント・ベクターテキストの正しいPDF。
+  // 「再現」モード: 背景PNGなし（純粋なベクターPDF、印刷入稿可）
+  // 「編集」モード: 元PNGを背景に敷いて差分確認
+  const handleClientPdfExport = async (withOriginalBg: boolean) => {
+    if (spans.length === 0) {
+      flash('編集フィールドがありません', 'error');
+      return;
+    }
+    flash('PDF生成中...', 'info');
+    try {
+      const nameSpan = visibleSpans.find(s => s.font_class === 'mincho') || visibleSpans[0];
+      const title = nameSpan?.text?.slice(0, 30) || '名刺';
+      const bytes = await exportCardAsPdfBytes({
+        spans: visibleSpans,  // 装飾ウォーターマークを除いて出力
+        pageMM,
+        bgPngBase64: withOriginalBg
+          ? (originalPng ? originalPng.replace(/^data:image\/png;base64,/, '') : null)
+          : null,
+        coverOriginals: withOriginalBg,
+        title,
+      });
+      const suffix = withOriginalBg ? '_編集確認' : '_再現';
+      downloadPdfBytes(bytes, `${title}${suffix}.pdf`);
+      flash('PDF を保存しました', 'ok');
+    } catch (e: any) {
+      console.error('[handleClientPdfExport]', e);
+      flash(`PDF出力エラー: ${e?.message || e}`, 'error');
+    }
+  };
+
+  // ── HTML → PDF 出力（ブラウザ印刷ダイアログ経由） ──
+  // プレビューと同一のHTMLを印刷することで、座標・フォント・書字方向のズレを完全排除。
+  // PyMuPDF 経由と違い、フォント不一致で文字が消える事故が起きない。
+  const handleHtmlPrint = async () => {
+    try {
+      const bg = originalPng || (rebuiltPng ?? undefined);
+      const nameSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
+      await printCardAsPdf({
+        spans,
+        pageMM,
+        bgPngDataUrl: bg ?? null,
+        coverOriginals: true,
+        title: nameSpan?.text?.slice(0, 30) || '名刺',
+      });
+      flash('印刷ダイアログから「PDFに保存」してください', 'info');
+    } catch (e: any) {
+      flash(`PDF出力エラー: ${e?.message || e}`, 'error');
     }
   };
 
@@ -662,20 +784,38 @@ const App: React.FC = () => {
       );
 
       // Apply actions
+      // ★ HITL 保護: status='verified'/'manual' の span は AI 再推論で上書き・削除しない
+      //   （Step 2 で確定したデータは Source of Truth として保持）
       if (response.actions && response.actions.length > 0) {
         let updatedSpans = [...spans];
+        const isProtected = (id: string): boolean => {
+          const s = updatedSpans.find(x => x.id === id);
+          return !!s && (s.status === 'verified' || s.status === 'manual');
+        };
         for (const action of response.actions) {
           if (action.type === 'update_span' && action.spanId && action.updates) {
+            if (isProtected(action.spanId)) {
+              console.warn(`[agent] skipped update on verified span ${action.spanId}`);
+              continue;
+            }
             updatedSpans = updatedSpans.map(s =>
               s.id === action.spanId ? { ...s, ...action.updates } : s
             );
           }
           if (action.type === 'update_style' && action.spanId && action.updates) {
+            if (isProtected(action.spanId)) {
+              console.warn(`[agent] skipped style update on verified span ${action.spanId}`);
+              continue;
+            }
             updatedSpans = updatedSpans.map(s =>
               s.id === action.spanId ? { ...s, ...action.updates } : s
             );
           }
           if (action.type === 'move_span' && action.spanId && action.updates) {
+            if (isProtected(action.spanId)) {
+              console.warn(`[agent] skipped move on verified span ${action.spanId}`);
+              continue;
+            }
             updatedSpans = updatedSpans.map(s => {
               if (s.id !== action.spanId) return s;
               const newS = { ...s, ...action.updates };
@@ -690,6 +830,10 @@ const App: React.FC = () => {
             });
           }
           if (action.type === 'delete_span' && action.spanId) {
+            if (isProtected(action.spanId)) {
+              console.warn(`[agent] skipped delete on verified span ${action.spanId}`);
+              continue;
+            }
             updatedSpans = updatedSpans.filter(s => s.id !== action.spanId);
           }
           if (action.type === 'add_span' && action.updates) {
@@ -785,6 +929,13 @@ const App: React.FC = () => {
   // ── Sidebar ──
   const renderSidebar = () => {
     const sections = [
+      {
+        title: 'ホーム',
+        items: [
+          { icon: LayoutDashboard, label: 'ダッシュボード (一覧)', badge: 0, state: AppState.DASHBOARD },
+          { icon: Inbox, label: '受信トレイ', badge: 0, state: AppState.INBOX },
+        ],
+      },
       {
         title: 'クラウド組版',
         items: [
@@ -1079,13 +1230,14 @@ const App: React.FC = () => {
               <Save size={14} /> 保存
             </button>
             <button
-              onClick={handleRebuild}
-              disabled={!pdfB64 || editCount === 0}
-              className={`text-white px-4 py-2 rounded-xl text-[13px] font-semibold flex items-center gap-2 transition-all shadow-md
-                ${pdfB64 && editCount > 0 ? 'hover:shadow-lg hover:scale-[1.02]' : 'opacity-40 cursor-not-allowed'}`}
-              style={{ background: pdfB64 && editCount > 0 ? C.gradientPrimary : '#d1d5db' }}
+              onClick={() => handleClientPdfExport(false)}
+              disabled={spans.length === 0}
+              className={`text-white px-5 py-2 rounded-xl text-[13px] font-bold flex items-center gap-2 shadow-md transition-all
+                ${spans.length > 0 ? 'hover:shadow-lg hover:scale-[1.02]' : 'opacity-40 cursor-not-allowed'}`}
+              style={{ background: spans.length > 0 ? C.gradientPrimary : '#d1d5db' }}
+              title="編集内容でベクターPDFを生成してダウンロード"
             >
-              <Download size={14} /> 再構築 & PDF出力
+              <Download size={14} /> PDF出力
             </button>
           </>
         )}
@@ -1096,7 +1248,8 @@ const App: React.FC = () => {
   // ── Project Card (shared between dashboard & inbox) ──
   const renderProjectCard = (p: CardProject) => {
     const verticalProject = hasVerticalSpans(p.spans);
-    const portraitPage = isPortraitPage(p.page_mm);
+    // 縦書きカードは物理寸法が横長(例: 97x61)でも、印刷/閲覧は縦向きのためポートレート扱い
+    const portraitPage = isPortraitPage(p.page_mm) || verticalProject;
     return (
     <div
       key={p.id}
@@ -1144,12 +1297,12 @@ const App: React.FC = () => {
           </div>
           <p className="text-xs mt-1" style={{ color: C.muted }}>
             {new Date(p.created_at).toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })}
-            {p.page_mm && ` · ${p.page_mm[0]}mm × ${p.page_mm[1]}mm`}
+            {p.page_mm && ` · ${p.page_mm[0]}mm × ${p.page_mm[1]}mm${p.page_mm[0] < p.page_mm[1] ? '（縦）' : ''}`}
           </p>
         </div>
 
         {/* Actions */}
-        <div className="flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-2 shrink-0 transition-opacity">
           {p.rebuilt_pdf_b64 && (
             <button
               className="p-2 rounded-lg transition-colors hover:bg-teal-50"
@@ -1167,14 +1320,52 @@ const App: React.FC = () => {
             </button>
           )}
           <button
+            className="p-2 rounded-lg transition-colors hover:bg-indigo-50 text-indigo-600"
+            title="再検証 (OCRを再実行)"
+            onClick={e => {
+              e.stopPropagation();
+              if (!p.pdf_b64) { flash('元PDFがありません', 'error'); return; }
+              const byteChars = atob(p.pdf_b64);
+              const bytes = new Uint8Array(byteChars.length);
+              for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+              const file = new File([bytes], `${p.name || 'meishi'}.pdf`, { type: 'application/pdf' });
+              setEditingProjectId(p.id);
+              handleUpload(file);
+            }}
+          >
+            <RefreshCw size={16} />
+          </button>
+          <button
+            className="p-2 rounded-lg transition-colors hover:bg-slate-100 text-slate-600"
+            title="共有 (PDF URL をクリップボードへ)"
+            onClick={async e => {
+              e.stopPropagation();
+              const b64 = p.rebuilt_pdf_b64 || p.pdf_b64;
+              if (!b64) { flash('PDFがありません', 'error'); return; }
+              try {
+                const blob = await (await fetch(`data:application/pdf;base64,${b64}`)).blob();
+                await navigator.clipboard.write([new ClipboardItem({ 'application/pdf': blob })]).catch(async () => {
+                  await navigator.clipboard.writeText(`data:application/pdf;base64,${b64.slice(0, 80)}...`);
+                });
+                flash('クリップボードにコピーしました', 'ok');
+              } catch {
+                flash('コピーに失敗しました', 'error');
+              }
+            }}
+          >
+            <Share2 size={16} />
+          </button>
+          <button
             className="px-4 py-2 text-white rounded-lg text-sm font-medium transition-colors hover:opacity-90"
             style={{ background: C.accent }}
+            onClick={e => { e.stopPropagation(); openProject(p); }}
           >
             編集
           </button>
           <button
             className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-            onClick={e => { e.stopPropagation(); handleDelete(p.id); }}
+            title="削除"
+            onClick={e => { e.stopPropagation(); if (confirm(`「${p.name || '名刺'}」を削除しますか？`)) handleDelete(p.id); }}
           >
             <Trash2 size={16} />
           </button>
@@ -1203,16 +1394,14 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Loading overlay */}
-        {loading && (
-          <div className="fixed inset-0 bg-white/80 backdrop-blur-sm z-50 flex items-center justify-center">
-            <div className="text-center">
-              <div className="animate-spin w-10 h-10 border-3 border-slate-300 rounded-full mx-auto mb-4" style={{ borderTopColor: C.accent }} />
-              <p className="text-base font-medium text-slate-700">PDF分析中...</p>
-              <p className="text-xs mt-1" style={{ color: C.muted }}>テキスト要素を抽出しています</p>
-            </div>
-          </div>
-        )}
+        {/* Loading overlay: 進捗 + 残り時間推定 */}
+        <ProgressOverlay
+          running={loading}
+          title="PDF分析中"
+          subtitle="Document AI でテキスト要素と画像を抽出しています"
+          estimatedMs={18000}
+        />
+
 
         {/* Empty state — URL入稿 */}
         {projects.length === 0 && !loading && (
@@ -1427,17 +1616,18 @@ const App: React.FC = () => {
       <div className="w-80 flex flex-col shrink-0 border-r" style={{ background: '#16162a', borderColor: '#2a2a4a' }}>
         <div className="px-3 py-2.5 border-b flex items-center justify-between" style={{ borderColor: '#2a2a4a' }}>
           <span className="text-xs font-medium" style={{ color: '#8888aa' }}>
-            フィールド ({spans.length})
+            フィールド ({visibleSpans.length}{spans.length !== visibleSpans.length ? ` / 装飾除外 ${spans.length - visibleSpans.length}` : ''})
           </span>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ background: '#12122a', color: '#6b6b8a' }}>
-            {pageMM[0]}x{pageMM[1]}mm
+            {pageMM[0]}x{pageMM[1]}mm{pageMM[0] < pageMM[1] ? ' 縦' : ''}
           </span>
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {spans.map((s, i) => {
+          {visibleSpans.map((s, i) => {
             const isActive = selectedId === s.id;
-            const changed = originalSpans[i] && s.text !== originalSpans[i].text;
+            const orig = originalSpanById.get(s.id);
+            const changed = !!orig && s.text !== orig.text;
             return (
               <div
                 key={s.id}
@@ -1485,9 +1675,9 @@ const App: React.FC = () => {
                     color: changed ? '#10b981' : '#e0e0f0',
                   }}
                 />
-                {changed && originalSpans[i] && (
+                {changed && orig && (
                   <div className="text-[10px] mt-1 flex items-center gap-1" style={{ color: '#5a5a7a' }}>
-                    <span className="line-through">{originalSpans[i].text}</span>
+                    <span className="line-through">{orig.text}</span>
                   </div>
                 )}
               </div>
@@ -1514,13 +1704,20 @@ const App: React.FC = () => {
               </select>
             </div>
             <div>
-              <label className="text-[10px] block mb-1" style={{ color: '#6b6b8a' }}>サイズ (pt)</label>
+              <label className="text-[10px] block mb-1 flex items-center gap-1.5" style={{ color: '#6b6b8a' }}>
+                サイズ (pt)
+                {sel.size_source === 'bbox-estimated' && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
+                    bbox推定
+                  </span>
+                )}
+              </label>
               <div className="flex items-center gap-2">
                 <input
                   type="number"
                   value={sel.size_pt}
                   onChange={e => updateSpan(sel.id, { size_pt: parseFloat(e.target.value) || sel.size_pt })}
-                  step={0.5} min={1} max={120}
+                  step={0.1} min={1} max={200}
                   className="w-20 px-2.5 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
                   style={{ background: '#1a1a2e', border: '1px solid #2a2a4a', color: '#e0e0f0' }}
                 />
@@ -1540,6 +1737,73 @@ const App: React.FC = () => {
                     </button>
                   ))}
                 </div>
+              </div>
+              {/* 0.1pt 単位の微調整スライダー */}
+              <input
+                type="range"
+                min={4} max={48} step={0.1}
+                value={sel.size_pt}
+                onChange={e => updateSpan(sel.id, { size_pt: parseFloat(e.target.value) })}
+                className="w-full mt-2"
+                title="0.1pt 刻みで微調整"
+              />
+            </div>
+            {/* フォントファミリー（A-OTF 148種からの明示指定） */}
+            <div>
+              <label className="text-[10px] block mb-1 flex items-center gap-1.5" style={{ color: '#6b6b8a' }}>
+                フォントファミリー
+                {sel.needs_font_review && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded animate-pulse" style={{ background: 'rgba(245,158,11,0.2)', color: '#f59e0b' }}>
+                    要確認
+                  </span>
+                )}
+              </label>
+              <select
+                value={sel.font_original || ''}
+                onChange={e => updateSpan(sel.id, { font_original: e.target.value, needs_font_review: false })}
+                className="w-full px-2.5 py-2 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                style={{ background: '#1a1a2e', border: `1px solid ${sel.needs_font_review ? '#f59e0b' : '#2a2a4a'}`, color: '#e0e0f0' }}
+              >
+                <option value="">自動（font_classから選定）</option>
+                <optgroup label="ゴシック系">
+                  {REGISTERED_FONT_FAMILIES.filter(f => /gothic|shingo|futog|udshin/i.test(f) && !/min/i.test(f)).slice(0, 20).map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="明朝系">
+                  {REGISTERED_FONT_FAMILIES.filter(f => /ryumin|mincho|midashi/i.test(f)).slice(0, 20).map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="丸ゴシック・その他">
+                  {REGISTERED_FONT_FAMILIES.filter(f => /jun|seikai|shinseikai/i.test(f)).map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="欧文">
+                  {REGISTERED_FONT_FAMILIES.filter(f => /garamond|century|helvetica/i.test(f)).map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] block mb-1" style={{ color: '#6b6b8a' }}>書字方向</label>
+              <div className="flex gap-1">
+                {(['horizontal', 'vertical'] as const).map(dir => (
+                  <button
+                    key={dir}
+                    onClick={() => updateSpan(sel.id, { writing_direction: dir })}
+                    className="px-3 py-1.5 rounded text-[11px] font-medium transition-colors"
+                    style={{
+                      background: sel.writing_direction === dir ? (dir === 'vertical' ? 'rgba(251,146,60,0.15)' : 'rgba(16,185,129,0.15)') : '#1a1a2e',
+                      color: sel.writing_direction === dir ? (dir === 'vertical' ? '#fb923c' : '#10b981') : '#6b6b8a',
+                      border: `1px solid ${sel.writing_direction === dir ? (dir === 'vertical' ? '#fb923c' : '#10b981') : '#2a2a4a'}`,
+                    }}
+                  >
+                    {dir === 'horizontal' ? '横書き' : '縦書き'}
+                  </button>
+                ))}
               </div>
             </div>
             <div className="flex gap-3 text-[10px] font-mono" style={{ color: '#5a5a7a' }}>
@@ -1765,6 +2029,10 @@ const App: React.FC = () => {
                                           xref: img.xref,
                                           data_b64: b64,
                                           mime_type: blob.type || 'image/png',
+                                          x_pct: img.x_pct,
+                                          y_pct: img.y_pct,
+                                          w_pct: img.w_pct,
+                                          h_pct: img.h_pct,
                                         },
                                       }));
                                       setRebuiltPng(null);
@@ -1837,6 +2105,10 @@ const App: React.FC = () => {
                       xref: targetImg.xref,
                       data_b64: b64,
                       mime_type: file.type || 'image/png',
+                      x_pct: targetImg.x_pct,
+                      y_pct: targetImg.y_pct,
+                      w_pct: targetImg.w_pct,
+                      h_pct: targetImg.h_pct,
                     },
                   }));
                   setRebuiltPng(null);
@@ -1891,7 +2163,7 @@ const App: React.FC = () => {
                   const renderedHeightPx = previewImgRef.current?.getBoundingClientRect().height ?? 0;
                   const pageH_pt = (pageMM[1] / 25.4) * 72;
                   const pxPerPt = pageH_pt > 0 ? renderedHeightPx / pageH_pt : 0;
-                  return showOverlay && spans.map((s, i) => {
+                  return showOverlay && visibleSpans.map((s, i) => {
                     const fontSizePx = Math.max(1, s.size_pt * pxPerPt);
                     const isVertical = s.writing_direction === 'vertical';
                     const lineHeight = isVertical ? 1.0 : 1.1;
@@ -1900,10 +2172,11 @@ const App: React.FC = () => {
                     const textOrientation = isVertical ? 'upright' : 'mixed';
                     const isActive = selectedId === s.id;
                     const isDragging = draggingId === s.id;
-                    const changed = originalSpans[i] && s.text !== originalSpans[i].text;
-                    const posChanged = originalSpans[i] && (s.x_pct !== originalSpans[i].x_pct || s.y_pct !== originalSpans[i].y_pct);
-                    const isModified = changed || posChanged;
-                    const { fontFamily, fontWeight } = getFontRenderStyle(s.font_class);
+                    const origS = originalSpanById.get(s.id);
+                    const changed = !!origS && s.text !== origS.text;
+                    const posChanged = !!origS && (s.x_pct !== origS.x_pct || s.y_pct !== origS.y_pct);
+                    const isModified = changed || posChanged || !origS;
+                    const { fontFamily, fontWeight } = getFontRenderStyle(s.font_class, s.font_original);
                     return (
                       <div
                         key={s.id}
@@ -1942,12 +2215,12 @@ const App: React.FC = () => {
                           fontSize: `${fontSizePx}px`,
                           lineHeight,
                           letterSpacing,
-                          color: (isModified && fontsReady) ? '#1e293b' : 'transparent',
+                          color: isModified ? (s.color_hex || '#1e293b') : 'transparent',
                           whiteSpace: isVertical ? 'normal' : 'nowrap',
                           padding: isVertical ? '2px 0' : '0 2px',
                         }}
                       >
-                        {(isModified && fontsReady) && (
+                        {isModified && (
                           <span style={{ writingMode, textOrientation }}>
                             {s.text}
                           </span>
@@ -1956,6 +2229,28 @@ const App: React.FC = () => {
                     );
                   });
                 })()}
+                {/* 画像オーバーレイ(ロゴ・写真・アイコン・印鑑など) */}
+                {showOverlay && pageImages.map(img => {
+                  const replaced = !!imageReplacements[img.id];
+                  return (
+                    <div
+                      key={`img-overlay-${img.id}`}
+                      title={`画像: ${img.width}×${img.height}px${replaced ? ' (差替済)' : ''}`}
+                      style={{
+                        position: 'absolute',
+                        left: `${img.x_pct}%`,
+                        top: `${img.y_pct}%`,
+                        width: `${img.w_pct}%`,
+                        height: `${img.h_pct}%`,
+                        border: replaced ? '2px solid #fb923c' : '2px dashed #a855f7',
+                        background: replaced ? 'rgba(251,146,60,0.08)' : 'rgba(168,85,247,0.05)',
+                        borderRadius: '2px',
+                        pointerEvents: 'none',
+                        zIndex: 5,
+                      }}
+                    />
+                  );
+                })}
               </div>
             ) : (
               <div className="text-sm" style={{ color: '#6b6b8a' }}>プレビューなし</div>
@@ -2638,7 +2933,65 @@ const App: React.FC = () => {
           </div>
 
           {/* Danger zone */}
-          <div className="mt-8 p-5 rounded-2xl border border-dashed" style={{ borderColor: '#fca5a5' }}>
+          {/* エクスポート / インポート */}
+          <div className="mt-8 p-5 rounded-2xl border" style={{ borderColor: C.border }}>
+            <p className="text-xs font-bold text-slate-700 mb-1">設定のバックアップ</p>
+            <p className="text-xs mb-3" style={{ color: C.muted }}>
+              設定を JSON ファイルにエクスポート／インポートできます。デプロイ先が変わっても復元可能です。
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  const data = getAllOverrides();
+                  if (Object.keys(data).length === 0) { flash('エクスポートする設定がありません', 'error'); return; }
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                  const a = document.createElement('a');
+                  a.href = URL.createObjectURL(blob);
+                  a.download = `bp-meishi-settings-${new Date().toISOString().slice(0, 10)}.json`;
+                  a.click();
+                  URL.revokeObjectURL(a.href);
+                  flash('設定をエクスポートしました', 'ok');
+                }}
+                className="text-xs font-semibold transition-colors border px-3 py-1.5 rounded-lg hover:bg-teal-50"
+                style={{ color: C.accent, borderColor: C.accentBorder }}
+              >
+                エクスポート (JSON)
+              </button>
+              <button
+                onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = '.json';
+                  input.onchange = async () => {
+                    const file = input.files?.[0];
+                    if (!file) return;
+                    try {
+                      const text = await file.text();
+                      const data = JSON.parse(text) as Record<string, string>;
+                      let count = 0;
+                      for (const [k, v] of Object.entries(data)) {
+                        if (typeof v === 'string' && v.trim()) {
+                          saveConfig(k as ConfigKey, v);
+                          count++;
+                        }
+                      }
+                      setSettingsDraft({});
+                      setSettingsTestStatus({});
+                      flash(`${count}件の設定をインポートしました`, 'ok');
+                    } catch {
+                      flash('JSONファイルの読み込みに失敗しました', 'error');
+                    }
+                  };
+                  input.click();
+                }}
+                className="text-xs font-semibold transition-colors border px-3 py-1.5 rounded-lg hover:bg-blue-50 text-blue-600 border-blue-200"
+              >
+                インポート (JSON)
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 p-5 rounded-2xl border border-dashed" style={{ borderColor: '#fca5a5' }}>
             <p className="text-xs font-bold text-red-500 mb-1">設定のリセット</p>
             <p className="text-xs mb-3" style={{ color: C.muted }}>
               localStorage の上書き値をすべて削除し、.env の値に戻します。
@@ -4951,7 +5304,39 @@ JSONのみ返してください。` },
             {showChatInEditor && renderChatPanel()}
           </div>
         )}
+        {view === AppState.VERIFY && (
+          <VerifyScreen
+            spanState={verifySpanState}
+            setSpanState={setVerifySpanState}
+            pageMM={pageMM}
+            bgPngDataUrl={originalPng}
+            onConfirm={(finalSpans) => {
+              // 確定データを EDIT へ流し込む（AI再推論から保護）
+              setSpans(finalSpans);
+              setOriginalSpans(JSON.parse(JSON.stringify(finalSpans)));
+              setView(AppState.EDIT);
+              flash(`${finalSpans.length}件を確定。編集画面へ移動します`, 'ok');
+            }}
+            onBack={() => {
+              resetAll();
+            }}
+          />
+        )}
       </div>
+
+      {/* Detection Review Panel */}
+      {showDetectionReview && view === AppState.EDIT && (
+        <DetectionReview
+          projectId={editingProjectId}
+          spans={spans}
+          images={pageImages}
+          layoutBlocks={layoutBlocks}
+          barcodes={barcodes}
+          selectedId={selectedId}
+          onSelect={id => { setSelectedId(id); }}
+          onClose={() => setShowDetectionReview(false)}
+        />
+      )}
 
       {/* Global drag & drop overlay */}
       {globalDrag && (

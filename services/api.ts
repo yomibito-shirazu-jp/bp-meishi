@@ -9,16 +9,47 @@ export const healthCheck = async (): Promise<boolean> => {
   return data.status === 'ok';
 };
 
-export const analyzePdf = async (file: File, useDocumentAI?: boolean): Promise<AnalyzeResponse> => {
+export interface AnalyzeOptions {
+  useDocumentAI?: boolean;
+  useYomitoku?: boolean;
+  yomitokuLite?: boolean;
+  yomitokuDevice?: 'cpu' | 'cuda';
+}
+
+export const analyzePdf = async (
+  file: File,
+  opts?: boolean | AnalyzeOptions,
+): Promise<AnalyzeResponse> => {
   const form = new FormData();
   form.append('file', file);
-  
+
+  // 後方互換: 第二引数 boolean は useDocumentAI として扱う
+  const options: AnalyzeOptions = typeof opts === 'boolean'
+    ? { useDocumentAI: opts }
+    : (opts ?? {});
+
   const headers: Record<string, string> = {};
   const geminiKey = getConfig('VITE_GOOGLE_AI_KEY');
   if (geminiKey) {
     headers['X-Gemini-API-Key'] = geminiKey;
   }
-  const useDocAI = useDocumentAI ?? (getConfig('VITE_USE_DOCUMENT_AI') !== 'false');
+
+  const useYomitoku = options.useYomitoku
+    ?? (getConfig('VITE_USE_YOMITOKU').toLowerCase() === 'true');
+  if (useYomitoku) {
+    headers['X-Use-Yomitoku'] = 'true';
+    const lite = options.yomitokuLite
+      ?? (getConfig('VITE_YOMITOKU_LITE').toLowerCase() !== 'false');
+    const device = options.yomitokuDevice
+      ?? ((getConfig('VITE_YOMITOKU_DEVICE') || 'cpu') as 'cpu' | 'cuda');
+    headers['X-Yomitoku-Lite'] = lite ? 'true' : 'false';
+    headers['X-Yomitoku-Device'] = device;
+  }
+
+  // YomiToku 使用時は Document AI はスキップ(バックエンド側でも排他)
+  const useDocAI = !useYomitoku && (
+    options.useDocumentAI ?? (getConfig('VITE_USE_DOCUMENT_AI') !== 'false')
+  );
   if (useDocAI) {
     headers['X-Use-DocumentAI'] = 'true';
     const projectId = getConfig('VITE_GOOGLE_PROJECT_ID');
@@ -31,10 +62,10 @@ export const analyzePdf = async (file: File, useDocumentAI?: boolean): Promise<A
     if (versionId) headers['X-Version-ID'] = versionId;
   }
 
-  const res = await fetch(`${getApiUrl()}/analyze`, { 
-    method: 'POST', 
+  const res = await fetch(`${getApiUrl()}/analyze`, {
+    method: 'POST',
     body: form,
-    headers
+    headers,
   });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
@@ -43,9 +74,22 @@ export const analyzePdf = async (file: File, useDocumentAI?: boolean): Promise<A
   return res.json();
 };
 
+export interface YomitokuStatus {
+  available: boolean;
+  version?: string;
+  install_hint?: string;
+}
+
+export const getYomitokuStatus = async (): Promise<YomitokuStatus> => {
+  const res = await fetch(`${getApiUrl()}/yomitoku-status`);
+  if (!res.ok) return { available: false };
+  return res.json();
+};
+
 export interface SpanOverride {
   text?: string;
   font_class?: string;
+  font_original?: string;
   size_pt?: number;
   origin?: [number, number];
   writing_direction?: 'horizontal' | 'vertical';
@@ -59,6 +103,7 @@ export interface SpanBbox {
   bbox: [number, number, number, number];
   origin: [number, number];
   font_class: string;
+  font_original: string;
   size_pt: number;
 }
 
@@ -71,7 +116,7 @@ export const rebuildPdf = async (
   clipRect?: [number, number, number, number],
   overrides?: Record<string, SpanOverride>,
   originalTexts?: Record<string, string>,
-  imageReplacements?: Record<string, { xref: number; data_b64: string; mime_type?: string }>,
+  imageReplacements?: Record<string, { xref: number; data_b64: string; mime_type?: string; rect?: [number, number, number, number] }>,
   spanBboxes?: Record<string, SpanBbox>,
 ): Promise<RebuildResponse> => {
   const res = await fetch(`${getApiUrl()}/rebuild`, {

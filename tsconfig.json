@@ -27,5 +27,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["mcp/**", "node_modules", "dist", "ccpm/**", "indesign-mcp/**", "mcp-bridge/**"]
+  "exclude": ["mcp/**", "node_modules", "dist", "ccpm/**", "indesign-mcp/**", "mcp-bridge/**", "supabase/**", "md2pdf-ja/**", "素材/**"]
 }

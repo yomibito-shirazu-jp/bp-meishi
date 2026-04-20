@@ -1,4 +1,3 @@
-// @ts-expect-error - React 19 types might be slightly out of sync with ErrorBoundary requirements — useDefineForClassFields:false + ES2022 causes TS2339 on React.Component members
 import React, { Component, ReactNode } from 'react';
 
 interface Props {

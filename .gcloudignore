@@ -1,20 +1,26 @@
-.git
+# Cloud Build アップロード除外 — フロントとAPI両方で使用
+.git/
 .gitignore
 node_modules/
+dist/
 .env
 .env.local
-*.md
-src/
-public/
-components/
-services/
-*.tsx
-*.ts
-*.css
-*.html
-vite.config.*
-tsconfig.*
-package.json
-package-lock.json
-index.html
+.env.*
+.vscode/
+.idea/
+.claude/
+.agent/
 .agents/
+.windsurf/
+backend/venv/
+backend/__pycache__/
+__pycache__/
+*.pyc
+# 大容量フォント（必要最小限のみ fonts/ に保持される前提で除外）
+# fonts/ は Dockerfile で必要に応じてコピー
+*.log
+logs/
+# OS
+.DS_Store
+Thumbs.db
+

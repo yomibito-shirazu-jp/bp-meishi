@@ -45,7 +45,7 @@ export async function analyzePDFWithDocumentAI(
 ): Promise<DocumentAIResult> {
   const apiKey = getConfig('VITE_GOOGLE_AI_KEY');
   const projectId = getConfig('VITE_GOOGLE_PROJECT_ID');
-  const location = getConfig('VITE_DOCUMENT_AI_LOCATION', 'us');
+  const location = getConfig('VITE_DOCUMENT_AI_LOCATION') || 'us';
   
   if (!apiKey || !projectId) {
     throw new Error('Document AI configuration missing: VITE_GOOGLE_AI_KEY and VITE_GOOGLE_PROJECT_ID required');

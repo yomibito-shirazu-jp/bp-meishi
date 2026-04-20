@@ -31,9 +31,9 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ローカルフォント用ディレクトリ (商用フォントは手動でコピー)
-# fonts/ がローカルに存在しないことがあるため、ディレクトリのみ作成
-RUN mkdir -p /app/fonts
+# モリサワ等の商用フォントをコンテナにコピー
+COPY fonts/ /app/fonts/
+RUN fc-cache -fv
 
 COPY backend/main.py .
 

@@ -1,3 +1,153 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* モリサワ・Adobe 148 フォント完全登録(自動生成) */
+@font-face { font-family: 'A-OTF FutoGoB101Pr5-Bold'; src: url('/fonts/A-OTF-FutoGoB101Pr5-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF FutoGoB101Pr6-Bold'; src: url('/fonts/A-OTF-FutoGoB101Pr6-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF FutoGoB101Pro-Bold'; src: url('/fonts/A-OTF-FutoGoB101Pro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF FutoMinA101Pro-Bold'; src: url('/fonts/A-OTF-FutoMinA101Pro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GotMB101Std-Lig-KS'; src: url('/fonts/A-OTF-GotMB101Std-Lig-KS.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GotMB101Std-Med-KS'; src: url('/fonts/A-OTF-GotMB101Std-Med-KS.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GotMB101Std-Reg-KS'; src: url('/fonts/A-OTF-GotMB101Std-Reg-KS.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicBBBPr6-Medium'; src: url('/fonts/A-OTF-GothicBBBPr6-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicBBBPr6N-Medium'; src: url('/fonts/A-OTF-GothicBBBPr6N-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicBBBPro-Medium'; src: url('/fonts/A-OTF-GothicBBBPro-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pr6-Bold'; src: url('/fonts/A-OTF-GothicMB101Pr6-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pr6-DeBold'; src: url('/fonts/A-OTF-GothicMB101Pr6-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pr6-Heavy'; src: url('/fonts/A-OTF-GothicMB101Pr6-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pr6-Light'; src: url('/fonts/A-OTF-GothicMB101Pr6-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pr6-Medium'; src: url('/fonts/A-OTF-GothicMB101Pr6-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pr6-Reg'; src: url('/fonts/A-OTF-GothicMB101Pr6-Reg.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pr6-Ultra'; src: url('/fonts/A-OTF-GothicMB101Pr6-Ultra.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pro-Bold'; src: url('/fonts/A-OTF-GothicMB101Pro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pro-DeBold'; src: url('/fonts/A-OTF-GothicMB101Pro-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pro-Heavy'; src: url('/fonts/A-OTF-GothicMB101Pro-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pro-Light'; src: url('/fonts/A-OTF-GothicMB101Pro-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pro-Medium'; src: url('/fonts/A-OTF-GothicMB101Pro-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pro-Reg'; src: url('/fonts/A-OTF-GothicMB101Pro-Reg.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF GothicMB101Pro-Ultra'; src: url('/fonts/A-OTF-GothicMB101Pro-Ultra.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF Jun101Pro-Light'; src: url('/fonts/A-OTF-Jun101Pro-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF Jun201Pro-Regular'; src: url('/fonts/A-OTF-Jun201Pro-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF Jun34Pro-Medium'; src: url('/fonts/A-OTF-Jun34Pro-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF Jun501Pro-Bold'; src: url('/fonts/A-OTF-Jun501Pro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF MiGoMB1Std-DeBold'; src: url('/fonts/A-OTF-MiGoMB1Std-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF MidashiGoPr5-MB31'; src: url('/fonts/A-OTF-MidashiGoPr5-MB31.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF MidashiGoPr6-MB31'; src: url('/fonts/A-OTF-MidashiGoPr6-MB31.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF MidashiGoPr6N-MB31'; src: url('/fonts/A-OTF-MidashiGoPr6N-MB31.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF MidashiGoPro-MB31'; src: url('/fonts/A-OTF-MidashiGoPro-MB31.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPr6-Bold'; src: url('/fonts/A-OTF-RyuminPr6-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPr6-ExBold'; src: url('/fonts/A-OTF-RyuminPr6-ExBold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPr6-ExHeavy'; src: url('/fonts/A-OTF-RyuminPr6-ExHeavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPr6-Heavy'; src: url('/fonts/A-OTF-RyuminPr6-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPr6-Light'; src: url('/fonts/A-OTF-RyuminPr6-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPr6-Medium'; src: url('/fonts/A-OTF-RyuminPr6-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPr6-Regular'; src: url('/fonts/A-OTF-RyuminPr6-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPr6-Ultra'; src: url('/fonts/A-OTF-RyuminPr6-Ultra.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPro-Bold'; src: url('/fonts/A-OTF-RyuminPro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPro-ExBold'; src: url('/fonts/A-OTF-RyuminPro-ExBold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPro-ExHeavy'; src: url('/fonts/A-OTF-RyuminPro-ExHeavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPro-Heavy'; src: url('/fonts/A-OTF-RyuminPro-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPro-Light'; src: url('/fonts/A-OTF-RyuminPro-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPro-Medium'; src: url('/fonts/A-OTF-RyuminPro-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPro-Regular'; src: url('/fonts/A-OTF-RyuminPro-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminPro-Ultra'; src: url('/fonts/A-OTF-RyuminPro-Ultra.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Bold-KO'; src: url('/fonts/A-OTF-RyuminStd-Bold-KO.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Bold-KS'; src: url('/fonts/A-OTF-RyuminStd-Bold-KS.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-ExBold-KO'; src: url('/fonts/A-OTF-RyuminStd-ExBold-KO.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-ExBold-KS'; src: url('/fonts/A-OTF-RyuminStd-ExBold-KS.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-ExHeavy-KO'; src: url('/fonts/A-OTF-RyuminStd-ExHeavy-KO.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-ExHeavy-KS'; src: url('/fonts/A-OTF-RyuminStd-ExHeavy-KS.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Heavy-KO'; src: url('/fonts/A-OTF-RyuminStd-Heavy-KO.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Heavy-KS'; src: url('/fonts/A-OTF-RyuminStd-Heavy-KS.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Light-KO'; src: url('/fonts/A-OTF-RyuminStd-Light-KO.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Light-KS'; src: url('/fonts/A-OTF-RyuminStd-Light-KS.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Medium-KO'; src: url('/fonts/A-OTF-RyuminStd-Medium-KO.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Medium-KS'; src: url('/fonts/A-OTF-RyuminStd-Medium-KS.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Regular-KO'; src: url('/fonts/A-OTF-RyuminStd-Regular-KO.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Regular-KS'; src: url('/fonts/A-OTF-RyuminStd-Regular-KS.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Ultra-KO'; src: url('/fonts/A-OTF-RyuminStd-Ultra-KO.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF RyuminStd-Ultra-KS'; src: url('/fonts/A-OTF-RyuminStd-Ultra-KS.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF SeiKaiCB1Pr5-Regular'; src: url('/fonts/A-OTF-SeiKaiCB1Pr5-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF SeiKaiCB1Std-Regular'; src: url('/fonts/A-OTF-SeiKaiCB1Std-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoMin-Emboss'; src: url('/fonts/A-OTF-ShinGoMin-Emboss.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoMin-Futoline'; src: url('/fonts/A-OTF-ShinGoMin-Futoline.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoMin-Line'; src: url('/fonts/A-OTF-ShinGoMin-Line.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoMin-Shadow'; src: url('/fonts/A-OTF-ShinGoMin-Shadow.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPr6-Bold'; src: url('/fonts/A-OTF-ShinGoPr6-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPr6-DeBold'; src: url('/fonts/A-OTF-ShinGoPr6-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPr6-ExLight'; src: url('/fonts/A-OTF-ShinGoPr6-ExLight.otf') format('opentype'); font-weight: 200; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPr6-Heavy'; src: url('/fonts/A-OTF-ShinGoPr6-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPr6-Light'; src: url('/fonts/A-OTF-ShinGoPr6-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPr6-Medium'; src: url('/fonts/A-OTF-ShinGoPr6-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPr6-Regular'; src: url('/fonts/A-OTF-ShinGoPr6-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPr6-Ultra'; src: url('/fonts/A-OTF-ShinGoPr6-Ultra.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPro-Bold'; src: url('/fonts/A-OTF-ShinGoPro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPro-DeBold'; src: url('/fonts/A-OTF-ShinGoPro-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPro-ExLight'; src: url('/fonts/A-OTF-ShinGoPro-ExLight.otf') format('opentype'); font-weight: 200; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPro-Heavy'; src: url('/fonts/A-OTF-ShinGoPro-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPro-Light'; src: url('/fonts/A-OTF-ShinGoPro-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPro-Medium'; src: url('/fonts/A-OTF-ShinGoPro-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPro-Regular'; src: url('/fonts/A-OTF-ShinGoPro-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinGoPro-Ultra'; src: url('/fonts/A-OTF-ShinGoPro-Ultra.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoMin-Emboss'; src: url('/fonts/A-OTF-ShinMGoMin-Emboss.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoMin-Futoline'; src: url('/fonts/A-OTF-ShinMGoMin-Futoline.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoMin-Line'; src: url('/fonts/A-OTF-ShinMGoMin-Line.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoMin-Shadow'; src: url('/fonts/A-OTF-ShinMGoMin-Shadow.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPr6-Bold'; src: url('/fonts/A-OTF-ShinMGoPr6-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPr6-DeBold'; src: url('/fonts/A-OTF-ShinMGoPr6-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPr6-Heavy'; src: url('/fonts/A-OTF-ShinMGoPr6-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPr6-Light'; src: url('/fonts/A-OTF-ShinMGoPr6-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPr6-Medium'; src: url('/fonts/A-OTF-ShinMGoPr6-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPr6-Regular'; src: url('/fonts/A-OTF-ShinMGoPr6-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPr6-Ultra'; src: url('/fonts/A-OTF-ShinMGoPr6-Ultra.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPro-Bold'; src: url('/fonts/A-OTF-ShinMGoPro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPro-DeBold'; src: url('/fonts/A-OTF-ShinMGoPro-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPro-Heavy'; src: url('/fonts/A-OTF-ShinMGoPro-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPro-Light'; src: url('/fonts/A-OTF-ShinMGoPro-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPro-Medium'; src: url('/fonts/A-OTF-ShinMGoPro-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPro-Regular'; src: url('/fonts/A-OTF-ShinMGoPro-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinMGoPro-Ultra'; src: url('/fonts/A-OTF-ShinMGoPro-Ultra.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF ShinseiKaiPro-CBSK1'; src: url('/fonts/A-OTF-ShinseiKaiPro-CBSK1.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPr6-Bold'; src: url('/fonts/A-OTF-UDShinGoPr6-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPr6-DeBold'; src: url('/fonts/A-OTF-UDShinGoPr6-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPr6-Heavy'; src: url('/fonts/A-OTF-UDShinGoPr6-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPr6-Light'; src: url('/fonts/A-OTF-UDShinGoPr6-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPr6-Medium'; src: url('/fonts/A-OTF-UDShinGoPr6-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPr6-Regular'; src: url('/fonts/A-OTF-UDShinGoPr6-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPro-Bold'; src: url('/fonts/A-OTF-UDShinGoPro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPro-DeBold'; src: url('/fonts/A-OTF-UDShinGoPro-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPro-Heavy'; src: url('/fonts/A-OTF-UDShinGoPro-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPro-Light'; src: url('/fonts/A-OTF-UDShinGoPro-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPro-Medium'; src: url('/fonts/A-OTF-UDShinGoPro-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinGoPro-Regular'; src: url('/fonts/A-OTF-UDShinGoPro-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPr6-Bold'; src: url('/fonts/A-OTF-UDShinMGoPr6-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPr6-DeBold'; src: url('/fonts/A-OTF-UDShinMGoPr6-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPr6-Heavy'; src: url('/fonts/A-OTF-UDShinMGoPr6-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPr6-Light'; src: url('/fonts/A-OTF-UDShinMGoPr6-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPr6-Medium'; src: url('/fonts/A-OTF-UDShinMGoPr6-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPr6-Regular'; src: url('/fonts/A-OTF-UDShinMGoPr6-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPro-Bold'; src: url('/fonts/A-OTF-UDShinMGoPro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPro-DeBold'; src: url('/fonts/A-OTF-UDShinMGoPro-DeBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPro-Heavy'; src: url('/fonts/A-OTF-UDShinMGoPro-Heavy.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPro-Light'; src: url('/fonts/A-OTF-UDShinMGoPro-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPro-Medium'; src: url('/fonts/A-OTF-UDShinMGoPro-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: 'A-OTF UDShinMGoPro-Regular'; src: url('/fonts/A-OTF-UDShinMGoPro-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'AGaramondPro-Bold'; src: url('/fonts/AGaramondPro-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'AGaramondPro-BoldItalic'; src: url('/fonts/AGaramondPro-BoldItalic.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'AGaramondPro-Italic'; src: url('/fonts/AGaramondPro-Italic.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'AGaramondPro-Regular'; src: url('/fonts/AGaramondPro-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'AGaramondPro-Semibold'; src: url('/fonts/AGaramondPro-Semibold.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'AGaramondPro-SemiboldItalic'; src: url('/fonts/AGaramondPro-SemiboldItalic.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Century Old Style Italic'; src: url('/fonts/Century Old Style Italic.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Helvetica LT Std Bold Fractions'; src: url('/fonts/Helvetica LT Std Bold Fractions.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'Helvetica LT Std Fractions'; src: url('/fonts/Helvetica LT Std Fractions.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'century-old-style-std-bold'; src: url('/fonts/century-old-style-std-bold.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'century-old-style-std-italic'; src: url('/fonts/century-old-style-std-italic.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'century-old-style-std'; src: url('/fonts/century-old-style-std.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'helvetica-black'; src: url('/fonts/helvetica-black.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'helvetica-bold'; src: url('/fonts/helvetica-bold.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'helvetica-demi-bold'; src: url('/fonts/helvetica-demi-bold.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'helvetica-inserat-roman'; src: url('/fonts/helvetica-inserat-roman.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'helvetica-italic'; src: url('/fonts/helvetica-italic.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'helvetica-lt-std-bold'; src: url('/fonts/helvetica-lt-std-bold.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }

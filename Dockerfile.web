@@ -2,11 +2,17 @@
 FROM node:20-slim AS build
 WORKDIR /app
 
+# Cache-bust: Cloud Build が渡す BUILD_ID で毎回キャッシュを無効化
+ARG CACHEBUST=0
+RUN echo "CACHEBUST=$CACHEBUST"
+
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # ソースコードをすべてコピー
 COPY . .
+# COPY 層キャッシュも BUILD_ID で強制無効化
+RUN echo "$CACHEBUST" > /tmp/.cachebust
 
 # Build-time env vars — injected by cloudbuild.yaml substitutions
 ARG VITE_API_URL
@@ -15,13 +21,25 @@ ARG VITE_SUPABASE_ANON_KEY
 ARG VITE_GOOGLE_AI_KEY
 ARG VITE_GOOGLE_CLIENT_ID
 ARG VITE_GOOGLE_API_KEY
+ARG VITE_GOOGLE_PROJECT_ID
+ARG VITE_GOOGLE_PROJECT_NUMBER
+ARG VITE_DOCUMENT_AI_LOCATION
+ARG VITE_DOCUMENT_AI_PROCESSOR_ID
+ARG VITE_DOCUMENT_AI_VERSION_ID
+ARG VITE_USE_DOCUMENT_AI
 # loadEnv() reads .env files, not process.env — generate .env from ARGs
 RUN echo "VITE_API_URL=$VITE_API_URL" >> .env && \
     echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> .env && \
     echo "VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY" >> .env && \
     echo "VITE_GOOGLE_AI_KEY=$VITE_GOOGLE_AI_KEY" >> .env && \
     echo "VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID" >> .env && \
-    echo "VITE_GOOGLE_API_KEY=$VITE_GOOGLE_API_KEY" >> .env
+    echo "VITE_GOOGLE_API_KEY=$VITE_GOOGLE_API_KEY" >> .env && \
+    echo "VITE_GOOGLE_PROJECT_ID=$VITE_GOOGLE_PROJECT_ID" >> .env && \
+    echo "VITE_GOOGLE_PROJECT_NUMBER=$VITE_GOOGLE_PROJECT_NUMBER" >> .env && \
+    echo "VITE_DOCUMENT_AI_LOCATION=$VITE_DOCUMENT_AI_LOCATION" >> .env && \
+    echo "VITE_DOCUMENT_AI_PROCESSOR_ID=$VITE_DOCUMENT_AI_PROCESSOR_ID" >> .env && \
+    echo "VITE_DOCUMENT_AI_VERSION_ID=$VITE_DOCUMENT_AI_VERSION_ID" >> .env && \
+    echo "VITE_USE_DOCUMENT_AI=$VITE_USE_DOCUMENT_AI" >> .env
 
 RUN npm run build
 
