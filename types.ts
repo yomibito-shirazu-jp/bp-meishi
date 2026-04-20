@@ -11,6 +11,16 @@ export interface Span {
   w_pct: number;
   h_pct: number;
   writing_direction?: 'horizontal' | 'vertical';
+  color_hex?: string; // 元PDFのテキスト色 (例: "#1e293b")
+  // ── HITL: AIの推論結果か、人間が確定させたかを区別 ──
+  // 'inferred'  : AIの推論結果（再推論で上書き可）
+  // 'verified'  : 人間が確定（再推論で絶対に上書き不可）
+  // 'manual'    : 人間が手動追加した要素（常に不変）
+  status?: 'inferred' | 'verified' | 'manual';
+  confidence?: number; // 0-1、AIが自己申告した信頼度
+  // ── フォント・サイズのメタ情報 (HITL判定に使う) ──
+  size_source?: 'docai' | 'pymupdf' | 'gemini' | 'bbox-estimated' | 'manual';
+  needs_font_review?: boolean; // フォント一致失敗時、ユーザーに選択を促すフラグ
 }
 
 export interface ImageInfo {
@@ -126,6 +136,8 @@ export interface AnalyzeResponse {
 export interface RebuildResponse {
   pdf_b64: string;
   png_b64: string;
+  changes_applied?: number;
+  skipped_edits?: Array<{ span_id: string; reason: string }>;
 }
 
 export interface CardProject {
@@ -147,6 +159,7 @@ export interface CardProject {
 
 export enum AppState {
   DASHBOARD = 'DASHBOARD',
+  VERIFY = 'VERIFY',   // HITL 確定フェーズ (Step 2 の完了定義)
   EDIT = 'EDIT',
   INBOX = 'INBOX',
   AI_CHAT = 'AI_CHAT',

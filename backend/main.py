@@ -13,6 +13,7 @@ import base64
 import subprocess
 import tempfile
 import shutil
+from collections import Counter
 import json
 from typing import Any, Optional
 import time
@@ -30,6 +31,39 @@ from pydantic import BaseModel
 from google.cloud import documentai
 from google.cloud import vision
 from google.api_core.client_options import ClientOptions
+
+# ── YomiToku (optional): 高精度日本語OCR/レイアウト解析エンジン ──────────────
+# DN_SuperBook_PDF_Converter が内部採用している Python パッケージ。
+# 入ってなくても他機能は動作する（遅延import + 在否チェック）。
+def _yomitoku_available() -> bool:
+    try:
+        import yomitoku  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+_YOMITOKU_DLA = None  # DocumentAnalyzer のシングルトンキャッシュ
+
+def _get_yomitoku_analyzer(lite: bool = True, device: str = "cpu"):
+    """DocumentAnalyzer を初期化(遅延ロード・シングルトン)。重いので再利用必須。"""
+    global _YOMITOKU_DLA
+    if _YOMITOKU_DLA is not None:
+        return _YOMITOKU_DLA
+    from yomitoku import DocumentAnalyzer
+    configs = {
+        "ocr": {"text_detector": {"device": device}, "text_recognizer": {"device": device}},
+        "layout_analyzer": {
+            "layout_parser": {"device": device},
+            "table_structure_recognizer": {"device": device},
+        },
+    }
+    _YOMITOKU_DLA = DocumentAnalyzer(
+        configs=configs,
+        visualize=False,
+        device=device,
+        lite=lite,
+    )
+    return _YOMITOKU_DLA
 
 # ── Gemini 設定 ──────────────────────────────────────────────────────────────
 GEMINI_API_KEY = os.environ.get("GOOGLE_AI_KEY", "")
@@ -54,6 +88,7 @@ app.add_middleware(
 class VivliostyleSpan(BaseModel):
     text: str
     font_class: str = "gothic"
+    font_original: str = ""
     size_pt: float = 10.0
     x_pct: float = 0.0
     y_pct: float = 0.0
@@ -73,6 +108,22 @@ class VivliostyleBuildRequest(BaseModel):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/yomitoku-status")
+async def yomitoku_status():
+    """YomiToku が利用可能かを返す(フロントエンドが UI 表示切替に使用)"""
+    available = _yomitoku_available()
+    info: dict[str, Any] = {"available": available}
+    if available:
+        try:
+            import yomitoku  # type: ignore
+            info["version"] = getattr(yomitoku, "__version__", "unknown")
+        except Exception:
+            info["version"] = "unknown"
+    else:
+        info["install_hint"] = "pip install yomitoku"
+    return info
 
 
 # ── Gemini Vision による Span 抽出 ────────────────────────────────────────────
@@ -266,16 +317,22 @@ def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
     テキストが埋め込まれたPDFの場合、Gemini Vision や Document AI OCR よりも
     正確な位置・フォント・サイズ情報を得られる。
     """
-    rect = page.rect
-    if rect.width <= 0 or rect.height <= 0:
-        return []
-
     result_spans = []
 
     try:
         text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES)
     except Exception as e:
         print(f"PyMuPDF get_text error: {e}")
+        return []
+
+    # text_dict の width/height は回転適用後のサイズ（座標系と一致）
+    td_w = text_dict.get("width", 0)
+    td_h = text_dict.get("height", 0)
+    if td_w > 0 and td_h > 0:
+        rect = fitz.Rect(0, 0, td_w, td_h)
+    else:
+        rect = page.rect
+    if rect.width <= 0 or rect.height <= 0:
         return []
 
     span_counter = 0
@@ -306,6 +363,14 @@ def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
                 font_counts[key] = font_counts.get(key, 0) + len(s.get("text", ""))
             dominant_font, dominant_size = max(font_counts, key=lambda k: font_counts[k])
 
+            # 主要色（文字数ベース）— 完全再現用
+            color_counts: dict[int, int] = {}
+            for s in spans_in_line:
+                c = int(s.get("color", 0))
+                color_counts[c] = color_counts.get(c, 0) + len(s.get("text", ""))
+            dominant_color_int = max(color_counts, key=lambda k: color_counts[k]) if color_counts else 0
+            color_hex = f"#{dominant_color_int & 0xFFFFFF:06x}"
+
             # フォントクラス判定
             font_lower = dominant_font.lower()
             if any(k in font_lower for k in ["mincho", "ming", "明朝", "serif", "ryumin",
@@ -327,13 +392,17 @@ def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
             w_pct = ((x1 - x0) / rect.width) * 100
             h_pct = ((y1 - y0) / rect.height) * 100
 
-            # 縦書き検出: bbox が縦長 + 複数文字
-            bb_w = x1 - x0
-            bb_h = y1 - y0
+            # 縦書き検出: PyMuPDF の line["dir"] タプルを最優先
+            # (ai-cloud-ja-composer の動作確認済パターン)
+            # dir=(1,0) → 横書き / dir=(0,1) → 縦書き
             text_stripped = full_text.strip()
-            writing_dir = "vertical" if (bb_h > bb_w * 2.0 and len(text_stripped) > 1) else "horizontal"
+            line_dir = line.get("dir", (1, 0))
+            if abs(line_dir[0]) > abs(line_dir[1]):
+                writing_dir = "horizontal"
+            else:
+                writing_dir = "vertical"
 
-            # 縦書きフォント名の検出（日本語フォントの "V" 接尾辞）
+            # フォント名の "V" 接尾辞が縦書きフォントを示す場合は上書き
             if any(k in font_lower for k in ["-v", "vert", "tate", "縦"]):
                 writing_dir = "vertical"
 
@@ -350,6 +419,7 @@ def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
                 "w_pct": round(w_pct, 2),
                 "h_pct": round(h_pct, 2),
                 "writing_direction": writing_dir,
+                "color_hex": color_hex,
             })
             span_counter += 1
 
@@ -534,6 +604,50 @@ def _text_similarity(a: str, b: str) -> float:
     return common / longer
 
 
+# ── 回転補正ヘルパ ─────────────────────────
+# Document AI の normalized_vertices は回転前(mediabox)基準。
+# PyMuPDF の get_pixmap() は回転適用後のピクセルを返すため、
+# 表示PNG/rebuild時の eff_rect と一致させるには rotation 分の座標変換が必要。
+
+def _rotate_bbox_pct(x_pct: float, y_pct: float,
+                     w_pct: float, h_pct: float,
+                     rotation: int) -> tuple[float, float, float, float]:
+    """pct座標(0-100)を rotation度(時計回り)回転後の座標系に変換。
+    PDFページの回転方向(PyMuPDF page.rotation)に合わせる。
+    軸スワップ(90/270)時は w と h も入れ替える。
+    """
+    r = rotation % 360
+    if r == 0:
+        return x_pct, y_pct, w_pct, h_pct
+    if r == 90:
+        # 時計回り90°: (x,y) → (100-y-h, x), 軸スワップ
+        return (100 - y_pct - h_pct), x_pct, h_pct, w_pct
+    if r == 180:
+        return (100 - x_pct - w_pct), (100 - y_pct - h_pct), w_pct, h_pct
+    if r == 270:
+        # 時計回り270° = 反時計回り90°: (x,y) → (y, 100-x-w), 軸スワップ
+        return y_pct, (100 - x_pct - w_pct), h_pct, w_pct
+    return x_pct, y_pct, w_pct, h_pct
+
+
+def _apply_rotation_to_spans(items: list[dict[str, Any]], rotation: int) -> None:
+    """list中の各dictの x_pct/y_pct/w_pct/h_pct を rotation適用後に書き換え（in-place）。
+    writing_direction も 90/270 時に horizontal↔vertical をスワップ。
+    """
+    if rotation % 360 == 0:
+        return
+    r = rotation % 360
+    for it in items:
+        if all(k in it for k in ("x_pct", "y_pct", "w_pct", "h_pct")):
+            it["x_pct"], it["y_pct"], it["w_pct"], it["h_pct"] = _rotate_bbox_pct(
+                it["x_pct"], it["y_pct"], it["w_pct"], it["h_pct"], r
+            )
+        if r in (90, 270) and it.get("writing_direction"):
+            it["writing_direction"] = (
+                "vertical" if it["writing_direction"] == "horizontal" else "horizontal"
+            )
+
+
 # ── Document AI による Span 抽出 ─────────────────────────
 
 def _extract_spans_documentai(pdf_bytes: bytes,
@@ -592,21 +706,30 @@ def _extract_spans_documentai(pdf_bytes: bytes,
                 all_pages_data.append({"spans": [], "layout_blocks": [], "barcodes": [], "detected_languages": []})
             continue
 
-        # ── token → フォントサイズマップ構築 ──
-        # Document AI の style 情報からフォントサイズを取得
+        # ── token → フォントスタイルマップ構築 ──
+        # Document AI の style 情報からフォントサイズ・ファミリー・ウェイトを取得
         font_size_map: dict[str, float] = {}
+        font_family_map: dict[str, str] = {}
+        font_weight_map: dict[str, str] = {}
         try:
             for style in getattr(document, "text_styles", []):
                 fs = getattr(style, "font_size", None)
-                if fs:
-                    size_pt = getattr(fs, "size", 0)
-                    unit = getattr(fs, "unit", "")
-                    if unit == "PT" or not unit:
-                        for seg in style.text_anchor.text_segments:
-                            start = int(seg.start_index) if seg.start_index else 0
-                            end = int(seg.end_index) if seg.end_index else 0
-                            for idx in range(start, end):
-                                font_size_map[str(idx)] = size_pt
+                family = getattr(style, "font_family", "")
+                weight = getattr(style, "font_weight", "")
+                for seg in style.text_anchor.text_segments:
+                    start = int(seg.start_index) if seg.start_index else 0
+                    end = int(seg.end_index) if seg.end_index else 0
+                    for idx in range(start, end):
+                        sid = str(idx)
+                        if fs:
+                            size_pt = getattr(fs, "size", 0)
+                            unit = getattr(fs, "unit", "")
+                            if (unit == "PT" or not unit) and size_pt:
+                                font_size_map[sid] = size_pt
+                        if family:
+                            font_family_map[sid] = family
+                        if weight:
+                            font_weight_map[sid] = str(weight)
         except Exception:
             pass
 
@@ -635,11 +758,36 @@ def _extract_spans_documentai(pdf_bytes: bytes,
                 if not text.strip():
                     continue
 
-                # フォントクラス推定
-                font_class = "gothic"
-                if hasattr(line, "style_info") and line.style_info:
-                    family = getattr(line.style_info, "font_family", "").lower()
-                    if "mincho" in family or "serif" in family:
+                # フォントファミリー取得 (Document AI text_styles から)
+                font_original = ""
+                if char_indices and font_family_map:
+                    families = [font_family_map[str(idx)] for idx in char_indices if str(idx) in font_family_map]
+                    if families:
+                        # 最頻出ファミリーを採用
+                        font_original = Counter(families).most_common(1)[0][0]
+
+                # フォントウェイト取得
+                detected_weight = ""
+                if char_indices and font_weight_map:
+                    weights = [font_weight_map[str(idx)] for idx in char_indices if str(idx) in font_weight_map]
+                    if weights:
+                        detected_weight = Counter(weights).most_common(1)[0][0]
+
+                # フォントクラス推定（font_original + weight ベース）
+                fo_lower = font_original.lower()
+                if any(k in fo_lower for k in ["mincho", "ming", "明朝", "serif", "ryumin",
+                                                 "kozuka min", "hiragino min", "yu mincho"]):
+                    font_class = "mincho"
+                elif detected_weight and int(float(detected_weight)) >= 600:
+                    font_class = "gothic_bold"
+                elif detected_weight and int(float(detected_weight)) <= 300:
+                    font_class = "light"
+                else:
+                    font_class = "gothic"
+                # style_info フォールバック
+                if not font_original and hasattr(line, "style_info") and line.style_info:
+                    font_original = getattr(line.style_info, "font_family", "")
+                    if "mincho" in font_original.lower() or "serif" in font_original.lower():
                         font_class = "mincho"
 
                 # フォントサイズ推定 (Document AI style から)
@@ -658,14 +806,34 @@ def _extract_spans_documentai(pdf_bytes: bytes,
                 x_max = max(v[0].x, v[1].x, v[2].x, v[3].x)
                 y_max = max(v[0].y, v[1].y, v[2].y, v[3].y)
 
-                # 縦書き検出: bounding boxが縦長なら vertical
+                # ── 縦書き検出（優先順位） ──
+                # 1. Document AI の line.layout.orientation（公式情報）
+                #    PAGE_UP=1(横書き) / PAGE_RIGHT=2 / PAGE_DOWN=3 / PAGE_LEFT=4(縦書き一般)
+                # 2. フォント名の "-V" 等の縦書き書体指定
+                # 3. bbox 縦長 (h > w*1.2 かつ 2文字以上)
                 bb_w = x_max - x_min
                 bb_h = y_max - y_min
-                writing_dir = "vertical" if (bb_h > bb_w * 2.0 and len(text.strip()) > 1) else "horizontal"
+                writing_dir = "horizontal"
+                orientation = getattr(line.layout, "orientation", None)
+                if orientation is not None:
+                    # enum int値: PAGE_RIGHT(2), PAGE_LEFT(4) を縦書きと判定
+                    try:
+                        ori_val = int(orientation)
+                    except Exception:
+                        ori_val = 0
+                    if ori_val in (2, 3, 4):
+                        writing_dir = "vertical"
+                # フォント名ヒント
+                if any(k in fo_lower for k in ["-v", "vert", "tate", "縦"]):
+                    writing_dir = "vertical"
+                # bbox アスペクト比（しきい値を緩和: 1.2倍）
+                if writing_dir == "horizontal" and bb_h > bb_w * 1.2 and len(text.strip()) > 1:
+                    writing_dir = "vertical"
 
                 page_spans.append({
                     "id": f"dai_{int(time.time() * 1000)}_{i}",
                     "text": text.strip(),
+                    "font_original": font_original,
                     "font_class": font_class,
                     "size_pt": size_pt,
                     "x_pct": x_min * 100,
@@ -769,6 +937,157 @@ def _extract_spans_documentai(pdf_bytes: bytes,
     return all_pages_data
 
 
+# ── YomiToku による Span 抽出 ─────────────────────────
+# DN_SuperBook_PDF_Converter が内部採用する高精度日本語OCRエンジン。
+# 縦書き・手書き・7000+文字対応、レイアウト解析・表構造・読み順推定付き。
+
+def _extract_spans_yomitoku(pdf_bytes: bytes,
+                            lite: bool = True,
+                            device: str = "cpu") -> list[dict[str, Any]]:
+    """YomiToku で PDF 全体から Span + レイアウト情報を抽出。
+
+    各ページを画像に変換 → DocumentAnalyzer で解析 → /analyze と同じ
+    dict 形式(spans/layout_blocks/barcodes/detected_languages)で返す。
+    座標系は画像(=PNG=eff_rect=回転後)の pct。追加の回転補正は不要。
+    """
+    if not _yomitoku_available():
+        raise HTTPException(503, "YomiToku が未インストールです (pip install yomitoku)")
+
+    import numpy as np
+    analyzer = _get_yomitoku_analyzer(lite=lite, device=device)
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    all_pages: list[dict[str, Any]] = []
+
+    for pi in range(len(doc)):
+        page = doc.load_page(pi)
+        long_side_pt = max(page.rect.width, page.rect.height)
+        scale = max(2.0, min(6.0, 2400 / long_side_pt))
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+        img_w, img_h = pix.width, pix.height
+        # RGB numpy 配列 (YomiToku は BGR を期待 → 変換)
+        arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(img_h, img_w, pix.n)
+        if pix.n == 4:
+            arr = arr[:, :, :3]
+        bgr = arr[:, :, ::-1].copy()
+
+        try:
+            result, _ovis, _tvis = analyzer(bgr)
+        except Exception as e:
+            print(f"YomiToku page {pi} failed: {e}")
+            all_pages.append({"spans": [], "layout_blocks": [], "barcodes": [], "detected_languages": []})
+            continue
+
+        # ── OCR 結果 → spans (words / paragraphs 単位) ──
+        spans: list[dict[str, Any]] = []
+        ts = int(time.time() * 1000)
+        # paragraphs が豊かなら paragraph 単位、そうでなければ words 単位
+        paragraphs = getattr(result, "paragraphs", None) or []
+        words = getattr(result, "words", None) or []
+
+        def _rect_from(points) -> tuple[float, float, float, float]:
+            xs = [p[0] for p in points] if points else [0, 0]
+            ys = [p[1] for p in points] if points else [0, 0]
+            return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
+
+        source_items = paragraphs if paragraphs else words
+        for i, item in enumerate(source_items):
+            text = (getattr(item, "contents", None)
+                    or getattr(item, "content", None)
+                    or "")
+            text = (text or "").strip()
+            if not text:
+                continue
+            # YomiToku の座標は画像ピクセル。bbox or points を許容
+            box = getattr(item, "box", None) or getattr(item, "points", None)
+            if box and hasattr(box, "__len__") and len(box) == 4 and not hasattr(box[0], "__len__"):
+                # [x1, y1, x2, y2]
+                x0, y0, x1, y1 = box
+                bx, by, bw, bh = x0, y0, (x1 - x0), (y1 - y0)
+            elif box:
+                bx, by, bw, bh = _rect_from(box)
+            else:
+                continue
+            if bw <= 0 or bh <= 0:
+                continue
+            direction = getattr(item, "direction", None) or "horizontal"
+            if direction not in ("horizontal", "vertical"):
+                direction = "vertical" if bh > bw * 1.8 else "horizontal"
+            est_size_pt = max(4.0, round((bh if direction == "horizontal" else bw) / scale * 0.72, 1))
+            spans.append({
+                "id": f"yt_{ts}_{i}",
+                "text": text,
+                "font_original": "YomiToku",
+                "font_class": "mincho" if "mincho" in text.lower() else "gothic",
+                "size_pt": est_size_pt,
+                "x_pct": bx / img_w * 100,
+                "y_pct": by / img_h * 100,
+                "w_pct": bw / img_w * 100,
+                "h_pct": bh / img_h * 100,
+                "writing_direction": direction,
+            })
+
+        # ── figures → layout_blocks (image) ──
+        layout_blocks: list[dict[str, Any]] = []
+        figures = getattr(result, "figures", None) or []
+        for fi, fig in enumerate(figures):
+            box = getattr(fig, "box", None) or getattr(fig, "points", None)
+            if not box:
+                continue
+            if len(box) == 4 and not hasattr(box[0], "__len__"):
+                x0, y0, x1, y1 = box
+                bx, by, bw, bh = x0, y0, (x1 - x0), (y1 - y0)
+            else:
+                bx, by, bw, bh = _rect_from(box)
+            if bw <= 0 or bh <= 0:
+                continue
+            layout_blocks.append({
+                "id": f"yt_fig_{fi}",
+                "type": "image",
+                "x_pct": bx / img_w * 100,
+                "y_pct": by / img_h * 100,
+                "w_pct": bw / img_w * 100,
+                "h_pct": bh / img_h * 100,
+                "confidence": getattr(fig, "score", 0) or 0,
+                "text_preview": None,
+            })
+
+        # ── tables → layout_blocks (table) ──
+        tables = getattr(result, "tables", None) or []
+        for ti, tbl in enumerate(tables):
+            box = getattr(tbl, "box", None) or getattr(tbl, "points", None)
+            if not box:
+                continue
+            if len(box) == 4 and not hasattr(box[0], "__len__"):
+                x0, y0, x1, y1 = box
+                bx, by, bw, bh = x0, y0, (x1 - x0), (y1 - y0)
+            else:
+                bx, by, bw, bh = _rect_from(box)
+            if bw <= 0 or bh <= 0:
+                continue
+            layout_blocks.append({
+                "id": f"yt_tbl_{ti}",
+                "type": "table",
+                "x_pct": bx / img_w * 100,
+                "y_pct": by / img_h * 100,
+                "w_pct": bw / img_w * 100,
+                "h_pct": bh / img_h * 100,
+                "rows": len(getattr(tbl, "cells", []) or []),
+                "confidence": getattr(tbl, "score", 0) or 0,
+            })
+
+        all_pages.append({
+            "spans": spans,
+            "layout_blocks": layout_blocks,
+            "barcodes": [],
+            "detected_languages": [{"code": "ja", "confidence": 1.0}],
+        })
+        print(f"YomiToku page {pi}: {len(spans)} spans, {len(layout_blocks)} blocks")
+
+    doc.close()
+    return all_pages
+
+
 # ── /analyze エンドポイント ────────────────────────────────────────────────────
 
 @app.post("/analyze")
@@ -780,8 +1099,11 @@ async def analyze_pdf(
     x_location: Optional[str] = Header(None),
     x_processor_id: Optional[str] = Header(None),
     x_version_id: Optional[str] = Header(None),
+    x_use_yomitoku: Optional[str] = Header(None),
+    x_yomitoku_lite: Optional[str] = Header(None),
+    x_yomitoku_device: Optional[str] = Header(None),
 ):
-    """PDF → Gemini または Document AI でSpan抽出"""
+    """PDF → Gemini / Document AI / YomiToku のいずれかでSpan抽出"""
     ct = (file.content_type or "").lower()
     fn = (file.filename or "").lower()
     is_pdf = ("pdf" in ct) or fn.endswith(".pdf")
@@ -802,9 +1124,27 @@ async def analyze_pdf(
                 has_text = True
                 break
 
-        # モード選択: Document AI  "false"→無効  それ以外→常に使用（テキスト有無問わず）
+        # モード選択: YomiToku > Document AI > Gemini
+        use_yomitoku = (x_use_yomitoku or "").lower() == "true"
         use_docai_mode = (x_use_documentai or "").lower()
-        use_docai = (use_docai_mode != "false")
+        use_docai = (use_docai_mode != "false") and not use_yomitoku
+
+        # YomiToku 抽出（使用時は他エンジンをスキップ）
+        yomitoku_results: list[dict[str, Any]] = []
+        if use_yomitoku:
+            lite = (x_yomitoku_lite or "true").lower() != "false"
+            device = (x_yomitoku_device or "cpu").lower()
+            print(f"Using YomiToku (lite={lite}, device={device})...")
+            try:
+                yomitoku_results = _extract_spans_yomitoku(pdf_bytes, lite=lite, device=device)
+                print(f"YomiToku extracted {len(yomitoku_results)} pages")
+            except HTTPException:
+                raise
+            except Exception as yt_err:
+                print(f"YomiToku failed, falling back to other engines: {yt_err}")
+                yomitoku_results = []
+                use_yomitoku = False
+                use_docai = (use_docai_mode != "false")
 
         docai_results: list[dict[str, Any]] = []
         if use_docai:
@@ -823,34 +1163,70 @@ async def analyze_pdf(
 
         for i in range(len(pdf_doc)):
             page = pdf_doc.load_page(i)
-            rect = page.rect
-            width_mm = rect.width * 0.352778
-            height_mm = rect.height * 0.352778
+            raw_rect = page.rect
 
             # 適応的スケーリング: 高品質プレビュー用
-            long_side_pt = max(rect.width, rect.height)
+            long_side_pt = max(raw_rect.width, raw_rect.height)
             min_target_px = 3000
             scale_factor = max(3, min_target_px / long_side_pt)
             scale_factor = min(scale_factor, 8)  # 上限8倍
             pix = page.get_pixmap(matrix=fitz.Matrix(scale_factor, scale_factor))
             png_bytes = pix.tobytes("png")
             original_png_b64 = base64.b64encode(png_bytes).decode("utf-8")
-            print(f"Page {i}: {rect.width:.0f}x{rect.height:.0f}pt → "
+
+            # ★ pixmap の実ピクセルから実効ページサイズを逆算（rotation 安全）
+            # get_pixmap() は常に回転適用後のピクセルを返すため、
+            # これを scale_factor で割れば回転適用後の pt 寸法が得られる
+            eff_width = pix.width / scale_factor
+            eff_height = pix.height / scale_factor
+            rect = fitz.Rect(0, 0, eff_width, eff_height)
+            width_mm = eff_width * 0.352778
+            height_mm = eff_height * 0.352778
+
+            print(f"Page {i}: raw={raw_rect.width:.0f}x{raw_rect.height:.0f}pt "
+                  f"rotation={page.rotation}° → eff={eff_width:.1f}x{eff_height:.1f}pt "
+                  f"({width_mm:.1f}x{height_mm:.1f}mm) → "
                   f"{pix.width}x{pix.height}px (scale={scale_factor:.1f}x)")
 
-            # Document AI レイアウト情報
+            # Document AI / YomiToku レイアウト情報
             docai_layout_blocks = []
             docai_barcodes = []
             docai_languages = []
 
-            if use_docai and i < len(docai_results):
+            if use_yomitoku and i < len(yomitoku_results):
+                # YomiToku 結果を主軸に使用（座標は画像=回転後基準のため回転補正不要）
+                yt_page = yomitoku_results[i]
+                spans = yt_page["spans"]
+                docai_layout_blocks = yt_page.get("layout_blocks", [])
+                docai_languages = yt_page.get("detected_languages", [])
+                for s in spans:
+                    bx = (s["x_pct"] / 100) * rect.width
+                    by = (s["y_pct"] / 100) * rect.height
+                    bw = (s["w_pct"] / 100) * rect.width
+                    bh = (s["h_pct"] / 100) * rect.height
+                    s.update({"origin": [bx, by + bh], "bbox": [bx, by, bw, bh]})
+                # テキスト埋め込みPDFがあればフォント情報だけ PyMuPDF から補強
+                if has_text:
+                    pymupdf_spans = _extract_spans_pymupdf(page)
+                    if pymupdf_spans:
+                        _merge_font_info(spans, pymupdf_spans, rect.width, rect.height)
+                print(f"Page {i}: YomiToku → {len(spans)} spans")
+            elif use_docai and i < len(docai_results):
                 # Document AI 結果を主軸に使用
                 docai_page = docai_results[i]
                 spans = docai_page["spans"]
                 docai_layout_blocks = docai_page.get("layout_blocks", [])
                 docai_barcodes = docai_page.get("barcodes", [])
                 docai_languages = docai_page.get("detected_languages", [])
-                # 座標を pt に変換して追加属性付与
+                # ★ ページ回転に応じて pct 座標を回転後フレームへ変換
+                # (Document AI は mediabox 基準、表示PNG/eff_rect は回転適用後)
+                rot = int(getattr(page, "rotation", 0) or 0)
+                if rot % 360 != 0:
+                    print(f"Page {i}: applying rotation {rot}° to DocumentAI spans/blocks/barcodes")
+                    _apply_rotation_to_spans(spans, rot)
+                    _apply_rotation_to_spans(docai_layout_blocks, rot)
+                    _apply_rotation_to_spans(docai_barcodes, rot)
+                # 座標を pt に変換 + サイズ/フォントのフォールバック計算
                 for s in spans:
                     bx = (s["x_pct"] / 100) * rect.width
                     by = (s["y_pct"] / 100) * rect.height
@@ -860,6 +1236,20 @@ async def analyze_pdf(
                         "origin": [bx, by + bh],
                         "bbox": [bx, by, bw, bh],
                     })
+                    # ★ size_pt フォールバック: DocumentAI が font_size を返さなかった時は
+                    #   bbox 高さから逆算する (縦書きは幅ベース)。公式: pt = height_pt * 0.72
+                    #   (大文字高 ≒ fontSize * 0.72、日本語は近似値)
+                    if s.get("size_pt", 0) <= 9.01:  # デフォルト 9.0 のまま=DocAI未返却
+                        dim = bw if s.get("writing_direction") == "vertical" else bh
+                        if dim > 0:
+                            est = round(dim * 0.8, 1)  # 漢字は full-em なので 0.8 係数
+                            if 4.0 <= est <= 200.0:
+                                s["size_pt"] = est
+                                s["size_source"] = "bbox-estimated"
+                    else:
+                        s["size_source"] = "docai"
+                    # ★ font_match_confidence: font_original がマッチできたかフロントで判別する用
+                    s["needs_font_review"] = not bool(s.get("font_original", "").strip())
 
                 # テキスト埋め込みPDFの場合、PyMuPDFのフォント情報で補強
                 if has_text:
@@ -892,57 +1282,110 @@ async def analyze_pdf(
                 # コンテキストベースのスパン統合（Gemini結果にも適用）
                 spans = _merge_context_spans(spans, rect.width, rect.height)
 
-            # ── 画像抽出 ──
+            # ── ★ 全抽出経路共通: HITL メタデータ付与 ──
+            # どの経路で抽出されたかに関わらず、size_source と needs_font_review を設定する。
+            # DocAI 経路で既にセットされている場合は保持。
+            for s in spans:
+                if "size_source" not in s:
+                    s["size_source"] = (
+                        "pymupdf" if (s.get("id") or "").startswith("ctx_")
+                        else "gemini" if (s.get("id") or "").startswith("s_")
+                        else "docai" if (s.get("id") or "").startswith("dai_")
+                        else "unknown"
+                    )
+                if "needs_font_review" not in s:
+                    fo = s.get("font_original", "") or ""
+                    # PyMuPDF は実ファイル名を返すので基本 False。
+                    # Gemini は "Gemini_Extracted" を返すので True（ユーザーに選ばせる）。
+                    s["needs_font_review"] = (
+                        not fo.strip()
+                        or fo == "Gemini_Extracted"
+                        or fo == "YomiToku"
+                        or fo == "Manual"
+                    )
+
+            # ── 画像抽出（PyMuPDF + Document AI + Vision API） ──
             images_data = []
+
+            # ── PyMuPDF: page.get_image_info() の bbox を直接使う（動作確認済パターン） ──
+            # ai-cloud-ja-composer/backend/main.py で稼働中の手法。
+            # get_images(full=True) + get_image_rects() の組合せは使わない。
             try:
-                for img_idx, img_info in enumerate(page.get_images(full=True)):
-                    xref = img_info[0]
+                pt_w = rect.width
+                pt_h = rect.height
+                infos = page.get_image_info() or []
+                print(f"Page {i}: get_image_info → {len(infos)} image instance(s)")
+
+                for inst_idx, info in enumerate(infos):
+                    ibbox = info.get("bbox")
+                    if not ibbox or len(ibbox) < 4:
+                        continue
+                    bx0, by0, bx1, by1 = float(ibbox[0]), float(ibbox[1]), float(ibbox[2]), float(ibbox[3])
+                    bw, bh = bx1 - bx0, by1 - by0
+                    if bw <= 0 or bh <= 0:
+                        continue
+                    x_pct = bx0 / pt_w * 100
+                    y_pct = by0 / pt_h * 100
+                    w_pct = bw / pt_w * 100
+                    h_pct = bh / pt_h * 100
+                    # 極小ノイズ除去
+                    if w_pct < 0.5 and h_pct < 0.5:
+                        continue
+
+                    # 画像データ: ページの該当領域をクロップして PNG 化（確実）
+                    # xref 経由の extract_image は形式依存で失敗することがあるため、
+                    # get_pixmap(clip) の方が堅牢。
+                    img_b64 = None
                     try:
-                        base_image = pdf_doc.extract_image(xref)
-                        if not base_image or not base_image.get("image"):
-                            continue
-                        img_bytes = base_image["image"]
-                        img_ext = base_image.get("ext", "png")
-                        img_w = base_image.get("width", 0)
-                        img_h = base_image.get("height", 0)
-
-                        # 画像のページ内位置を探す
-                        img_rects = page.get_image_rects(xref)
-                        if img_rects:
-                            ir = img_rects[0]
-                            x_pct = (ir.x0 / rect.width) * 100
-                            y_pct = (ir.y0 / rect.height) * 100
-                            w_pct = ((ir.x1 - ir.x0) / rect.width) * 100
-                            h_pct = ((ir.y1 - ir.y0) / rect.height) * 100
-                        else:
-                            x_pct, y_pct, w_pct, h_pct = 0, 0, 50, 50
-
+                        clip = fitz.Rect(bx0, by0, bx1, by1)
+                        crop_pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=clip)
+                        img_bytes = crop_pix.tobytes("png")
                         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-                        mime = f"image/{img_ext}" if img_ext != "jpg" else "image/jpeg"
+                    except Exception as crop_err:
+                        print(f"  img[{inst_idx}] crop failed: {crop_err}")
+                        continue
 
-                        images_data.append({
-                            "id": f"img_{i}_{img_idx}",
-                            "xref": xref,
-                            "data_b64": img_b64,
-                            "mime_type": mime,
-                            "width": img_w,
-                            "height": img_h,
-                            "x_pct": x_pct,
-                            "y_pct": y_pct,
-                            "w_pct": w_pct,
-                            "h_pct": h_pct,
-                            "bbox": [x_pct, y_pct, w_pct, h_pct],
-                        })
-                    except Exception as img_err:
-                        print(f"Image extraction error (xref={xref}): {img_err}")
-            except Exception as imgs_err:
-                print(f"get_images error: {imgs_err}")
+                    # xref は置換用に保持（取れる場合）
+                    xref = 0
+                    for img_tuple in page.get_images(full=True):
+                        try:
+                            rects = page.get_image_rects(img_tuple[0]) or []
+                            for r in rects:
+                                if abs(r.x0 - bx0) < 2 and abs(r.y0 - by0) < 2:
+                                    xref = img_tuple[0]
+                                    break
+                            if xref:
+                                break
+                        except Exception:
+                            continue
 
-            # ── Document AI layout_blocks からの画像検出補強 ──
-            if not images_data and docai_layout_blocks and PILImage:
+                    images_data.append({
+                        "id": f"img_{i}_{inst_idx}",
+                        "xref": xref,
+                        "data_b64": img_b64,
+                        "mime_type": "image/png",
+                        "width": int(info.get("width") or bw),
+                        "height": int(info.get("height") or bh),
+                        "x_pct": x_pct,
+                        "y_pct": y_pct,
+                        "w_pct": w_pct,
+                        "h_pct": h_pct,
+                        "bbox": [x_pct, y_pct, w_pct, h_pct],
+                    })
+                    print(f"  img[{inst_idx}] xref={xref} ({x_pct:.1f},{y_pct:.1f}) {w_pct:.1f}x{h_pct:.1f}%")
+
+                print(f"Page {i}: PyMuPDF extracted {len(images_data)} image(s)")
+            except Exception as pymupdf_img_err:
+                import traceback
+                print(f"PyMuPDF image extraction error: {pymupdf_img_err}")
+                traceback.print_exc()
+
+            # ── Document AI layout_blocks からの画像検出 ──
+            if docai_layout_blocks and PILImage:
                 try:
                     pil_img = PILImage.open(BytesIO(png_bytes))
                     png_w, png_h = pil_img.size
+                    docai_img_count = 0
                     for lb_idx, lb in enumerate(docai_layout_blocks):
                         if lb.get("type") != "image":
                             continue
@@ -970,13 +1413,15 @@ async def analyze_pdf(
                             "h_pct": lb["h_pct"],
                             "bbox": [lb["x_pct"], lb["y_pct"], lb["w_pct"], lb["h_pct"]],
                         })
-                    if images_data:
-                        print(f"Document AI detected {len(images_data)} image blocks from layout")
+                        docai_img_count += 1
+                    if docai_img_count:
+                        print(f"Document AI detected {docai_img_count} additional image blocks from layout")
                 except Exception as docai_img_err:
-                    print(f"DocAI image extraction fallback error: {docai_img_err}")
+                    print(f"DocAI image extraction error: {docai_img_err}")
 
-            # ── Vision API での画像検出（印鑑・ロゴ・スタンプ等） ──
-            if not images_data and PILImage:
+            # ── Vision API での画像検出（印鑑・ロゴ・スタンプ等 — 常に実行） ──
+            if PILImage:
+                pre_vis_count = len(images_data)
                 try:
                     client = vision.ImageAnnotatorClient()
                     vis_image = vision.Image(content=png_bytes)
@@ -1002,6 +1447,16 @@ async def analyze_pdf(
                         y_min = min(v.y for v in verts)
                         x_max = max(v.x for v in verts)
                         y_max = max(v.y for v in verts)
+                        # 既存画像との重複チェック
+                        is_dup = False
+                        for existing in images_data:
+                            if (abs(existing["x_pct"] - x_min * 100) < 5
+                                    and abs(existing["y_pct"] - y_min * 100) < 5
+                                    and abs(existing["w_pct"] - (x_max - x_min) * 100) < 10):
+                                is_dup = True
+                                break
+                        if is_dup:
+                            continue
                         crop_x0 = int(x_min * png_w)
                         crop_y0 = int(y_min * png_h)
                         crop_x1 = int(x_max * png_w)
@@ -1073,10 +1528,14 @@ async def analyze_pdf(
                         })
                         vis_img_idx += 1
 
-                    if images_data:
-                        print(f"Vision API detected {len(images_data)} images (objects+logos)")
+                    vis_added = len(images_data) - pre_vis_count
+                    if vis_added:
+                        print(f"Vision API detected {vis_added} additional images (objects+logos)")
                 except Exception as vis_img_err:
                     print(f"Vision API image detection error: {vis_img_err}")
+
+            if images_data:
+                print(f"Page {i}: Total {len(images_data)} images extracted (PyMuPDF+DocAI+Vision)")
 
             # ── 描画要素(罫線・背景色)抽出 ──
             drawings_data = []
@@ -1260,28 +1719,143 @@ async def vision_analyze(req: dict[str, Any]):
 
 # ── /rebuild ヘルパー ──────────────────────────────────────────────────────────
 
-# Phase 1: フォントマッピング
-FONT_PATHS = [
-    "/usr/share/fonts/google",   # Docker
-    "/app/fonts",                # Docker fallback
+# ── フォントカタログ + Gemini AI 選定 ──────────────────────────────────────────
+
+_FONT_DIRS = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts"),
+    os.path.join(os.path.dirname(__file__), "fonts"),
+    "/app/fonts",
+    "/usr/share/fonts/google",
 ]
 
-FONT_MAP = {
-    "gothic":      "NotoSansJP.ttf",
-    "light":       "NotoSansJP.ttf",
-    "gothic_bold": "NotoSansJP.ttf",
-    "mincho":      "NotoSerifJP.ttf",
-}
+def _scan_fonts() -> dict[str, str]:
+    """fonts/ 内の全 OTF/TTF を {ファイル名: フルパス} で返す"""
+    result: dict[str, str] = {}
+    for d in _FONT_DIRS:
+        if not os.path.isdir(d):
+            continue
+        for f in os.listdir(d):
+            if f.lower().endswith((".otf", ".ttf")) and f not in result:
+                result[f] = os.path.join(d, f)
+    return result
+
+_FONT_FILES = _scan_fonts()
+_FONT_CATALOG_STR = "\n".join(sorted(_FONT_FILES.keys()))
+print(f"Font catalog: {len(_FONT_FILES)} files")
+
+# Gemini フォント選定キャッシュ {font_original → (filename, size_scale)}
+_font_match_cache: dict[str, tuple[str, float]] = {}
+
+_FONT_MATCH_PROMPT = """あなたはDTP・フォントの専門家です。
+
+# タスク
+PDFから検出された元フォント名に対して、利用可能なフォントファイルから最も近いフォントを選定してください。
+フォントサイズの補正係数も指定してください（元フォントと選定フォントのメトリクス差を考慮）。
+
+# 利用可能なフォントファイル一覧
+{catalog}
+
+# 選定ルール
+1. ファミリー（ゴシック系→ゴシック系、明朝系→明朝系、欧文→欧文）を合わせる
+2. ウェイト（Light, Regular, Medium, Bold, Heavy等）を合わせる
+3. Italic/Roman を合わせる
+4. 文字セット Pr6 > Pr6N > Pro > Pr5 > Std の優先順
+5. サイズ補正: 元フォントと選定フォントの見た目の大きさが近くなるよう係数を指定
+   - 同系列なら 1.0
+   - NotoSansJP → モリサワゴシック系: 約 0.95
+   - 欧文→和文置換: 約 1.0-1.1
+   - 不明なら 1.0
+
+# 入力
+元フォント名: {font_original}
+font_class: {font_class}
+
+# 出力（JSON のみ、他のテキストなし）
+{{"filename": "選定したファイル名.otf", "size_scale": 1.0, "reason": "選定理由（10字以内）"}}
+"""
 
 
-def _resolve_font(font_class: str) -> str | None:
-    """font_class から実フォントファイルパスを解決（なければ None）"""
-    fname = FONT_MAP.get(font_class, FONT_MAP["gothic"])
-    for d in FONT_PATHS:
-        p = os.path.join(d, fname)
-        if os.path.exists(p):
-            return p
-    return None
+def _match_font_gemini(font_original: str, font_class: str) -> tuple[str, float] | None:
+    """Gemini AI でフォント選定。成功時 (filename, size_scale) を返す。"""
+    api_key = os.environ.get("GOOGLE_AI_KEY", "") or GEMINI_API_KEY
+    if not api_key or not _FONT_FILES:
+        return None
+
+    prompt = _FONT_MATCH_PROMPT.format(
+        catalog=_FONT_CATALOG_STR,
+        font_original=font_original,
+        font_class=font_class,
+    )
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                temperature=0.0,
+                max_output_tokens=256,
+                response_mime_type="application/json",
+            ),
+        )
+        result = json.loads(response.text)
+        fname = result.get("filename", "")
+        scale = float(result.get("size_scale", 1.0))
+        reason = result.get("reason", "")
+        if fname in _FONT_FILES:
+            print(f"    Gemini font: '{font_original}' → {fname} (scale={scale}, {reason})")
+            return fname, scale
+        # 大文字小文字の揺れ対応
+        for real_name in _FONT_FILES:
+            if real_name.lower() == fname.lower():
+                print(f"    Gemini font: '{font_original}' → {real_name} (scale={scale}, {reason})")
+                return real_name, scale
+        print(f"    Gemini returned unknown file: {fname}")
+        return None
+    except Exception as e:
+        print(f"    Gemini font match error: {e}")
+        return None
+
+
+def _match_font(font_original: str, font_class: str, size_pt: float) -> tuple[str | None, float]:
+    """font_original → Gemini AI で最適フォントを選定（キャッシュ付き）。
+    Returns: (font_file_path, adjusted_size_pt)
+    """
+    if not _FONT_FILES:
+        return None, size_pt
+
+    # キャッシュキー
+    cache_key = f"{font_original}|{font_class}"
+    if cache_key in _font_match_cache:
+        fname, scale = _font_match_cache[cache_key]
+        if fname in _FONT_FILES:
+            return _FONT_FILES[fname], round(size_pt * scale, 1)
+        return None, size_pt
+
+    # Gemini AI で選定
+    result = _match_font_gemini(font_original, font_class)
+    if result:
+        fname, scale = result
+        _font_match_cache[cache_key] = (fname, scale)
+        return _FONT_FILES[fname], round(size_pt * scale, 1)
+
+    # Gemini 失敗時: font_class ベースの最低限フォールバック
+    fallbacks = {
+        "gothic":      "A-OTF-GothicBBBPr6-Medium.otf",
+        "gothic_bold": "A-OTF-GothicMB101Pr6-Bold.otf",
+        "light":       "A-OTF-ShinGoPr6-Light.otf",
+        "mincho":      "A-OTF-RyuminPr6-Light.otf",
+    }
+    fb = fallbacks.get(font_class, fallbacks["gothic"])
+    if fb in _FONT_FILES:
+        _font_match_cache[cache_key] = (fb, 1.0)
+        print(f"    fallback: '{font_original}' → {fb} (Gemini unavailable)")
+        return _FONT_FILES[fb], size_pt
+    # 最終: Noto
+    for noto in ["NotoSansJP.ttf", "NotoSerifJP.ttf"]:
+        if noto in _FONT_FILES:
+            _font_match_cache[cache_key] = (noto, 1.0)
+            return _FONT_FILES[noto], size_pt
+    return None, size_pt
 
 
 # Phase 3: 背景色サンプリング
@@ -1371,6 +1945,15 @@ async def rebuild_pdf(req: dict[str, Any]):
             raise HTTPException(400, f"page_index {page_index} is out of range (total pages: {len(doc)})")
         page = doc.load_page(page_index)
 
+        # ★ pct座標は回転適用後のサイズ基準 → text_dict から実効サイズを取得
+        _td = page.get_text("dict")
+        _td_w = _td.get("width", 0)
+        _td_h = _td.get("height", 0)
+        if _td_w > 0 and _td_h > 0:
+            eff_rect = fitz.Rect(0, 0, _td_w, _td_h)
+        else:
+            eff_rect = page.rect
+
         changes_applied = 0
         skipped_edits = []
 
@@ -1378,7 +1961,7 @@ async def rebuild_pdf(req: dict[str, Any]):
         color_map = _build_color_map(page)
 
         # ── 全編集の矩形を取得 ──
-        edit_plan = []  # [(span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class)]
+        edit_plan = []  # [(span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class, font_original)]
         for span_id, new_text in edits.items():
             old_text = original_texts.get(span_id, "")
             if not old_text or old_text == new_text:
@@ -1409,9 +1992,8 @@ async def rebuild_pdf(req: dict[str, Any]):
                 exact_rects = page.search_for(old_text)
                 if exact_rects:
                     if has_pct:
-                        page_rect = page.rect
-                        expected_cx = (x_pct / 100) * page_rect.width + (w_pct / 200) * page_rect.width
-                        expected_cy = (y_pct / 100) * page_rect.height + (h_pct / 200) * page_rect.height
+                        expected_cx = (x_pct / 100) * eff_rect.width + (w_pct / 200) * eff_rect.width
+                        expected_cy = (y_pct / 100) * eff_rect.height + (h_pct / 200) * eff_rect.height
                         best_rect = None
                         best_dist = float('inf')
                         for r in exact_rects:
@@ -1421,7 +2003,7 @@ async def rebuild_pdf(req: dict[str, Any]):
                             if dist < best_dist:
                                 best_dist = dist
                                 best_rect = r
-                        diag = (page_rect.width ** 2 + page_rect.height ** 2) ** 0.5
+                        diag = (eff_rect.width ** 2 + eff_rect.height ** 2) ** 0.5
                         if best_dist < diag * 0.3:
                             rects = [best_rect]
                             use_method = f"exact-match (dist={best_dist:.0f})"
@@ -1433,11 +2015,10 @@ async def rebuild_pdf(req: dict[str, Any]):
 
             # Step 2: pct座標フォールバック
             if not rects and has_pct:
-                page_rect = page.rect
-                x0 = (x_pct / 100) * page_rect.width
-                y0 = (y_pct / 100) * page_rect.height
-                x1 = x0 + (w_pct / 100) * page_rect.width
-                y1 = y0 + (h_pct / 100) * page_rect.height
+                x0 = (x_pct / 100) * eff_rect.width
+                y0 = (y_pct / 100) * eff_rect.height
+                x1 = x0 + (w_pct / 100) * eff_rect.width
+                y1 = y0 + (h_pct / 100) * eff_rect.height
                 rects = [fitz.Rect(x0, y0, x1, y1)]
                 use_method = "pct-bbox"
 
@@ -1517,15 +2098,16 @@ async def rebuild_pdf(req: dict[str, Any]):
                 size_pt = max(round(rect.height * 0.75, 1), 6.0)
             writing_dir = ov.get("writing_direction", "horizontal")
             font_class = ov.get("font_class") or sb.get("font_class") or "gothic"
+            font_original = ov.get("font_original") or sb.get("font_original") or ""
 
             expanded = fitz.Rect(
                 rect.x0 - 1, rect.y0 - 1,
                 rect.x1 + 1, rect.y1 + 1
             )
-            edit_plan.append((span_id, new_text, expanded, rect, size_pt, writing_dir, font_class))
+            edit_plan.append((span_id, new_text, expanded, rect, size_pt, writing_dir, font_class, font_original))
 
         # ── 全 redact annotation を一括追加 → apply ──
-        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class in edit_plan:
+        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class, font_original in edit_plan:
             # Phase 3: 背景色サンプリング
             bg_color = _sample_bg_color(page, expanded)
             page.add_redact_annot(expanded, fill=bg_color)
@@ -1534,15 +2116,18 @@ async def rebuild_pdf(req: dict[str, Any]):
             page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
         # ── 新テキストを元の位置に挿入 ──
-        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class in edit_plan:
+        for span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class, font_original in edit_plan:
             try:
-                # Phase 1: フォント解決
-                fontfile = _resolve_font(font_class)
+                # Phase 1: フォント選定（font_original ベース）
+                fontfile, adjusted_size = _match_font(font_original, font_class, size_pt)
                 font_kwargs: dict[str, Any] = {}
                 if fontfile:
                     font_kwargs["fontfile"] = fontfile
+                    size_pt = adjusted_size
+                    print(f"  [{span_id}] font: '{font_original}' → {os.path.basename(fontfile)} @ {size_pt}pt")
                 else:
                     font_kwargs["fontname"] = "japan"
+                    print(f"  [{span_id}] font: '{font_original}' → FALLBACK (japan built-in)")
 
                 # Phase 4: 元テキスト色を取得
                 text_color = _lookup_text_color(color_map, orig_rect.x0, orig_rect.y0)
@@ -1570,39 +2155,62 @@ async def rebuild_pdf(req: dict[str, Any]):
                     )
                     changes_applied += 1
             except Exception as e:
-                print(f"insert_text error: {e}")
+                print(f"insert_text error [{span_id}]: {e}")
+                skipped_edits.append({"span_id": span_id, "text": new_text[:30], "reason": f"insert_error: {e}"})
 
         # ── 画像差し替え ──
         images_replaced = 0
         for img_id, new_img_data in image_replacements.items():
             try:
-                xref = new_img_data.get("xref")
                 new_b64 = new_img_data.get("data_b64", "")
-                if not xref or not new_b64:
+                if not new_b64:
                     continue
                 new_img_bytes = base64.b64decode(new_b64)
-                # PyMuPDF で画像を差し替え
-                doc._deleteObject(xref)
-                page = doc.load_page(page_index)
+                xref = new_img_data.get("xref")
 
-                # 画像の位置を取得して再配置
+                # ── 方法1: rect (pt座標) が直接指定されている場合 ──
                 img_rect_data = new_img_data.get("rect")
-                if img_rect_data:
+                if img_rect_data and len(img_rect_data) == 4:
                     img_rect = fitz.Rect(img_rect_data)
-                    page.insert_image(img_rect, stream=new_img_bytes)
+                    page.insert_image(img_rect, stream=new_img_bytes, overlay=True)
                     images_replaced += 1
-                else:
-                    # xrefベースで直接置換
+                    print(f"  Image {img_id}: replaced via rect {img_rect}")
+                    continue
+
+                # ── 方法2: pct座標 → pt座標に変換して上書き ──
+                x_pct = new_img_data.get("x_pct")
+                y_pct = new_img_data.get("y_pct")
+                w_pct = new_img_data.get("w_pct")
+                h_pct = new_img_data.get("h_pct")
+                if x_pct is not None and y_pct is not None and w_pct and h_pct:
+                    x0 = x_pct / 100 * eff_rect.width
+                    y0 = y_pct / 100 * eff_rect.height
+                    x1 = x0 + w_pct / 100 * eff_rect.width
+                    y1 = y0 + h_pct / 100 * eff_rect.height
+                    img_rect = fitz.Rect(x0, y0, x1, y1)
+                    page.insert_image(img_rect, stream=new_img_bytes, overlay=True)
+                    images_replaced += 1
+                    print(f"  Image {img_id}: replaced via pct→rect {img_rect}")
+                    continue
+
+                # ── 方法3: 有効な xref がある場合 ──
+                if xref and xref > 0:
                     try:
                         pix = fitz.Pixmap(new_img_bytes)
                         doc.replace_image(xref, pixmap=pix)
                         images_replaced += 1
+                        print(f"  Image {img_id}: replaced via xref={xref}")
                     except Exception:
-                        # fallback: ページ上に画像を配置
-                        img_rects = page.get_image_rects(xref)
-                        if img_rects:
-                            page.insert_image(img_rects[0], stream=new_img_bytes)
-                            images_replaced += 1
+                        try:
+                            img_rects = page.get_image_rects(xref)
+                            if img_rects:
+                                page.insert_image(img_rects[0], stream=new_img_bytes, overlay=True)
+                                images_replaced += 1
+                                print(f"  Image {img_id}: replaced via xref→rect fallback")
+                        except Exception as xref_err:
+                            print(f"  Image {img_id}: xref={xref} fallback failed: {xref_err}")
+                else:
+                    print(f"  Image {img_id}: skipped — no rect, no pct, no valid xref")
             except Exception as img_err:
                 print(f"Image replace error ({img_id}): {img_err}")
 
@@ -1616,6 +2224,9 @@ async def rebuild_pdf(req: dict[str, Any]):
         mat = fitz.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat)
         png_bytes = pix.tobytes("png")
+        # pixmap から実効 pt サイズを逆算（rotation 安全）
+        eff_w = pix.width / scale
+        eff_h = pix.height / scale
         doc.close()
 
         return {
@@ -1623,6 +2234,8 @@ async def rebuild_pdf(req: dict[str, Any]):
                 new_pdf_bytes).decode("utf-8"),
             "png_b64": base64.b64encode(
                 png_bytes).decode("utf-8"),
+            "page_pt": [eff_w, eff_h],
+            "page_mm": [eff_w * 0.352778, eff_h * 0.352778],
             "changes_applied": changes_applied,
             "images_replaced": images_replaced,
             "skipped_edits": skipped_edits,
@@ -1642,23 +2255,37 @@ def _generate_html_css(
     title: str,
     bg_image_b64: Optional[str] = None,
 ) -> tuple[str, str]:
-    """スパンデータからVivliostyle用HTML+CSSを生成"""
+    """スパンデータからVivliostyle用HTML+CSSを生成
+    各スパンの font_original を Gemini AI で最適フォントに変換。
+    """
     w_mm, h_mm = page_mm[0], page_mm[1]
 
-    font_map = {
-        "gothic": "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
-        "gothic_bold": (
-            "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif"
-        ),
-        "mincho": "'Noto Serif JP', 'Hiragino Mincho ProN', serif",
-        "light": "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
-    }
-    weight_map = {
-        "gothic": "400",
-        "gothic_bold": "700",
-        "mincho": "400",
-        "light": "300",
-    }
+    # ── 各スパンごとに Gemini でフォント選定 ──
+    font_face_css = ""
+    font_face_added: set[str] = set()    # {font_file_path}
+    span_font_info: list[tuple[str, float]] = []  # [(css_font_family, adjusted_size)]
+
+    for s in spans:
+        fo = s.font_original or ""
+        fp, adj_size = _match_font(fo, s.font_class, s.size_pt)
+        if fp and fp not in font_face_added:
+            fname = os.path.splitext(os.path.basename(fp))[0]
+            fmt = "truetype" if fp.lower().endswith(".ttf") else "opentype"
+            font_face_css += f"""@font-face {{
+  font-family: '{fname}';
+  src: url('file://{fp}') format('{fmt}');
+}}
+"""
+            font_face_added.add(fp)
+
+        if fp:
+            fname = os.path.splitext(os.path.basename(fp))[0]
+            is_serif = s.font_class == "mincho"
+            fallback = "'Noto Serif JP', serif" if is_serif else "'Noto Sans JP', sans-serif"
+            span_font_info.append((f"'{fname}', {fallback}", adj_size))
+        else:
+            fallback = "'Noto Serif JP', serif" if s.font_class == "mincho" else "'Noto Sans JP', sans-serif"
+            span_font_info.append((fallback, s.size_pt))
 
     css = f"""@page {{
   size: {w_mm}mm {h_mm}mm;
@@ -1667,6 +2294,7 @@ def _generate_html_css(
   marks: crop cross;
 }}
 
+{font_face_css}
 @font-face {{
   font-family: 'Noto Sans JP';
   src: local('Noto Sans JP'), local('NotoSansJP');
@@ -1705,13 +2333,12 @@ body {{
 
     elements_html = ""
     for i, s in enumerate(spans):
-        font_family = font_map.get(s.font_class, font_map["gothic"])
-        font_weight = weight_map.get(s.font_class, "400")
+        font_family, adj_size = span_font_info[i]
         elements_html += (
             f'    <div class="span-element" style="'
             f"left: {s.x_pct}%; top: {s.y_pct}%; "
-            f"font-family: {font_family}; font-weight: {font_weight}; "
-            f'font-size: {s.size_pt}pt;">{s.text}</div>\n'
+            f"font-family: {font_family}; "
+            f'font-size: {adj_size}pt;">{s.text}</div>\n'
         )
 
     html = f"""<!DOCTYPE html>
@@ -2331,7 +2958,7 @@ async def _vivliostyle_fallback(
     vertical_css: str,
     custom_css: str,
 ):
-    """md2pdf-ja 失敗時の Vivliostyle フォールバック"""
+    """md2pdf-ja 失敗時の Vivliostyle フォールバック（Gemini AI フォント選定）"""
     import markdown as md_lib
 
     w_mm = page_mm[0] if len(page_mm) > 0 else 210
@@ -2346,11 +2973,35 @@ async def _vivliostyle_fallback(
     if vertical_css:
         v_css = vertical_css
 
+    # Gemini AI でドキュメントフォント選定
+    body_fp, _ = _match_font("GothicBBB-Medium", "gothic", 10)
+    heading_fp, _ = _match_font("GothicMB101-Bold", "gothic_bold", 10)
+    body_serif_fp, _ = _match_font("Ryumin-Light", "mincho", 10)
+
+    font_face_css = ""
+    body_font_family = "'Noto Sans JP', sans-serif"
+    heading_font_family = "'Noto Sans JP', sans-serif"
+
+    for fp, role in [(body_fp, "body"), (heading_fp, "heading"), (body_serif_fp, "serif")]:
+        if fp:
+            fname = os.path.splitext(os.path.basename(fp))[0]
+            fmt = "truetype" if fp.lower().endswith(".ttf") else "opentype"
+            font_face_css += f"""@font-face {{
+  font-family: '{fname}';
+  src: url('file://{fp}') format('{fmt}');
+}}
+"""
+            if role == "body":
+                body_font_family = f"'{fname}', 'Noto Sans JP', sans-serif"
+            elif role == "heading":
+                heading_font_family = f"'{fname}', 'Noto Sans JP', sans-serif"
+
     css_content = f"""@page {{
   size: {w_mm}mm {h_mm}mm;
   margin: 10mm 12mm;
 }}
 
+{font_face_css}
 @font-face {{
   font-family: 'Noto Sans JP';
   src: local('Noto Sans JP'), local('NotoSansJP');
@@ -2366,7 +3017,7 @@ async def _vivliostyle_fallback(
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 
 body {{
-  font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+  font-family: {body_font_family};
   font-size: 10pt;
   line-height: 1.8;
   color: #222;
@@ -2374,9 +3025,9 @@ body {{
   print-color-adjust: exact;
 }}
 
-h1 {{ font-size: 20pt; margin: 0.5em 0 0.3em; font-weight: 700; }}
-h2 {{ font-size: 16pt; margin: 0.4em 0 0.2em; font-weight: 700; }}
-h3 {{ font-size: 13pt; margin: 0.3em 0 0.2em; font-weight: 600; }}
+h1 {{ font-family: {heading_font_family}; font-size: 20pt; margin: 0.5em 0 0.3em; font-weight: 700; }}
+h2 {{ font-family: {heading_font_family}; font-size: 16pt; margin: 0.4em 0 0.2em; font-weight: 700; }}
+h3 {{ font-family: {heading_font_family}; font-size: 13pt; margin: 0.3em 0 0.2em; font-weight: 600; }}
 
 p {{ margin: 0.4em 0; }}
 table {{ border-collapse: collapse; margin: 0.5em 0; width: 100%; }}

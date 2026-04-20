@@ -7,7 +7,18 @@ export default {
     "./services/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      fontFamily: {
+        sans: [
+          'Noto Sans',
+          'Noto Sans JP',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'Hiragino Kaku Gothic ProN',
+          'sans-serif',
+        ],
+      },
+    },
   },
   plugins: [
     require('@tailwindcss/typography'),
