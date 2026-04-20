@@ -295,6 +295,17 @@ const App: React.FC = () => {
     [originalSpans],
   );
 
+  // ── 装飾ウォーターマーク自動除外 ──
+  // カード面積の 1/4 以上 (w_pct * h_pct > 2500) かつ 30pt 超の span は
+  // 背景透かし文字とみなし、フィールド一覧・プレビュー・PDF 出力すべてから除く
+  const isDecorationSpan = (s: Span): boolean =>
+    (s.w_pct * s.h_pct) > 2500 && s.size_pt > 30;
+
+  const visibleSpans = useMemo(
+    () => spans.filter(s => !isDecorationSpan(s)),
+    [spans],
+  );
+
   // 検出要素の総数と未確認数（loss-prevention 用の安全ゲート）
   // 優先順位: span.status (VERIFY フローが設定) > localStorage (DetectionReview の旧フロー)
   const detectionTotal = spans.length + pageImages.length + layoutBlocks.length + barcodes.length;
@@ -647,10 +658,10 @@ const App: React.FC = () => {
     }
     flash('PDF生成中...', 'info');
     try {
-      const nameSpan = spans.find(s => s.font_class === 'mincho') || spans[0];
+      const nameSpan = visibleSpans.find(s => s.font_class === 'mincho') || visibleSpans[0];
       const title = nameSpan?.text?.slice(0, 30) || '名刺';
       const bytes = await exportCardAsPdfBytes({
-        spans,
+        spans: visibleSpans,  // 装飾ウォーターマークを除いて出力
         pageMM,
         bgPngBase64: withOriginalBg
           ? (originalPng ? originalPng.replace(/^data:image\/png;base64,/, '') : null)
@@ -1605,7 +1616,7 @@ const App: React.FC = () => {
       <div className="w-80 flex flex-col shrink-0 border-r" style={{ background: '#16162a', borderColor: '#2a2a4a' }}>
         <div className="px-3 py-2.5 border-b flex items-center justify-between" style={{ borderColor: '#2a2a4a' }}>
           <span className="text-xs font-medium" style={{ color: '#8888aa' }}>
-            フィールド ({spans.length})
+            フィールド ({visibleSpans.length}{spans.length !== visibleSpans.length ? ` / 装飾除外 ${spans.length - visibleSpans.length}` : ''})
           </span>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ background: '#12122a', color: '#6b6b8a' }}>
             {pageMM[0]}x{pageMM[1]}mm{pageMM[0] < pageMM[1] ? ' 縦' : ''}
@@ -1613,7 +1624,7 @@ const App: React.FC = () => {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {spans.map((s, i) => {
+          {visibleSpans.map((s, i) => {
             const isActive = selectedId === s.id;
             const orig = originalSpanById.get(s.id);
             const changed = !!orig && s.text !== orig.text;
@@ -2152,7 +2163,7 @@ const App: React.FC = () => {
                   const renderedHeightPx = previewImgRef.current?.getBoundingClientRect().height ?? 0;
                   const pageH_pt = (pageMM[1] / 25.4) * 72;
                   const pxPerPt = pageH_pt > 0 ? renderedHeightPx / pageH_pt : 0;
-                  return showOverlay && spans.map((s, i) => {
+                  return showOverlay && visibleSpans.map((s, i) => {
                     const fontSizePx = Math.max(1, s.size_pt * pxPerPt);
                     const isVertical = s.writing_direction === 'vertical';
                     const lineHeight = isVertical ? 1.0 : 1.1;
