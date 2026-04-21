@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import base64
+import re
 import subprocess
 import tempfile
 import shutil
@@ -70,6 +71,46 @@ GEMINI_API_KEY = os.environ.get("GOOGLE_AI_KEY", "")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+
+# ── A-OTF 登録書体レジストリ (fonts/*.otf を唯一のソースとして動的構築) ──
+# 重複定義を避けるため、ファイルシステムを走査して CSS 名に復元する。
+# 例: 'A-OTF-GothicMB101Pro-Bold.otf' → 'A-OTF GothicMB101Pro-Bold'
+#     'AGaramondPro-Bold.otf'         → 'AGaramondPro-Bold'
+# utils.ts の REGISTERED_FONT_FAMILIES と 1:1 で一致するよう変換する。
+
+_FONTS_DIR_CANDIDATES = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts"),
+    "/app/fonts",
+]
+
+
+def _file_to_css_font_name(filename: str) -> str:
+    """OTF ファイル名 → CSS @font-face 名 に変換する。"""
+    base = filename[:-4] if filename.lower().endswith(".otf") else filename
+    for prefix in ("A-OTF-", "A-CID-"):
+        if base.startswith(prefix):
+            return prefix.rstrip("-") + " " + base[len(prefix):]
+    return base
+
+
+def _load_registered_families() -> list[str]:
+    for d in _FONTS_DIR_CANDIDATES:
+        try:
+            if not os.path.isdir(d):
+                continue
+            otfs = sorted(f for f in os.listdir(d) if f.lower().endswith(".otf"))
+            if otfs:
+                print(f"Loaded {len(otfs)} OTF families from {d}")
+                return [_file_to_css_font_name(f) for f in otfs]
+        except Exception as e:
+            print(f"fonts dir scan error at {d}: {e}")
+    print("WARNING: no fonts/*.otf directory found. Font registry is empty.")
+    return []
+
+
+REGISTERED_FONT_FAMILIES: list[str] = _load_registered_families()
+
 # ── FastAPI ─────────────────────────────────────────────────────────────────
 app = FastAPI(title="AIクラウド組版 - Kumihan API")
 
@@ -97,10 +138,14 @@ class VivliostyleSpan(BaseModel):
 
 
 class VivliostyleBuildRequest(BaseModel):
-    spans: list[VivliostyleSpan]
+    spans: list[VivliostyleSpan] = []
     page_mm: list[float] = [91, 55]
     title: str = "Preview"
     bg_image_b64: Optional[str] = None
+    raw_html: Optional[str] = None
+    raw_css: Optional[str] = None
+    save_dir_name: Optional[str] = None
+    images: list[dict[str, str]] = []
 
 
 # ── ヘルスチェック ─────────────────────────────────────────────────────────────
@@ -150,11 +195,18 @@ GEMINI_EXTRACT_PROMPT = """
 - テキストがぴったり収まる最小の矩形として座標を推定すること
 - 余白を含めず、文字の外接矩形に合わせること
 
-【フォント分類】
+【フォント分類 font_class】
 - gothic: ゴシック体、サンセリフ体、角ゴシック
 - mincho: 明朝体、セリフ体
 - gothic_bold: 太ゴシック、ボールド体（見出し等の太字）
 - light: 細字、ライト体
+
+【フォント名候補 font_candidates の推定】
+- 画像から判読できる書体の特徴（ふところ・太さ・エレメント・かなの形状・欧文のセリフ/サンセリフ）を手がかりに、最も近いと思われるモリサワ A-OTF 書体候補を **複数（最大3件、信頼度の降順）** 返すこと。
+- 必ず schema の enum に含まれる書体名そのまま（スペースと大文字小文字・ハイフンを完全一致）で返すこと。
+- 太さ違い（Regular/Medium/Bold/Heavy/Ultra）、明朝なら Pr6/Pro/Std の系統違い、新ゴと UD 新ゴ、GothicMB101 と ShinGo などの近い系統をあわせて候補に入れてよい。
+- 各候補には 0.0〜1.0 の信頼度 confidence を付けること（1位が 0.9 なら 2位は 0.5 程度、のように差を付ける）。
+- 画像品質が低く書体まで特定できない場合は空配列 [] でよい（推測で嘘を出すより空が望ましい）。
 
 【フォントサイズ推定の目安】
 - 名刺: 氏名≒12〜18pt, 会社名≒10〜14pt, 部署/役職≒8〜10pt, 住所/電話≒7〜9pt
@@ -168,19 +220,52 @@ GEMINI_EXTRACT_PROMPT = """
 """
 
 # Gemini 構造化出力スキーマ
+# 参考: https://ai.google.dev/gemini-api/docs/structured-output
+#   - 固定値集合は enum で指定 (Gemini が勝手なフォント名を作るのを防ぐ)
+#   - 候補の複数列挙は array + minItems/maxItems
 GEMINI_SPAN_SCHEMA = {
     "type": "ARRAY",
     "items": {
         "type": "OBJECT",
         "properties": {
             "text": {"type": "STRING", "description": "テキスト内容"},
-            "font_class": {"type": "STRING", "description": "フォント分類: gothic, mincho, gothic_bold, light"},
+            "font_class": {
+                "type": "STRING",
+                "enum": ["gothic", "mincho", "gothic_bold", "light"],
+                "description": "フォント分類",
+            },
+            "font_candidates": {
+                "type": "ARRAY",
+                "description": "推定したモリサワA-OTF書体候補。信頼度降順の最大3件。自信が無ければ空配列。",
+                "maxItems": 3,
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "name": {
+                            "type": "STRING",
+                            "enum": REGISTERED_FONT_FAMILIES or [""],
+                            "description": "登録済 A-OTF 書体名(enumから選択)",
+                        },
+                        "confidence": {
+                            "type": "NUMBER",
+                            "minimum": 0.0,
+                            "maximum": 1.0,
+                            "description": "0.0-1.0 の信頼度",
+                        },
+                    },
+                    "required": ["name", "confidence"],
+                },
+            },
             "size_pt": {"type": "NUMBER", "description": "推定フォントサイズ(pt)"},
             "x_pct": {"type": "NUMBER", "description": "左端X座標(0-100%)"},
             "y_pct": {"type": "NUMBER", "description": "上端Y座標(0-100%)"},
             "w_pct": {"type": "NUMBER", "description": "幅(0-100%)"},
             "h_pct": {"type": "NUMBER", "description": "高さ(0-100%)"},
-            "writing_direction": {"type": "STRING", "description": "組方向: horizontal または vertical"},
+            "writing_direction": {
+                "type": "STRING",
+                "enum": ["horizontal", "vertical"],
+                "description": "組方向",
+            },
         },
         "required": ["text", "font_class", "size_pt", "x_pct", "y_pct", "w_pct", "h_pct"],
     },
@@ -290,10 +375,33 @@ def _extract_spans_gemini(
         if writing_dir not in ("horizontal", "vertical"):
             writing_dir = "horizontal"
 
+        # Gemini が返したフォント候補（enum 制約で登録名のみ）
+        raw_cands = item.get("font_candidates") or []
+        font_candidates: list[dict[str, Any]] = []
+        for c in raw_cands:
+            if not isinstance(c, dict):
+                continue
+            name = (c.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                conf = float(c.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                conf = 0.0
+            font_candidates.append({
+                "source": "gemini",
+                "name": name,
+                "confidence": max(0.0, min(1.0, conf)),
+            })
+        # 信頼度降順で整列し先頭を font_original の初期値に採用
+        font_candidates.sort(key=lambda c: -c["confidence"])
+        font_original = font_candidates[0]["name"] if font_candidates else ""
+
         spans.append({
             "id": f"s_{int(time.time() * 1000)}_{i}",
             "text": item["text"].strip(),
-            "font_original": "Gemini_Extracted",
+            "font_original": font_original,
+            "font_candidates": font_candidates,
             "font_class": item.get("font_class", "gothic"),
             "size_pt": round(size_pt, 1),
             "origin": [bx, by + bh],
@@ -310,6 +418,26 @@ def _extract_spans_gemini(
 
 
 # ── PyMuPDF 直接テキスト抽出（テキスト埋め込みPDF用・最高精度） ──────────────
+
+_SUBSET_PREFIX_RE = re.compile(r"^[A-Z]{6}\+")
+
+
+def _clean_pdf_font_name(raw: str) -> str:
+    """PDF 埋込フォントのサブセット接頭辞(例 'ABCDEF+A-OTF-GothicMB101Pro-Bold')を除去し、
+    よくあるハイフン変種 'A-OTF-Xxx' を CSS 登録名と揃う 'A-OTF Xxx' に正規化する。
+    """
+    if not raw:
+        return ""
+    name = raw.strip()
+    # 'ABCDEF+' のような 6 文字大文字サブセットプレフィックスを除去
+    name = _SUBSET_PREFIX_RE.sub("", name)
+    # 'A-OTF-' → 'A-OTF ' / 'A-CID-' → 'A-CID '
+    for prefix in ("A-OTF-", "A-CID-"):
+        if name.startswith(prefix):
+            name = prefix.rstrip("-") + " " + name[len(prefix):]
+            break
+    return name.strip()
+
 
 def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
     """PyMuPDF でテキスト埋め込みPDFから直接 Span 抽出（行単位）
@@ -359,7 +487,7 @@ def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
             # 主要フォント（文字数ベース）
             font_counts: dict[tuple[str, float], int] = {}
             for s in spans_in_line:
-                key = (s.get("font", ""), s.get("size", 9.0))
+                key = (_clean_pdf_font_name(s.get("font", "")), s.get("size", 9.0))
                 font_counts[key] = font_counts.get(key, 0) + len(s.get("text", ""))
             dominant_font, dominant_size = max(font_counts, key=lambda k: font_counts[k])
 
@@ -406,10 +534,16 @@ def _extract_spans_pymupdf(page: Any) -> list[dict[str, Any]]:
             if any(k in font_lower for k in ["-v", "vert", "tate", "縦"]):
                 writing_dir = "vertical"
 
+            # PDF 直接抽出は真の埋込フォント名なので confidence = 1.0 の単独候補
+            pdf_candidates = [
+                {"source": "pymupdf", "name": dominant_font, "confidence": 1.0}
+            ] if dominant_font else []
+
             result_spans.append({
                 "id": f"pdf_{block_idx}_{line_idx}_{span_counter}",
                 "text": text_stripped,
                 "font_original": dominant_font,
+                "font_candidates": pdf_candidates,
                 "font_class": font_class,
                 "size_pt": round(dominant_size, 1),
                 "origin": [round(x0, 2), round(y1, 2)],
@@ -587,6 +721,16 @@ def _merge_font_info(docai_spans: list[dict], pymupdf_spans: list[dict],
                 ds["font_original"] = best_match["font_original"]
             if "writing_direction" in best_match:
                 ds["writing_direction"] = best_match["writing_direction"]
+            # font_candidates は既存 (DocAI 由来) に PyMuPDF 由来を追加し、
+            # source 付きで全エンジンの結果をユーザーに見せられる形で残す
+            existing = ds.get("font_candidates") or []
+            extra = best_match.get("font_candidates") or []
+            names_seen = {c.get("name") for c in existing}
+            for c in extra:
+                if c.get("name") and c.get("name") not in names_seen:
+                    existing.append(c)
+                    names_seen.add(c.get("name"))
+            ds["font_candidates"] = existing
 
 
 def _text_similarity(a: str, b: str) -> float:
@@ -727,7 +871,7 @@ def _extract_spans_documentai(pdf_bytes: bytes,
                             if (unit == "PT" or not unit) and size_pt:
                                 font_size_map[sid] = size_pt
                         if family:
-                            font_family_map[sid] = family
+                            font_family_map[sid] = _clean_pdf_font_name(family)
                         if weight:
                             font_weight_map[sid] = str(weight)
         except Exception:
@@ -830,10 +974,16 @@ def _extract_spans_documentai(pdf_bytes: bytes,
                 if writing_dir == "horizontal" and bb_h > bb_w * 1.2 and len(text.strip()) > 1:
                     writing_dir = "vertical"
 
+                docai_candidates = (
+                    [{"source": "docai", "name": font_original, "confidence": 0.8}]
+                    if font_original else []
+                )
+
                 page_spans.append({
                     "id": f"dai_{int(time.time() * 1000)}_{i}",
                     "text": text.strip(),
                     "font_original": font_original,
+                    "font_candidates": docai_candidates,
                     "font_class": font_class,
                     "size_pt": size_pt,
                     "x_pct": x_min * 100,
@@ -1017,7 +1167,8 @@ def _extract_spans_yomitoku(pdf_bytes: bytes,
             spans.append({
                 "id": f"yt_{ts}_{i}",
                 "text": text,
-                "font_original": "YomiToku",
+                # YomiToku 自体はフォント名を返さないので空にする (フロントは font_class で描画)
+                "font_original": "",
                 "font_class": "mincho" if "mincho" in text.lower() else "gothic",
                 "size_pt": est_size_pt,
                 "x_pct": bx / img_w * 100,
@@ -1294,14 +1445,11 @@ async def analyze_pdf(
                         else "unknown"
                     )
                 if "needs_font_review" not in s:
-                    fo = s.get("font_original", "") or ""
-                    # PyMuPDF は実ファイル名を返すので基本 False。
-                    # Gemini は "Gemini_Extracted" を返すので True（ユーザーに選ばせる）。
+                    fo = (s.get("font_original", "") or "").strip()
+                    # font_original が空 or 旧ダミー文字列 → 要確認
                     s["needs_font_review"] = (
-                        not fo.strip()
-                        or fo == "Gemini_Extracted"
-                        or fo == "YomiToku"
-                        or fo == "Manual"
+                        not fo
+                        or fo in ("Gemini_Extracted", "YomiToku", "Manual")
                     )
 
             # ── 画像抽出（PyMuPDF + Document AI + Vision API） ──
@@ -1560,6 +1708,26 @@ async def analyze_pdf(
             except Exception as draw_err:
                 print(f"get_drawings error: {draw_err}")
 
+            # 素材フォルダに抽出画像を保存する
+            import uuid
+            sozai_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "素材")
+            os.makedirs(sozai_dir, exist_ok=True)
+            for img in images_data:
+                try:
+                    b64 = img.get("data_b64")
+                    if b64:
+                        img_bytes = base64.b64decode(b64)
+                        ext = "png"
+                        if img.get("mime_type") == "image/jpeg":
+                            ext = "jpg"
+                        filename = f"extracted_{i}_{uuid.uuid4().hex[:8]}.{ext}"
+                        filepath = os.path.join(sozai_dir, filename)
+                        with open(filepath, "wb") as f:
+                            f.write(img_bytes)
+                        img["saved_path"] = filepath
+                except Exception as save_err:
+                    print(f"Error saving image to 素材: {save_err}")
+
             pages_data.append({
                 "page_index": i,
                 "page_pt": [rect.width, rect.height],
@@ -1589,6 +1757,56 @@ async def analyze_pdf(
 
 
 # ── /vision-analyze エンドポイント ─────────────────────────────────────────────
+
+class GenerateImageRequest(BaseModel):
+    prompt: str
+    aspect_ratio: str = "1:1"
+    model: str = "imagen-3.0-generate-001"
+
+@app.post("/generate-image")
+async def generate_image_api(req: GenerateImageRequest):
+    """画像生成AIを利用して、名刺のロゴや写真などの素材を作り直す"""
+    if not GEMINI_API_KEY:
+        raise HTTPException(500, "Google AI API key is not configured")
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        # Generate image using Imagen
+        result = genai.generate_images(
+            prompt=req.prompt,
+            number_of_images=1,
+            model=req.model,
+            aspect_ratio=req.aspect_ratio
+        )
+        
+        generated_images = []
+        sozai_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "素材")
+        os.makedirs(sozai_dir, exist_ok=True)
+        import uuid
+        
+        # Depending on the SDK version, generated_images may differ in structure.
+        for g_img in getattr(result, "generated_images", []):
+            try:
+                img_bytes = g_img.image.image_bytes
+            except AttributeError:
+                # Some SDKs use different attributes
+                continue
+                
+            filename = f"generated_{uuid.uuid4().hex[:8]}.png"
+            filepath = os.path.join(sozai_dir, filename)
+            with open(filepath, "wb") as f:
+                f.write(img_bytes)
+            
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            generated_images.append({
+                "data_b64": b64,
+                "saved_path": filepath
+            })
+            
+        return {"images": generated_images}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Image generation failed: {e}")
 
 @app.post("/vision-analyze")
 async def vision_analyze(req: dict[str, Any]):
@@ -2355,6 +2573,136 @@ body {{
 </html>"""
 
     return html, css
+# ── AI Agent エンドポイント (GCP Gemini活用) ──────────────────────────────
+
+class ExtractInstructionRequest(BaseModel):
+    content_text: str
+
+@app.post("/agent/extract-instruction")
+async def extract_instruction(req: ExtractInstructionRequest):
+    """
+    GCP (Gemini) を利用して抽出されたテキストから組版指示書（JSON）を推測・生成する
+    """
+    api_key = os.environ.get("GOOGLE_AI_KEY", "") or GEMINI_API_KEY
+    if not api_key:
+        raise HTTPException(500, "Google AI API key is not configured")
+    
+    try:
+        genai.configure(api_key=api_key)
+        # テキスト解析とJSON構造化には flash モデルでも十分高速に対応可能
+        model = genai.GenerativeModel("gemini-2.5-flash") 
+        
+        prompt = f"""
+あなたは印刷・DTP組版の専門家です。
+以下の【原稿テキスト】を分析し、最適な組版仕様を推測して「組版指示書（JSON）」として出力してください。
+名刺、パンフレット、書籍など、テキストの内容から媒体を推測し、それに適したルールを構築してください。
+
+【原稿テキスト】
+{req.content_text}
+
+【要件】
+1. テキストから品名（名刺、ポスター、書籍など）を推測し、`product_name.value` に設定してください。
+2. その媒体にふさわしい文字サイズやフォント構成を `layout_rules` に設定してください。
+3. 推測した媒体が「名刺」である場合は、原稿テキストを解析して構造化した名刺コンテンツ（会社名、部署、役職、氏名、住所、電話番号、メールなど）を `content` に出力してください。名刺以外の場合も、適宜要素を抽出して `content` に出力してください。
+
+【出力形式】
+以下のJSON構造で返却してください。マークダウンの ```json などは含めないでください。
+{{
+  "project_metadata": {{
+    "system_version": "TypoPro-Web v1.0",
+    "status": "In Proofing (初校調整中)"
+  }},
+  "instruction_manual": {{
+    "header": {{
+      "product_name": {{ "label_jp": "品名", "value": "推測した品名（例: 名刺、チラシ、小冊子など）" }}
+    }},
+    "layout_rules": {{
+      "grid": "推測した基本グリッドサイズ（例: 8pt, 13Q）",
+      "fonts": ["推測した基本フォント指定1", "推測した基本フォント指定2"]
+    }}
+  }},
+  "content": {{
+    "company_name": "抽出した会社名",
+    "department": "抽出した部署名",
+    "title": "抽出した役職",
+    "name": "抽出した氏名",
+    "address": "抽出した住所",
+    "tel": "抽出した電話番号",
+    "email": "抽出したメールアドレス",
+    "website": "抽出したウェブサイトURL",
+    "other": "その他の情報"
+  }}
+}}
+"""
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                temperature=0.2,
+                response_mime_type="application/json"
+            )
+        )
+        return json.loads(response.text)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Extract Instruction Error: {e}")
+
+class DtpAgentRequest(BaseModel):
+    instruction_manual: dict[str, Any]
+    content_text: str
+
+@app.post("/agent/dtp-layout")
+async def dtp_agent(req: DtpAgentRequest):
+    """
+    GCP (Gemini) を利用したAIエージェント。
+    伝統的な組版指示書（JSON）と原稿テキストを読み取り、Vivliostyle用のHTML/CSSを自動生成する。
+    """
+    api_key = os.environ.get("GOOGLE_AI_KEY", "") or GEMINI_API_KEY
+    if not api_key:
+        raise HTTPException(500, "Google AI API key is not configured")
+    
+    try:
+        genai.configure(api_key=api_key)
+        # 複雑なコーディングと推論が必要なため Pro モデルを使用
+        model = genai.GenerativeModel("gemini-2.5-pro") 
+        
+        prompt = f"""
+あなたは印刷・DTP組版の専門家であり、Vivliostyle (CSS Typesetting) のエキスパートエージェントです。
+ユーザーから「組版指示書（JSONデータ）」と「原稿テキスト」が渡されます。
+この指示書を解釈し、Vivliostyleで印刷可能な高品質の HTML と CSS を生成してください。
+
+【組版指示書】
+{json.dumps(req.instruction_manual, ensure_ascii=False, indent=2)}
+
+【原稿テキスト】
+{req.content_text}
+
+【要件】
+1. 指示書にある「仕上り大きさ」「組方向 (縦: vertical-rl)」「段数」「文字サイズ (1Q = 0.25mm)」「行間・字送り」を計算し、CSSに適用すること。
+2. @page ルールを使用し、余白（天・地・ノド・コグチ）を設定すること。
+3. ヘッダー（柱）やノンブル（ページ番号）も @page のマージンボックス（@top-right, @bottom-center 等）を用いて配置すること。
+4. 原稿テキスト、または組版指示書内の `content` データ（名刺の構造化データなど）を適切にHTMLタグ（h1, h2, p, div など）でマークアップし、デザイン性の高いレイアウトを構築すること。
+5. 禁則処理やぶら下げ、和文・欧文間のアキ設定などもCSS（text-autospace, line-break 等）で表現可能な範囲で実装すること。
+
+【出力形式】
+以下のキーを持つJSONで返却してください。マークダウンの ```json などは含めないでください。
+{{
+  "html": "<!DOCTYPE html><html>...",
+  "css": "@page {{ ... }} body {{ ... }}"
+}}
+"""
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,
+                response_mime_type="application/json"
+            )
+        )
+        return json.loads(response.text)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"DTP Agent Error: {e}")
 
 
 @app.post("/vivliostyle-build")
@@ -2370,10 +2718,18 @@ async def vivliostyle_build(req: VivliostyleBuildRequest):
         else:
             raise HTTPException(500, "vivliostyle CLI が見つかりません")
 
-    html_content, css_content = _generate_html_css(
-        req.spans, req.page_mm, req.title, req.bg_image_b64
-    )
-    tmpdir = tempfile.mkdtemp(prefix="vivliostyle_")
+    if req.raw_html and req.raw_css:
+        html_content = req.raw_html
+        css_content = req.raw_css
+    else:
+        html_content, css_content = _generate_html_css(
+            req.spans, req.page_mm, req.title, req.bg_image_b64
+        )
+    if req.save_dir_name:
+        tmpdir = os.path.join(os.getcwd(), req.save_dir_name)
+        os.makedirs(tmpdir, exist_ok=True)
+    else:
+        tmpdir = tempfile.mkdtemp(prefix="vivliostyle_")
 
     try:
         html_path = os.path.join(tmpdir, "index.html")
@@ -2384,6 +2740,18 @@ async def vivliostyle_build(req: VivliostyleBuildRequest):
             f.write(html_content)
         with open(css_path, "w", encoding="utf-8") as f:
             f.write(css_content)
+
+        # 画像の保存
+        if req.images:
+            for img in req.images:
+                img_id = img.get("id")
+                img_b64 = img.get("b64")
+                if img_id and img_b64:
+                    if img_b64.startswith("data:image"):
+                        img_b64 = img_b64.split(",")[1]
+                    img_path = os.path.join(tmpdir, img_id)
+                    with open(img_path, "wb") as f:
+                        f.write(base64.b64decode(img_b64))
 
         if use_npx:
             cmd = [
@@ -2430,7 +2798,8 @@ async def vivliostyle_build(req: VivliostyleBuildRequest):
     except Exception as e:
         raise HTTPException(500, f"Vivliostyle build 失敗: {e}")
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        if not req.save_dir_name:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 # ── MarkItDown ベース: PDF → Markdown → 編集 → PDF パイプライン ──────────────

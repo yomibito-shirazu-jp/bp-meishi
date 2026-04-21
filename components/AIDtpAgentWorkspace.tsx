@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Upload, Image as ImageIcon, Wand2, FileText, Download, Play, Eye } from 'lucide-react';
-import { analyzePdf, dtpAgentLayout, generateImage, vivliostyleBuild } from '../services/api';
+import { analyzePdf, dtpAgentLayout, generateImage, vivliostyleBuild, extractInstruction } from '../services/api';
 
 const C = {
   bg: '#f8fafc',
@@ -49,23 +49,40 @@ export const AIDtpAgentWorkspace: React.FC = () => {
       setExtractedText(text);
       setExtractedImages(images);
 
-      // Create a default instruction JSON
-      const defaultInstruction = {
-        project_metadata: {
-          system_version: "TypoPro-Web v1.0",
-          status: "In Proofing (初校調整中)"
-        },
-        instruction_manual: {
-          header: {
-            product_name: { label_jp: "品名", value: "名刺" },
+      // Call extractInstruction to generate JSON from text
+      let instructionJsonStr = '';
+      try {
+        const extracted = await extractInstruction({ content_text: text });
+        instructionJsonStr = JSON.stringify(extracted, null, 2);
+      } catch (e) {
+        console.warn('Instruction extraction failed, falling back to default:', e);
+        const defaultInstruction = {
+          project_metadata: {
+            system_version: "TypoPro-Web v1.0",
+            status: "In Proofing (初校調整中)"
           },
-          layout_rules: {
-            grid: "8pt",
-            fonts: ["Noto Sans JP", "Noto Serif JP"]
+          instruction_manual: {
+            header: {
+              product_name: { label_jp: "品名", value: "名刺" },
+            },
+            layout_rules: {
+              grid: "8pt",
+              fonts: ["Noto Sans JP", "Noto Serif JP"]
+            }
+          },
+          content: {
+            company_name: "株式会社サンプル",
+            department: "営業部",
+            title: "部長",
+            name: "山田 太郎",
+            address: "東京都渋谷区...",
+            tel: "03-0000-0000",
+            email: "info@example.com"
           }
-        }
-      };
-      setInstructionJson(JSON.stringify(defaultInstruction, null, 2));
+        };
+        instructionJsonStr = JSON.stringify(defaultInstruction, null, 2);
+      }
+      setInstructionJson(instructionJsonStr);
       setStep(2);
     } catch (err: any) {
       setError(err.message || 'アップロードに失敗しました。');
@@ -120,13 +137,16 @@ export const AIDtpAgentWorkspace: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
+      const dirName = `agent_output_${Date.now()}`;
       const res = await vivliostyleBuild(
         [],
         [210, 297], // A4 fallback
         'DTP Agent Output',
         undefined,
         generatedHtml,
-        generatedCss
+        generatedCss,
+        dirName,
+        extractedImages
       );
       setFinalPdfB64(res.pdf_b64);
       setStep(4);
