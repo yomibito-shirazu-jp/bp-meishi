@@ -12,6 +12,7 @@ dist/
 .agent/
 .agents/
 .windsurf/
+.venv/
 backend/venv/
 backend/__pycache__/
 __pycache__/
