@@ -1,19 +1,30 @@
 # Cloud Build アップロード除外 — フロントとAPI両方で使用
 .git/
+.git
 .gitignore
 node_modules/
+node_modules
 dist/
+dist
 .env
 .env.local
 .env.*
 .vscode/
+.vscode
 .idea/
+.idea
 .claude/
+.claude
 .agent/
+.agent
 .agents/
+.agents
 .windsurf/
+.windsurf
 .venv/
+.venv
 backend/venv/
+backend/venv
 backend/__pycache__/
 __pycache__/
 *.pyc
@@ -21,7 +32,21 @@ __pycache__/
 # fonts/ は Dockerfile で必要に応じてコピー
 *.log
 logs/
+logs
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated
+marker_output/
+marker_output
+md2pdf-ja/
+md2pdf-ja
+*.pdf
+ccpm/
+ccpm
+mcp/
+mcp
+public/fonts/
+public/fonts
 

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import JSZip from 'jszip';
 import { Upload, Image as ImageIcon, Wand2, FileText, Download, Play, Eye } from 'lucide-react';
 import { analyzePdf, dtpAgentLayout, generateImage, vivliostyleBuild, extractInstruction } from '../services/api';
 
@@ -52,7 +53,10 @@ export const AIDtpAgentWorkspace: React.FC = () => {
       // Call extractInstruction to generate JSON from text
       let instructionJsonStr = '';
       try {
-        const extracted = await extractInstruction({ content_text: text });
+        const extracted = await extractInstruction({
+          content_text: text,
+          analyze_data: res // Pass full analyze result (Document AI, Vision, Yomiwake)
+        });
         instructionJsonStr = JSON.stringify(extracted, null, 2);
       } catch (e) {
         console.warn('Instruction extraction failed, falling back to default:', e);
@@ -157,6 +161,47 @@ export const AIDtpAgentWorkspace: React.FC = () => {
     }
   };
 
+  const handleDownloadJson = () => {
+    const blob = new Blob([instructionJson], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'dtp_instruction.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadImage = (id: string, b64: string) => {
+    const link = document.createElement('a');
+    link.href = `data:image/png;base64,${b64}`;
+    link.download = `extracted_image_${id}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDownloadZip = async () => {
+    const zip = new JSZip();
+    zip.file("dtp_instruction.json", instructionJson);
+    zip.file("extracted_content.txt", extractedText);
+    
+    extractedImages.forEach((img) => {
+      zip.file(`extracted_image_${img.id}.png`, img.b64, { base64: true });
+    });
+
+    const content = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(content);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'dtp_workspace_assets.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="h-full flex flex-col" style={{ background: C.bg }}>
       <div className="p-6 border-b border-gray-200 bg-white">
@@ -244,6 +289,12 @@ export const AIDtpAgentWorkspace: React.FC = () => {
                     extractedImages.map(img => (
                       <div key={img.id} className="border border-gray-200 rounded p-2 min-w-[150px]">
                         <img src={`data:image/png;base64,${img.b64}`} alt="Extracted" className="w-full h-24 object-contain bg-gray-100 mb-2 rounded" />
+                        <button
+                          onClick={() => handleDownloadImage(img.id, img.b64)}
+                          className="w-full bg-gray-100 text-gray-700 text-xs py-1 rounded font-bold hover:bg-gray-200 mb-2"
+                        >
+                          画像を保存
+                        </button>
                         <input
                           type="text"
                           placeholder="画像指示 (Imagen)"
@@ -267,13 +318,27 @@ export const AIDtpAgentWorkspace: React.FC = () => {
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col overflow-hidden">
               <div className="p-4 border-b border-gray-100 bg-gray-50 font-bold flex items-center justify-between">
                 <span>指示書記述 (JSON)</span>
-                <button
-                  onClick={handleRunAgent}
-                  disabled={loading}
-                  className="px-4 py-1.5 bg-indigo-600 text-white rounded font-bold text-sm shadow flex items-center gap-2 hover:bg-indigo-700 disabled:opacity-50"
-                >
-                  {loading ? '処理中...' : <><Play size={16} /> エージェント実行</>}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleDownloadZip}
+                    className="px-4 py-1.5 bg-green-100 text-green-700 rounded font-bold text-sm shadow hover:bg-green-200 flex items-center gap-2"
+                  >
+                    <Download size={16} /> 一括ZIP保存
+                  </button>
+                  <button
+                    onClick={handleDownloadJson}
+                    className="px-4 py-1.5 bg-gray-100 text-gray-700 rounded font-bold text-sm shadow hover:bg-gray-200"
+                  >
+                    JSONを保存
+                  </button>
+                  <button
+                    onClick={handleRunAgent}
+                    disabled={loading}
+                    className="px-4 py-1.5 bg-indigo-600 text-white rounded font-bold text-sm shadow flex items-center gap-2 hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {loading ? '処理中...' : <><Play size={16} /> エージェント実行</>}
+                  </button>
+                </div>
               </div>
               <textarea
                 className="flex-1 p-4 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-900 text-green-400"

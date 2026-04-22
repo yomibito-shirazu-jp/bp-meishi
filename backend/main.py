@@ -26,11 +26,27 @@ try:
 except ImportError:
     PILImage = None
 import google.generativeai as genai
+
+# Set Google Cloud credentials for Vision API
+import os
+# In Cloud Run, credentials are mounted as a secret
+# In local development, use local file if exists
+if os.path.exists("/secrets/service-account-key.json"):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/secrets/service-account-key.json"
+else:
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    credentials_path = os.path.join(backend_dir, "service-account-key.json")
+    if os.path.exists(credentials_path):
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
 from fastapi import FastAPI, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from google.cloud import documentai
-from google.cloud import vision
+try:
+    from google.cloud import documentai
+    from google.cloud import vision
+except ImportError:
+    import google.cloud.documentai_v1 as documentai
+    import google.cloud.vision_v1 as vision
 from google.api_core.client_options import ClientOptions
 
 # ── YomiToku (optional): 高精度日本語OCR/レイアウト解析エンジン ──────────────
@@ -169,6 +185,73 @@ async def yomitoku_status():
     else:
         info["install_hint"] = "pip install yomitoku"
     return info
+
+
+# ── Gemini Vision による非テキスト画像領域の検出 ────────────────────────────
+
+IMAGE_REGION_DETECTION_PROMPT = """
+この名刺画像を分析して、すべての「非テキスト」視覚要素（画像領域）を特定してください。
+
+## 検出対象：
+- 会社ロゴ（例: 「武蔵野」のロゴマーク、企業のシンボル）
+- 人物写真・ポートレート
+- 認証マーク・受賞マーク（例: 健康経営優良法人、ISO認証、ホワイト500 等の丸いアイコン）
+- QRコード・バーコード
+- アイコン、イラスト、装飾画像
+
+## 検出しないもの：
+- 単なるテキスト（文字だけの領域）
+- 罫線、枠線
+- 背景色のみの領域
+
+## 座標系：
+画像の左上が (0, 0)、右下が (100, 100) の百分率で指定します。
+各領域には画像要素全体をぴったり囲むタイトなバウンディングボックスを返してください。
+
+## 出力形式（JSON配列のみ、他のテキスト不要）：
+[
+  {"x_pct": 5.0, "y_pct": 8.0, "w_pct": 15.0, "h_pct": 12.0, "label": "会社ロゴ"},
+  {"x_pct": 70.0, "y_pct": 5.0, "w_pct": 25.0, "h_pct": 90.0, "label": "人物写真"},
+  {"x_pct": 40.0, "y_pct": 75.0, "w_pct": 8.0, "h_pct": 15.0, "label": "認証マーク"}
+]
+
+画像要素が無い場合は空配列 [] を返してください。
+"""
+
+
+def _detect_image_regions_gemini(png_bytes: bytes, api_key: Optional[str] = None) -> list[dict]:
+    """Gemini Vision で画像（非テキスト）領域のバウンディングボックスを検出。
+
+    戻り値: [{x_pct, y_pct, w_pct, h_pct, label}, ...] (百分率)
+    """
+    active_key = api_key or GEMINI_API_KEY
+    if not active_key:
+        return []
+    try:
+        genai.configure(api_key=active_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        img_part = {
+            "mime_type": "image/png",
+            "data": base64.b64encode(png_bytes).decode(),
+        }
+        response = model.generate_content(
+            [IMAGE_REGION_DETECTION_PROMPT, img_part],
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,
+                max_output_tokens=4096,
+                response_mime_type="application/json",
+            ),
+        )
+        raw = (response.text or "").strip()
+        if not raw:
+            return []
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+        return []
+    except Exception as e:
+        print(f"_detect_image_regions_gemini error: {e}")
+        return []
 
 
 # ── Gemini Vision による Span 抽出 ────────────────────────────────────────────
@@ -415,6 +498,292 @@ def _extract_spans_gemini(
 
     print(f"Gemini extracted {len(spans)} spans")
     return spans
+
+
+# ── Cloud Vision API DOCUMENT_TEXT_DETECTION (手書き日本語OCR) ────────────────
+# 参考: https://cloud.google.com/vision/docs/handwriting?hl=ja
+#   手書き文字を含むスキャン画像で Document AI Layout Parser より高精度。
+#   ページ/ブロック/段落/単語/記号の階層を JSON で返す。
+
+def _extract_spans_vision_document(
+    png_bytes: bytes,
+    page_w_pt: float,
+    page_h_pt: float,
+) -> list[dict[str, Any]]:
+    """Cloud Vision API DOCUMENT_TEXT_DETECTION で画像から手書き含むテキストを抽出。
+
+    Vision API は入力画像のピクセル座標系で bbox を返すので、画像サイズから % に正規化し、
+    さらに page_w_pt / page_h_pt を掛けて pt 座標 (bbox/origin) に変換する。
+
+    戻り値は _extract_spans_gemini / _extract_spans_pymupdf と同一形式。
+    """
+    try:
+        client = vision.ImageAnnotatorClient()
+    except Exception as e:
+        print(f"Vision client init failed: {e}")
+        return []
+
+    # 入力画像のピクセルサイズを取得 (bbox 正規化用)
+    img_w, img_h = 0, 0
+    if PILImage is not None:
+        try:
+            with PILImage.open(BytesIO(png_bytes)) as im:
+                img_w, img_h = im.size
+        except Exception as e:
+            print(f"Vision: PIL open failed: {e}")
+    if img_w <= 0 or img_h <= 0:
+        return []
+
+    try:
+        image = vision.Image(content=png_bytes)
+        # 言語ヒントで日本語 OCR 精度を高める
+        ctx = vision.ImageContext(language_hints=["ja", "en"])
+        response = client.document_text_detection(image=image, image_context=ctx)
+        if response.error.message:
+            print(f"Vision DOCUMENT_TEXT_DETECTION error: {response.error.message}")
+            return []
+    except Exception as e:
+        print(f"Vision API call failed: {e}")
+        return []
+
+    annotation = response.full_text_annotation
+    if not annotation or not annotation.pages:
+        return []
+
+    spans: list[dict[str, Any]] = []
+    ts = int(time.time() * 1000)
+    counter = 0
+
+    def _bbox_from_vertices(verts) -> tuple[float, float, float, float]:
+        xs = [v.x for v in verts if v is not None]
+        ys = [v.y for v in verts if v is not None]
+        if not xs or not ys:
+            return 0.0, 0.0, 0.0, 0.0
+        return float(min(xs)), float(min(ys)), float(max(xs) - min(xs)), float(max(ys) - min(ys))
+
+    def _word_text(word) -> str:
+        out = []
+        for sym in word.symbols:
+            out.append(sym.text)
+            brk = getattr(sym, "property", None)
+            brk = getattr(brk, "detected_break", None) if brk else None
+            if brk and brk.type_ in (
+                vision.TextAnnotation.DetectedBreak.BreakType.SPACE,
+                vision.TextAnnotation.DetectedBreak.BreakType.SURE_SPACE,
+            ):
+                out.append(" ")
+            elif brk and brk.type_ in (
+                vision.TextAnnotation.DetectedBreak.BreakType.LINE_BREAK,
+                vision.TextAnnotation.DetectedBreak.BreakType.EOL_SURE_SPACE,
+            ):
+                pass  # 行末はパラグラフ単位で改行挿入
+        return "".join(out)
+
+    for page in annotation.pages:
+        for block in page.blocks:
+            for paragraph in block.paragraphs:
+                # 段落内のテキストは単語→symbol の階層。段落丸ごと1 span にする
+                para_text = "".join(_word_text(w) for w in paragraph.words).strip()
+                if not para_text:
+                    continue
+                # 段落の bbox
+                verts = paragraph.bounding_box.vertices or paragraph.bounding_box.normalized_vertices
+                px, py, pw, ph = _bbox_from_vertices(verts)
+                if pw <= 0 or ph <= 0:
+                    continue
+
+                # 画像ピクセル → % → pt
+                x_pct = max(0.0, min(99.0, px / img_w * 100))
+                y_pct = max(0.0, min(99.0, py / img_h * 100))
+                w_pct = max(0.5, min(100 - x_pct, pw / img_w * 100))
+                h_pct = max(0.5, min(100 - y_pct, ph / img_h * 100))
+
+                bx = (x_pct / 100) * page_w_pt
+                by = (y_pct / 100) * page_h_pt
+                bw = (w_pct / 100) * page_w_pt
+                bh = (h_pct / 100) * page_h_pt
+
+                # 組方向: bbox のアスペクト比 + テキスト長で判定
+                writing_dir = "vertical" if (ph > pw * 1.8 and len(para_text) >= 2) else "horizontal"
+
+                # 信頼度 (Vision は 0.0-1.0)
+                conf = float(getattr(paragraph, "confidence", 0.0) or 0.0)
+
+                # サイズ推定: bbox の短辺から pt サイズを概算
+                short_side_pt = bh if writing_dir == "horizontal" else bw
+                size_pt = max(4.0, round(short_side_pt * 0.72, 1))
+
+                spans.append({
+                    "id": f"viz_{ts}_{counter}",
+                    "text": para_text,
+                    # Vision はフォント推定しない → font_class は中立ゴシック、候補は空
+                    "font_original": "",
+                    "font_candidates": [],
+                    "font_class": "gothic",
+                    "size_pt": size_pt,
+                    "origin": [bx, by + bh],
+                    "bbox": [bx, by, bw, bh],
+                    "x_pct": round(x_pct, 2),
+                    "y_pct": round(y_pct, 2),
+                    "w_pct": round(w_pct, 2),
+                    "h_pct": round(h_pct, 2),
+                    "writing_direction": writing_dir,
+                    "confidence": round(conf, 3),
+                    "size_source": "vision",
+                })
+                counter += 1
+
+    print(f"Vision DOCUMENT_TEXT_DETECTION extracted {len(spans)} spans "
+          f"(image={img_w}x{img_h}px, page={page_w_pt:.1f}x{page_h_pt:.1f}pt)")
+    return spans
+
+
+# ── Gemini AI フォント同定 (プライマリ抽出と併走する補助パス) ─────────────────
+# プライマリが PyMuPDF / DocAI / YomiToku のどれでも、Gemini API キーがあれば
+# 本関数で画像から書体候補を推定し、既存スパンに font_candidates を追記する。
+
+_AI_FONT_SCHEMA = {
+    "type": "ARRAY",
+    "description": "各入力テキスト(index順)に対応する書体候補の配列",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "index": {
+                "type": "INTEGER",
+                "description": "入力テキスト一覧のインデックス(0始まり)",
+                "minimum": 0,
+            },
+            "candidates": {
+                "type": "ARRAY",
+                "maxItems": 3,
+                "description": "信頼度降順の書体候補",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "name": {
+                            "type": "STRING",
+                            "enum": REGISTERED_FONT_FAMILIES or [""],
+                            "description": "登録済 A-OTF 書体名",
+                        },
+                        "confidence": {
+                            "type": "NUMBER",
+                            "minimum": 0.0,
+                            "maximum": 1.0,
+                        },
+                    },
+                    "required": ["name", "confidence"],
+                },
+            },
+        },
+        "required": ["index", "candidates"],
+    },
+}
+
+
+def _ai_font_candidates_for_spans(
+    png_bytes: bytes,
+    spans: list[dict[str, Any]],
+    api_key: Optional[str] = None,
+) -> None:
+    """画像とプライマリ抽出スパンを Gemini に渡し、各スパンに font_candidates を追記する。
+
+    spans はインプレースで更新される。Gemini API キーが無ければ何もしない。
+    """
+    active_key = api_key or GEMINI_API_KEY
+    if not active_key or not spans:
+        return
+    if not REGISTERED_FONT_FAMILIES:
+        return
+
+    # Gemini に投げる軽量ペイロード: index + text + 中心座標
+    items_for_prompt = []
+    for i, s in enumerate(spans):
+        txt = (s.get("text") or "").strip()
+        if not txt:
+            continue
+        items_for_prompt.append({
+            "index": i,
+            "text": txt[:30],  # 長すぎるテキストは先頭のみ
+            "x_pct": round(s.get("x_pct", 0), 1),
+            "y_pct": round(s.get("y_pct", 0), 1),
+            "w_pct": round(s.get("w_pct", 0), 1),
+            "h_pct": round(s.get("h_pct", 0), 1),
+        })
+    if not items_for_prompt:
+        return
+
+    prompt = (
+        "以下のテキスト要素それぞれについて、画像内のその位置に描かれている書体を"
+        "モリサワ A-OTF 書体候補 (最大3件・信頼度降順) で推定してください。\n"
+        "必ず schema の enum に含まれる書体名を使用し、index は入力の index と一致させてください。\n"
+        "自信が無い要素は candidates を空配列で返してください。\n"
+        "入力:\n" + json.dumps(items_for_prompt, ensure_ascii=False)
+    )
+
+    try:
+        genai.configure(api_key=active_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        img_part = {"mime_type": "image/png", "data": base64.b64encode(png_bytes).decode()}
+        response = model.generate_content(
+            [prompt, img_part],
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,
+                max_output_tokens=8192,
+                response_mime_type="application/json",
+                response_schema=_AI_FONT_SCHEMA,
+            ),
+        )
+        raw = (response.text or "").strip()
+        data = json.loads(raw)
+    except Exception as e:
+        print(f"AI font candidates: failed ({e})")
+        return
+
+    if not isinstance(data, list):
+        return
+
+    # 既存 font_candidates に Gemini 候補を追加 (重複排除)
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            idx = int(entry.get("index", -1))
+        except (TypeError, ValueError):
+            continue
+        if idx < 0 or idx >= len(spans):
+            continue
+        cands = entry.get("candidates") or []
+        if not isinstance(cands, list):
+            continue
+        existing = spans[idx].get("font_candidates") or []
+        names_seen = {c.get("name") for c in existing}
+        for c in cands:
+            if not isinstance(c, dict):
+                continue
+            nm = (c.get("name") or "").strip()
+            if not nm or nm in names_seen:
+                continue
+            try:
+                conf = float(c.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                conf = 0.0
+            existing.append({
+                "source": "gemini",
+                "name": nm,
+                "confidence": max(0.0, min(1.0, conf)),
+            })
+            names_seen.add(nm)
+        spans[idx]["font_candidates"] = existing
+        # プライマリ font_original が空なら、AI 最高信頼度の候補を初期値に採用
+        if not (spans[idx].get("font_original") or "").strip():
+            ai_top = max(
+                (c for c in existing if c.get("source") == "gemini"),
+                key=lambda c: c.get("confidence", 0),
+                default=None,
+            )
+            if ai_top:
+                spans[idx]["font_original"] = ai_top["name"]
+                spans[idx]["needs_font_review"] = False
 
 
 # ── PyMuPDF 直接テキスト抽出（テキスト埋め込みPDF用・最高精度） ──────────────
@@ -1253,8 +1622,9 @@ async def analyze_pdf(
     x_use_yomitoku: Optional[str] = Header(None),
     x_yomitoku_lite: Optional[str] = Header(None),
     x_yomitoku_device: Optional[str] = Header(None),
+    x_use_vision_ocr: Optional[str] = Header(None),
 ):
-    """PDF → Gemini / Document AI / YomiToku のいずれかでSpan抽出"""
+    """PDF → Gemini / Document AI / YomiToku / Vision OCR のいずれかでSpan抽出"""
     ct = (file.content_type or "").lower()
     fn = (file.filename or "").lower()
     is_pdf = ("pdf" in ct) or fn.endswith(".pdf")
@@ -1275,10 +1645,12 @@ async def analyze_pdf(
                 has_text = True
                 break
 
-        # モード選択: YomiToku > Document AI > Gemini
+        # モード選択: YomiToku > Vision OCR > Document AI > Gemini
+        # Vision OCR は手書き日本語に強いので、明示指定 or DocAI が空返却時の自動フォールバックに使う
         use_yomitoku = (x_use_yomitoku or "").lower() == "true"
+        use_vision_ocr = (x_use_vision_ocr or "").lower() == "true"
         use_docai_mode = (x_use_documentai or "").lower()
-        use_docai = (use_docai_mode != "false") and not use_yomitoku
+        use_docai = (use_docai_mode != "false") and not use_yomitoku and not use_vision_ocr
 
         # YomiToku 抽出（使用時は他エンジンをスキップ）
         yomitoku_results: list[dict[str, Any]] = []
@@ -1412,6 +1784,23 @@ async def analyze_pdf(
                         print(f"Page {i}: Document AI OCR → {len(spans)} spans")
                 else:
                     print(f"Page {i}: Document AI OCR → {len(spans)} spans")
+
+                # ── DocAI が空/極端に少ない → 手書き日本語用に Vision OCR へ自動フォールバック ──
+                # スキャン画像 + Layout Parser だと手書きを拾えないケースが多い
+                if not has_text and len(spans) < 3:
+                    print(f"Page {i}: DocAI returned only {len(spans)} spans → "
+                          f"falling back to Vision DOCUMENT_TEXT_DETECTION")
+                    vision_spans = _extract_spans_vision_document(
+                        png_bytes, rect.width, rect.height
+                    )
+                    if vision_spans:
+                        spans = vision_spans
+                        spans = _merge_context_spans(spans, rect.width, rect.height)
+            elif use_vision_ocr and not has_text:
+                # ★ Vision OCR 明示選択 (手書き日本語スキャンに最適)
+                print(f"Page {i}: Using Vision DOCUMENT_TEXT_DETECTION extraction")
+                spans = _extract_spans_vision_document(png_bytes, rect.width, rect.height)
+                spans = _merge_context_spans(spans, rect.width, rect.height)
             elif has_text:
                 # Document AI 未使用 + テキスト埋め込みPDF → PyMuPDF
                 spans = _extract_spans_pymupdf(page)
@@ -1442,6 +1831,7 @@ async def analyze_pdf(
                         "pymupdf" if (s.get("id") or "").startswith("ctx_")
                         else "gemini" if (s.get("id") or "").startswith("s_")
                         else "docai" if (s.get("id") or "").startswith("dai_")
+                        else "vision" if (s.get("id") or "").startswith("viz_")
                         else "unknown"
                     )
                 if "needs_font_review" not in s:
@@ -1451,6 +1841,21 @@ async def analyze_pdf(
                         not fo
                         or fo in ("Gemini_Extracted", "YomiToku", "Manual")
                     )
+                # font_candidates が欠落している経路(YomiToku等)でも空配列で正規化
+                if "font_candidates" not in s:
+                    s["font_candidates"] = []
+
+            # ── ★ 4エンジン統合: Gemini AI によるフォント同定を必ず併走 ──
+            # プライマリが PyMuPDF / DocAI / YomiToku でも、API キーがあれば
+            # AI 候補を追加して font_candidates を充実させる。
+            # (プライマリが Gemini の場合は _extract_spans_gemini が既に候補を埋めているのでスキップ)
+            primary_was_gemini = bool(spans) and str(spans[0].get("id", "")).startswith("s_")
+            if not primary_was_gemini:
+                try:
+                    _ai_font_candidates_for_spans(png_bytes, spans, api_key=x_gemini_api_key)
+                    print(f"Page {i}: AI font candidates merged")
+                except Exception as ai_err:
+                    print(f"Page {i}: AI font candidates skipped: {ai_err}")
 
             # ── 画像抽出（PyMuPDF + Document AI + Vision API） ──
             images_data = []
@@ -1571,119 +1976,257 @@ async def analyze_pdf(
             if PILImage:
                 pre_vis_count = len(images_data)
                 try:
-                    client = vision.ImageAnnotatorClient()
-                    vis_image = vision.Image(content=png_bytes)
-                    features = [
-                        vision.Feature(type_=vision.Feature.Type.OBJECT_LOCALIZATION, max_results=10),
-                        vision.Feature(type_=vision.Feature.Type.LOGO_DETECTION, max_results=10),
-                    ]
-                    vis_request = vision.AnnotateImageRequest(image=vis_image, features=features)
-                    vis_response = client.annotate_image(request=vis_request)
+                    import os
+                    creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+                    print(f"Vision API check: GOOGLE_APPLICATION_CREDENTIALS={creds_path}")
+                    if not creds_path:
+                        print("WARNING: GOOGLE_APPLICATION_CREDENTIALS not set. Vision API logo/photo detection skipped.")
+                        print("To enable logo/photo detection, set GOOGLE_APPLICATION_CREDENTIALS environment variable to your service account JSON path.")
+                    else:
+                        print(f"Vision API: Initializing client with credentials at {creds_path}")
+                        client = vision.ImageAnnotatorClient()
+                        print("Vision API: Client initialized successfully")
+                        vis_image = vision.Image(content=png_bytes)
+                        features = [
+                            vision.Feature(type_=vision.Feature.Type.OBJECT_LOCALIZATION, max_results=10),
+                            vision.Feature(type_=vision.Feature.Type.LOGO_DETECTION, max_results=10),
+                            # 名刺のポートレートなど「顔 → ポートレート画像」の自動切り抜き用
+                            vision.Feature(type_=vision.Feature.Type.FACE_DETECTION, max_results=5),
+                        ]
+                        vis_request = vision.AnnotateImageRequest(image=vis_image, features=features)
+                        print("Vision API: Calling annotate_image...")
+                        vis_response = client.annotate_image(request=vis_request)
+                        print(f"Vision API: Got response with {len(vis_response.logo_annotations)} logos, {len(vis_response.localized_object_annotations)} objects, {len(vis_response.face_annotations)} faces")
 
-                    pil_img = PILImage.open(BytesIO(png_bytes))
-                    png_w, png_h = pil_img.size
-                    vis_img_idx = 0
+                        pil_img = PILImage.open(BytesIO(png_bytes))
+                        png_w, png_h = pil_img.size
+                        vis_img_idx = 0
 
-                    # Object Localization
-                    for obj in vis_response.localized_object_annotations:
-                        if obj.score < 0.3:
-                            continue
-                        verts = obj.bounding_poly.normalized_vertices
-                        if len(verts) < 4:
-                            continue
-                        x_min = min(v.x for v in verts)
-                        y_min = min(v.y for v in verts)
-                        x_max = max(v.x for v in verts)
-                        y_max = max(v.y for v in verts)
-                        # 既存画像との重複チェック
-                        is_dup = False
-                        for existing in images_data:
-                            if (abs(existing["x_pct"] - x_min * 100) < 5
-                                    and abs(existing["y_pct"] - y_min * 100) < 5
-                                    and abs(existing["w_pct"] - (x_max - x_min) * 100) < 10):
-                                is_dup = True
-                                break
-                        if is_dup:
-                            continue
-                        crop_x0 = int(x_min * png_w)
-                        crop_y0 = int(y_min * png_h)
-                        crop_x1 = int(x_max * png_w)
-                        crop_y1 = int(y_max * png_h)
-                        if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
-                            continue
-                        cropped = pil_img.crop((crop_x0, crop_y0, crop_x1, crop_y1))
-                        buf = BytesIO()
-                        cropped.save(buf, format="PNG")
-                        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-                        images_data.append({
-                            "id": f"vis_obj_{i}_{vis_img_idx}",
-                            "xref": -1,
-                            "data_b64": img_b64,
-                            "mime_type": "image/png",
-                            "width": crop_x1 - crop_x0,
-                            "height": crop_y1 - crop_y0,
-                            "x_pct": x_min * 100,
-                            "y_pct": y_min * 100,
-                            "w_pct": (x_max - x_min) * 100,
-                            "h_pct": (y_max - y_min) * 100,
-                            "bbox": [x_min * 100, y_min * 100, (x_max - x_min) * 100, (y_max - y_min) * 100],
-                            "label": f"{obj.name} ({obj.score:.0%})",
-                        })
-                        vis_img_idx += 1
+                        # Object Localization
+                        for obj in vis_response.localized_object_annotations:
+                            if obj.score < 0.3:
+                                continue
+                            verts = obj.bounding_poly.normalized_vertices
+                            if len(verts) < 4:
+                                continue
+                            x_min = min(v.x for v in verts)
+                            y_min = min(v.y for v in verts)
+                            x_max = max(v.x for v in verts)
+                            y_max = max(v.y for v in verts)
+                            # 既存画像との重複チェック
+                            is_dup = False
+                            for existing in images_data:
+                                if (abs(existing["x_pct"] - x_min * 100) < 5
+                                        and abs(existing["y_pct"] - y_min * 100) < 5
+                                        and abs(existing["w_pct"] - (x_max - x_min) * 100) < 10):
+                                    is_dup = True
+                                    break
+                            if is_dup:
+                                continue
+                            crop_x0 = int(x_min * png_w)
+                            crop_y0 = int(y_min * png_h)
+                            crop_x1 = int(x_max * png_w)
+                            crop_y1 = int(y_max * png_h)
+                            if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
+                                continue
+                            cropped = pil_img.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+                            buf = BytesIO()
+                            cropped.save(buf, format="PNG")
+                            img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                            images_data.append({
+                                "id": f"vis_obj_{i}_{vis_img_idx}",
+                                "xref": -1,
+                                "data_b64": img_b64,
+                                "mime_type": "image/png",
+                                "width": crop_x1 - crop_x0,
+                                "height": crop_y1 - crop_y0,
+                                "x_pct": x_min * 100,
+                                "y_pct": y_min * 100,
+                                "w_pct": (x_max - x_min) * 100,
+                                "h_pct": (y_max - y_min) * 100,
+                                "bbox": [x_min * 100, y_min * 100, (x_max - x_min) * 100, (y_max - y_min) * 100],
+                                "label": f"{obj.name} ({obj.score:.0%})",
+                            })
+                            vis_img_idx += 1
 
-                    # Logo Detection
-                    for logo in vis_response.logo_annotations:
-                        if logo.score < 0.3:
-                            continue
-                        verts = logo.bounding_poly.vertices
-                        if len(verts) < 4:
-                            continue
-                        x_min = min(v.x for v in verts) / png_w
-                        y_min = min(v.y for v in verts) / png_h
-                        x_max = max(v.x for v in verts) / png_w
-                        y_max = max(v.y for v in verts) / png_h
-                        crop_x0 = int(x_min * png_w)
-                        crop_y0 = int(y_min * png_h)
-                        crop_x1 = int(x_max * png_w)
-                        crop_y1 = int(y_max * png_h)
-                        if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
-                            continue
-                        # 既存の画像と重複チェック
-                        is_dup = False
-                        for existing in images_data:
-                            if abs(existing["x_pct"] - x_min * 100) < 3 and abs(existing["y_pct"] - y_min * 100) < 3:
-                                is_dup = True
-                                break
-                        if is_dup:
-                            continue
-                        cropped = pil_img.crop((crop_x0, crop_y0, crop_x1, crop_y1))
-                        buf = BytesIO()
-                        cropped.save(buf, format="PNG")
-                        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-                        images_data.append({
-                            "id": f"vis_logo_{i}_{vis_img_idx}",
-                            "xref": -1,
-                            "data_b64": img_b64,
-                            "mime_type": "image/png",
-                            "width": crop_x1 - crop_x0,
-                            "height": crop_y1 - crop_y0,
-                            "x_pct": x_min * 100,
-                            "y_pct": y_min * 100,
-                            "w_pct": (x_max - x_min) * 100,
-                            "h_pct": (y_max - y_min) * 100,
-                            "bbox": [x_min * 100, y_min * 100, (x_max - x_min) * 100, (y_max - y_min) * 100],
-                            "label": f"Logo: {logo.description} ({logo.score:.0%})",
-                        })
-                        vis_img_idx += 1
+                        # Logo Detection
+                        for logo in vis_response.logo_annotations:
+                            if logo.score < 0.3:
+                                continue
+                            verts = logo.bounding_poly.vertices
+                            if len(verts) < 4:
+                                continue
+                            x_min = min(v.x for v in verts) / png_w
+                            y_min = min(v.y for v in verts) / png_h
+                            x_max = max(v.x for v in verts) / png_w
+                            y_max = max(v.y for v in verts) / png_h
+                            crop_x0 = int(x_min * png_w)
+                            crop_y0 = int(y_min * png_h)
+                            crop_x1 = int(x_max * png_w)
+                            crop_y1 = int(y_max * png_h)
+                            if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
+                                continue
+                            # 既存の画像と重複チェック
+                            is_dup = False
+                            for existing in images_data:
+                                if abs(existing["x_pct"] - x_min * 100) < 3 and abs(existing["y_pct"] - y_min * 100) < 3:
+                                    is_dup = True
+                                    break
+                            if is_dup:
+                                continue
+                            cropped = pil_img.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+                            buf = BytesIO()
+                            cropped.save(buf, format="PNG")
+                            img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                            images_data.append({
+                                "id": f"vis_logo_{i}_{vis_img_idx}",
+                                "xref": -1,
+                                "data_b64": img_b64,
+                                "mime_type": "image/png",
+                                "width": crop_x1 - crop_x0,
+                                "height": crop_y1 - crop_y0,
+                                "x_pct": x_min * 100,
+                                "y_pct": y_min * 100,
+                                "w_pct": (x_max - x_min) * 100,
+                                "h_pct": (y_max - y_min) * 100,
+                                "bbox": [x_min * 100, y_min * 100, (x_max - x_min) * 100, (y_max - y_min) * 100],
+                                "label": f"Logo: {logo.description} ({logo.score:.0%})",
+                            })
+                            vis_img_idx += 1
 
-                    vis_added = len(images_data) - pre_vis_count
-                    if vis_added:
-                        print(f"Vision API detected {vis_added} additional images (objects+logos)")
+                        # ── Face Detection → ポートレート画像として自動切り抜き ──
+                        # 名刺の顔写真など、Object Localization で "Person" が返らないケースでも
+                        # Face Detection は確実に顔を捉える。顔 bbox を上下左右にパディングして
+                        # 肩・胸までを含んだポートレートを抽出する。
+                        for face in vis_response.face_annotations:
+                            # detection_confidence: 0.0-1.0 (likelihood enum ではなく float)
+                            face_conf = float(getattr(face, "detection_confidence", 0.0) or 0.0)
+                            if face_conf < 0.5:
+                                continue
+                            verts = face.bounding_poly.vertices
+                            if len(verts) < 4:
+                                continue
+                            fx0 = min(v.x for v in verts)
+                            fy0 = min(v.y for v in verts)
+                            fx1 = max(v.x for v in verts)
+                            fy1 = max(v.y for v in verts)
+                            fw = fx1 - fx0
+                            fh = fy1 - fy0
+                            if fw <= 0 or fh <= 0:
+                                continue
+                            # ポートレート枠: 左右に 0.6*w、上に 0.5*h、下に 1.8*h (胸上まで)
+                            px0 = max(0, int(fx0 - fw * 0.6))
+                            py0 = max(0, int(fy0 - fh * 0.5))
+                            px1 = min(png_w, int(fx1 + fw * 0.6))
+                            py1 = min(png_h, int(fy1 + fh * 1.8))
+                            if px1 <= px0 or py1 <= py0:
+                                continue
+                            x_min_n = px0 / png_w
+                            y_min_n = py0 / png_h
+                            x_max_n = px1 / png_w
+                            y_max_n = py1 / png_h
+                            # 重複チェック (Object Localization の Person と被る可能性)
+                            is_dup = False
+                            for existing in images_data:
+                                if (abs(existing["x_pct"] - x_min_n * 100) < 5
+                                        and abs(existing["y_pct"] - y_min_n * 100) < 5
+                                        and abs(existing["w_pct"] - (x_max_n - x_min_n) * 100) < 10):
+                                    is_dup = True
+                                    break
+                            if is_dup:
+                                continue
+                            cropped = pil_img.crop((px0, py0, px1, py1))
+                            buf = BytesIO()
+                            cropped.save(buf, format="PNG")
+                            img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                            images_data.append({
+                                "id": f"vis_face_{i}_{vis_img_idx}",
+                                "xref": -1,
+                                "data_b64": img_b64,
+                                "mime_type": "image/png",
+                                "width": px1 - px0,
+                                "height": py1 - py0,
+                                "x_pct": x_min_n * 100,
+                                "y_pct": y_min_n * 100,
+                                "w_pct": (x_max_n - x_min_n) * 100,
+                                "h_pct": (y_max_n - y_min_n) * 100,
+                                "bbox": [x_min_n * 100, y_min_n * 100,
+                                         (x_max_n - x_min_n) * 100, (y_max_n - y_min_n) * 100],
+                                "label": f"Portrait ({face_conf:.0%})",
+                            })
+                            vis_img_idx += 1
+                            print(f"  Face → portrait crop "
+                                  f"({x_min_n*100:.1f},{y_min_n*100:.1f}) "
+                                  f"{(x_max_n-x_min_n)*100:.1f}x{(y_max_n-y_min_n)*100:.1f}% "
+                                  f"conf={face_conf:.2f}")
+
+                        vis_added = len(images_data) - pre_vis_count
+                        if vis_added:
+                            print(f"Vision API detected {vis_added} additional images (objects+logos+faces)")
                 except Exception as vis_img_err:
                     print(f"Vision API image detection error: {vis_img_err}")
 
+            # ── Gemini Vision による非テキスト画像領域の検出（ロゴ・写真・認証マーク等） ──
+            # Vision API の LOGO_DETECTION は著名ブランドしか検出できないため、
+            # Gemini に「テキスト以外の視覚要素のバウンディングボックス」を列挙させる。
+            if PILImage and GEMINI_API_KEY:
+                pre_gem_count = len(images_data)
+                try:
+                    gemini_regions = _detect_image_regions_gemini(png_bytes)
+                    pil_img = PILImage.open(BytesIO(png_bytes))
+                    png_w, png_h = pil_img.size
+                    gem_img_idx = 0
+                    for region in gemini_regions:
+                        x_pct = float(region.get("x_pct", 0))
+                        y_pct = float(region.get("y_pct", 0))
+                        w_pct = float(region.get("w_pct", 0))
+                        h_pct = float(region.get("h_pct", 0))
+                        label = str(region.get("label", "image"))
+                        if w_pct <= 1 or h_pct <= 1:
+                            continue
+                        # 重複チェック
+                        is_dup = False
+                        for existing in images_data:
+                            if (abs(existing["x_pct"] - x_pct) < 3
+                                    and abs(existing["y_pct"] - y_pct) < 3
+                                    and abs(existing["w_pct"] - w_pct) < 5):
+                                is_dup = True
+                                break
+                        if is_dup:
+                            continue
+                        crop_x0 = int((x_pct / 100) * png_w)
+                        crop_y0 = int((y_pct / 100) * png_h)
+                        crop_x1 = int(((x_pct + w_pct) / 100) * png_w)
+                        crop_y1 = int(((y_pct + h_pct) / 100) * png_h)
+                        if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
+                            continue
+                        cropped = pil_img.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+                        buf = BytesIO()
+                        cropped.save(buf, format="PNG")
+                        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                        images_data.append({
+                            "id": f"gem_img_{i}_{gem_img_idx}",
+                            "xref": -1,
+                            "data_b64": img_b64,
+                            "mime_type": "image/png",
+                            "width": crop_x1 - crop_x0,
+                            "height": crop_y1 - crop_y0,
+                            "x_pct": x_pct,
+                            "y_pct": y_pct,
+                            "w_pct": w_pct,
+                            "h_pct": h_pct,
+                            "bbox": [x_pct, y_pct, w_pct, h_pct],
+                            "label": label,
+                        })
+                        gem_img_idx += 1
+                    gem_added = len(images_data) - pre_gem_count
+                    if gem_added:
+                        print(f"Gemini detected {gem_added} additional image regions")
+                except Exception as gem_img_err:
+                    print(f"Gemini image region detection error: {gem_img_err}")
+
             if images_data:
-                print(f"Page {i}: Total {len(images_data)} images extracted (PyMuPDF+DocAI+Vision)")
+                print(f"Page {i}: Total {len(images_data)} images extracted (PyMuPDF+DocAI+Vision+Gemini)")
 
             # ── 描画要素(罫線・背景色)抽出 ──
             drawings_data = []
@@ -2577,6 +3120,7 @@ body {{
 
 class ExtractInstructionRequest(BaseModel):
     content_text: str
+    analyze_data: Optional[Dict[str, Any]] = None
 
 @app.post("/agent/extract-instruction")
 async def extract_instruction(req: ExtractInstructionRequest):
@@ -2589,17 +3133,29 @@ async def extract_instruction(req: ExtractInstructionRequest):
     
     try:
         genai.configure(api_key=api_key)
-        # テキスト解析とJSON構造化には flash モデルでも十分高速に対応可能
-        model = genai.GenerativeModel("gemini-2.5-flash") 
+        # より高度な解析（Doc AI/Vision連携）のため pro モデルを使用
+        model = genai.GenerativeModel("gemini-2.5-pro") 
         
         prompt = f"""
 あなたは印刷・DTP組版の専門家です。
-以下の【原稿テキスト】を分析し、最適な組版仕様を推測して「組版指示書（JSON）」として出力してください。
-名刺、パンフレット、書籍など、テキストの内容から媒体を推測し、それに適したルールを構築してください。
+以下の【原稿テキスト】および【Document AI / Vision / 読み分け解析データ】を分析し、
+最適な組版仕様を極めて正確に推測して「完璧な組版指示書（JSON）」として出力してください。
+名刺、パンフレット、書籍など、テキストの内容とレイアウト構造から媒体を推測し、それに適したルールを構築してください。
 
 【原稿テキスト】
 {req.content_text}
-
+"""
+        if req.analyze_data:
+            import json
+            # 解析データが大きすぎる場合を考慮し先頭5000文字に制限
+            analyze_str = json.dumps(req.analyze_data, ensure_ascii=False)
+            prompt += f"""
+【Document AI / Vision / 読み分け解析データ (JSON構造)】
+{analyze_str[:8000]}
+※上記の座標情報（x_pct, y_pct等）やブロック情報を読み分け（Yomiwake）の構造的意図として捉え、
+どの文字が見出しでどれが本文か、またレイアウトの配置意図を完璧に指示書へ反映してください。
+"""
+        prompt += """
 【要件】
 1. テキストから品名（名刺、ポスター、書籍など）を推測し、`product_name.value` に設定してください。
 2. その媒体にふさわしい文字サイズやフォント構成を `layout_rules` に設定してください。
