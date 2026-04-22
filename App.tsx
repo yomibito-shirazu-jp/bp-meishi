@@ -2418,7 +2418,10 @@ const App: React.FC = () => {
               >
                 <img src={originalPng} alt="プレビュー" className="w-full h-full object-contain" draggable={false} />
                 {(() => {
-                  const renderedHeightPx = previewImgRef.current?.getBoundingClientRect().height ?? 0;
+                  // offsetHeight は CSS transform (zoom) 適用前の寸法。
+                  // getBoundingClientRect() を使うと zoom で2重スケールされて
+                  // フォントサイズが zoom^2 倍に肥大化する
+                  const renderedHeightPx = previewImgRef.current?.offsetHeight ?? 0;
                   const pageH_pt = (pageMM[1] / 25.4) * 72;
                   const pxPerPt = pageH_pt > 0 ? renderedHeightPx / pageH_pt : 0;
                   return showOverlay && visibleSpans.map((s, i) => {
@@ -5643,19 +5646,7 @@ JSONのみ返してください。` },
         </div>
       )}
 
-      {/* Global loading overlay */}
-      {loading && (
-        <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-white rounded-2xl p-8 shadow-2xl text-center">
-            <div
-              className="animate-spin w-10 h-10 border-3 border-slate-200 rounded-full mx-auto mb-4"
-              style={{ borderTopColor: C.accent }}
-            />
-            <p className="text-base font-bold text-slate-700">PDF分析中...</p>
-            <p className="text-xs mt-1" style={{ color: C.muted }}>テキスト要素を抽出しています</p>
-          </div>
-        </div>
-      )}
+      {/* 旧: グローバルローダーは ProgressOverlay と重複するため削除 */}
     </div>
   );
 };

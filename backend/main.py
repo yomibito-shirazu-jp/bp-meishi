@@ -1161,6 +1161,198 @@ def _apply_rotation_to_spans(items: list[dict[str, Any]], rotation: int) -> None
             )
 
 
+# ── Document AI: token-based 抽出ヘルパ ─────────────────────────
+#
+# page.lines を使うと Document AI 側で独自にクラスタリングされた「レイアウト行」が
+# 返り、以下の問題が発生する:
+#   (a) bbox が文字より大きい (行高+ascender+descender を含む)
+#   (b) 離れた文字列が1行に結合される
+#   (c) 縦書きが横長 bbox として扱われて bbox アスペクト比で誤判定される
+#
+# page.tokens は単語/形態素単位で、個別 bbox と orientation が取れるため:
+#   - tight bbox を逐次ビルドできる
+#   - token ごとの orientation で縦書きを確実に判定
+#   - 自前の行クラスタリングで「近い & 同方向」トークンだけ結合できる
+
+def _token_info(token: Any, document_text: str) -> Optional[dict[str, Any]]:
+    """Document AI の token から必要情報だけ取り出して dict 化"""
+    v = token.layout.bounding_poly.normalized_vertices
+    if len(v) < 4:
+        return None
+    x_min = min(p.x for p in v)
+    y_min = min(p.y for p in v)
+    x_max = max(p.x for p in v)
+    y_max = max(p.y for p in v)
+    if x_max - x_min <= 0 or y_max - y_min <= 0:
+        return None
+
+    text = ""
+    char_indices: list[int] = []
+    for segment in token.layout.text_anchor.text_segments:
+        try:
+            s = int(segment.start_index) if segment.start_index else 0
+            e = int(segment.end_index) if segment.end_index else 0
+        except (AttributeError, ValueError, TypeError):
+            continue
+        text += document_text[s:e]
+        char_indices.extend(range(s, e))
+    # 検出された改行は単語 token の後ろに付くことがあるので除去
+    text = text.rstrip("\n\r")
+    if not text:
+        return None
+
+    # orientation: PAGE_UP(1)=横書き / PAGE_RIGHT(2)=縦書き(右→下) /
+    #              PAGE_DOWN(3)=天地逆 / PAGE_LEFT(4)=縦書き(一般)
+    orientation = getattr(token.layout, "orientation", 0)
+    try:
+        ori_val = int(orientation)
+    except Exception:
+        ori_val = 0
+    is_vertical = ori_val in (2, 3, 4)
+
+    return {
+        "text": text,
+        "char_indices": char_indices,
+        "x_min": x_min, "y_min": y_min,
+        "x_max": x_max, "y_max": y_max,
+        "w": x_max - x_min,
+        "h": y_max - y_min,
+        "orientation": ori_val,
+        "is_vertical": is_vertical,
+        "confidence": float(getattr(token.layout, "confidence", 0.0) or 0.0),
+    }
+
+
+def _cluster_tokens_to_lines(tokens: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """token を「近い位置 & 同方向」でクラスタリングして行にまとめる。
+
+    横書き: 同じ y 帯 + x が近い (= 同一行)
+    縦書き: 同じ x 帯 + y が近い (= 同一行)
+
+    各 token の bbox は normalized [0,1]。近接判定は token 高さ/幅の 0.6 倍以内。
+    """
+    if not tokens:
+        return []
+
+    # まず方向別にグループ化
+    horiz = [t for t in tokens if not t["is_vertical"]]
+    vert = [t for t in tokens if t["is_vertical"]]
+
+    lines: list[list[dict[str, Any]]] = []
+
+    # ── 横書き: y でソート → y 帯クラスタ → 各クラスタ内で x ソート ──
+    if horiz:
+        horiz.sort(key=lambda t: (t["y_min"] + t["y_max"]) / 2)
+        current: list[dict[str, Any]] = []
+        for t in horiz:
+            if not current:
+                current.append(t)
+                continue
+            cy = (current[0]["y_min"] + current[0]["y_max"]) / 2
+            ty = (t["y_min"] + t["y_max"]) / 2
+            # 行高の 0.6 倍以内なら同一行
+            h_avg = (current[0]["h"] + t["h"]) / 2
+            if abs(ty - cy) < h_avg * 0.6:
+                current.append(t)
+            else:
+                lines.append(sorted(current, key=lambda x: x["x_min"]))
+                current = [t]
+        if current:
+            lines.append(sorted(current, key=lambda x: x["x_min"]))
+
+    # ── 縦書き: x でソート → x 帯クラスタ → 各クラスタ内で y ソート (上から下) ──
+    if vert:
+        vert.sort(key=lambda t: (t["x_min"] + t["x_max"]) / 2, reverse=True)  # 縦書きは右列から
+        current = []
+        for t in vert:
+            if not current:
+                current.append(t)
+                continue
+            cx = (current[0]["x_min"] + current[0]["x_max"]) / 2
+            tx = (t["x_min"] + t["x_max"]) / 2
+            w_avg = (current[0]["w"] + t["w"]) / 2
+            if abs(tx - cx) < w_avg * 0.6:
+                current.append(t)
+            else:
+                lines.append(sorted(current, key=lambda x: x["y_min"]))
+                current = [t]
+        if current:
+            lines.append(sorted(current, key=lambda x: x["y_min"]))
+
+    return lines
+
+
+def _line_from_tokens(
+    tokens_in_line: list[dict[str, Any]],
+    font_size_map: dict[str, float],
+    font_family_map: dict[str, str],
+    font_weight_map: dict[str, str],
+) -> dict[str, Any]:
+    """行クラスタから統合 span レコードを生成。bbox は token の union (tight)。"""
+    x_min = min(t["x_min"] for t in tokens_in_line)
+    y_min = min(t["y_min"] for t in tokens_in_line)
+    x_max = max(t["x_max"] for t in tokens_in_line)
+    y_max = max(t["y_max"] for t in tokens_in_line)
+    is_vertical = tokens_in_line[0]["is_vertical"]
+
+    # テキスト結合: 縦書きは上→下、横書きは左→右 (既に sort 済)
+    text = "".join(t["text"] for t in tokens_in_line).strip()
+
+    # 文字 index 全集合
+    all_chars: list[int] = []
+    for t in tokens_in_line:
+        all_chars.extend(t["char_indices"])
+
+    # フォントファミリー (最頻)
+    families = [font_family_map[str(idx)] for idx in all_chars if str(idx) in font_family_map]
+    font_original = Counter(families).most_common(1)[0][0] if families else ""
+
+    # ウェイト (最頻)
+    weights = [font_weight_map[str(idx)] for idx in all_chars if str(idx) in font_weight_map]
+    detected_weight = Counter(weights).most_common(1)[0][0] if weights else ""
+
+    # フォントサイズ (平均)
+    sizes = [font_size_map[str(idx)] for idx in all_chars if str(idx) in font_size_map]
+    size_pt = round(sum(sizes) / len(sizes), 1) if sizes else 0.0  # 0 = 未確定フラグ
+
+    # フォントクラス
+    fo_lower = font_original.lower()
+    if any(k in fo_lower for k in ["mincho", "ming", "明朝", "serif", "ryumin",
+                                     "kozuka min", "hiragino min", "yu mincho"]):
+        font_class = "mincho"
+    elif detected_weight:
+        try:
+            w_val = int(float(detected_weight))
+            if w_val >= 600:
+                font_class = "gothic_bold"
+            elif w_val <= 300:
+                font_class = "light"
+            else:
+                font_class = "gothic"
+        except (ValueError, TypeError):
+            font_class = "gothic"
+    else:
+        font_class = "gothic"
+
+    # フォント名に "-V" 等があれば縦書き確定
+    if any(k in fo_lower for k in ["-v", "vert", "tate", "縦"]):
+        is_vertical = True
+
+    # 信頼度は token 平均
+    conf = sum(t["confidence"] for t in tokens_in_line) / len(tokens_in_line)
+
+    return {
+        "text": text,
+        "font_original": font_original,
+        "font_class": font_class,
+        "size_pt": size_pt,
+        "x_min": x_min, "y_min": y_min,
+        "x_max": x_max, "y_max": y_max,
+        "is_vertical": is_vertical,
+        "confidence": conf,
+    }
+
+
 # ── Document AI による Span 抽出 ─────────────────────────
 
 def _extract_spans_documentai(pdf_bytes: bytes,
@@ -1252,114 +1444,50 @@ def _extract_spans_documentai(pdf_bytes: bytes,
             page_barcodes = []
             page_langs = []
 
-            # ── テキスト行抽出 ──
-            for i, line in enumerate(page.lines):
-                text = ""
-                char_indices = []
-                for segment in line.layout.text_anchor.text_segments:
-                    try:
-                        start = int(segment.start_index) if segment.start_index else 0
-                    except (AttributeError, ValueError, TypeError):
-                        start = 0
-                    try:
-                        end = int(segment.end_index) if segment.end_index else 0
-                    except (AttributeError, ValueError, TypeError):
-                        end = 0
-                    text += document.text[start:end]
-                    char_indices.extend(range(start, end))
+            # ── テキスト行抽出 (token ベース) ──
+            # page.lines を使わず、page.tokens → 自前クラスタリングで
+            # tight bbox + 正確な writing direction を得る
+            tokens_raw = [_token_info(tok, document.text) for tok in getattr(page, "tokens", [])]
+            tokens = [t for t in tokens_raw if t is not None]
+            clustered_lines = _cluster_tokens_to_lines(tokens)
 
-                if not text.strip():
+            # DAI が報告する page dimension (診断用)
+            dai_dim = getattr(page, "dimension", None)
+            dai_w = getattr(dai_dim, "width", 0) if dai_dim else 0
+            dai_h = getattr(dai_dim, "height", 0) if dai_dim else 0
+            dai_unit = getattr(dai_dim, "unit", "") if dai_dim else ""
+            print(f"DocAI page {getattr(page, 'page_number', '?')}: "
+                  f"dimension={dai_w:.1f}x{dai_h:.1f}{dai_unit}, "
+                  f"tokens={len(tokens)}, clustered_lines={len(clustered_lines)}")
+
+            _ts_ms = int(time.time() * 1000)
+            for li, tokens_in_line in enumerate(clustered_lines):
+                rec = _line_from_tokens(
+                    tokens_in_line, font_size_map, font_family_map, font_weight_map
+                )
+                if not rec["text"]:
                     continue
 
-                # フォントファミリー取得 (Document AI text_styles から)
-                font_original = ""
-                if char_indices and font_family_map:
-                    families = [font_family_map[str(idx)] for idx in char_indices if str(idx) in font_family_map]
-                    if families:
-                        # 最頻出ファミリーを採用
-                        font_original = Counter(families).most_common(1)[0][0]
-
-                # フォントウェイト取得
-                detected_weight = ""
-                if char_indices and font_weight_map:
-                    weights = [font_weight_map[str(idx)] for idx in char_indices if str(idx) in font_weight_map]
-                    if weights:
-                        detected_weight = Counter(weights).most_common(1)[0][0]
-
-                # フォントクラス推定（font_original + weight ベース）
-                fo_lower = font_original.lower()
-                if any(k in fo_lower for k in ["mincho", "ming", "明朝", "serif", "ryumin",
-                                                 "kozuka min", "hiragino min", "yu mincho"]):
-                    font_class = "mincho"
-                elif detected_weight and int(float(detected_weight)) >= 600:
-                    font_class = "gothic_bold"
-                elif detected_weight and int(float(detected_weight)) <= 300:
-                    font_class = "light"
-                else:
-                    font_class = "gothic"
-                # style_info フォールバック
-                if not font_original and hasattr(line, "style_info") and line.style_info:
-                    font_original = getattr(line.style_info, "font_family", "")
-                    if "mincho" in font_original.lower() or "serif" in font_original.lower():
-                        font_class = "mincho"
-
-                # フォントサイズ推定 (Document AI style から)
-                size_pt = 9.0
-                if char_indices and font_size_map:
-                    sizes = [font_size_map[str(idx)] for idx in char_indices if str(idx) in font_size_map]
-                    if sizes:
-                        size_pt = round(sum(sizes) / len(sizes), 1)
-
-                v = line.layout.bounding_poly.normalized_vertices
-                if len(v) < 4:
-                    continue
-
-                x_min = min(v[0].x, v[1].x, v[2].x, v[3].x)
-                y_min = min(v[0].y, v[1].y, v[2].y, v[3].y)
-                x_max = max(v[0].x, v[1].x, v[2].x, v[3].x)
-                y_max = max(v[0].y, v[1].y, v[2].y, v[3].y)
-
-                # ── 縦書き検出（優先順位） ──
-                # 1. Document AI の line.layout.orientation（公式情報）
-                #    PAGE_UP=1(横書き) / PAGE_RIGHT=2 / PAGE_DOWN=3 / PAGE_LEFT=4(縦書き一般)
-                # 2. フォント名の "-V" 等の縦書き書体指定
-                # 3. bbox 縦長 (h > w*1.2 かつ 2文字以上)
-                bb_w = x_max - x_min
-                bb_h = y_max - y_min
-                writing_dir = "horizontal"
-                orientation = getattr(line.layout, "orientation", None)
-                if orientation is not None:
-                    # enum int値: PAGE_RIGHT(2), PAGE_LEFT(4) を縦書きと判定
-                    try:
-                        ori_val = int(orientation)
-                    except Exception:
-                        ori_val = 0
-                    if ori_val in (2, 3, 4):
-                        writing_dir = "vertical"
-                # フォント名ヒント
-                if any(k in fo_lower for k in ["-v", "vert", "tate", "縦"]):
-                    writing_dir = "vertical"
-                # bbox アスペクト比（しきい値を緩和: 1.2倍）
-                if writing_dir == "horizontal" and bb_h > bb_w * 1.2 and len(text.strip()) > 1:
-                    writing_dir = "vertical"
-
+                writing_dir = "vertical" if rec["is_vertical"] else "horizontal"
                 docai_candidates = (
-                    [{"source": "docai", "name": font_original, "confidence": 0.8}]
-                    if font_original else []
+                    [{"source": "docai", "name": rec["font_original"], "confidence": 0.8}]
+                    if rec["font_original"] else []
                 )
 
                 page_spans.append({
-                    "id": f"dai_{int(time.time() * 1000)}_{i}",
-                    "text": text.strip(),
-                    "font_original": font_original,
+                    "id": f"dai_{_ts_ms}_{li}",
+                    "text": rec["text"],
+                    "font_original": rec["font_original"],
                     "font_candidates": docai_candidates,
-                    "font_class": font_class,
-                    "size_pt": size_pt,
-                    "x_pct": x_min * 100,
-                    "y_pct": y_min * 100,
-                    "w_pct": (x_max - x_min) * 100,
-                    "h_pct": (y_max - y_min) * 100,
+                    "font_class": rec["font_class"],
+                    "size_pt": rec["size_pt"] if rec["size_pt"] > 0 else 9.0,
+                    # tight bbox (token の union) — lines API より精度高
+                    "x_pct": rec["x_min"] * 100,
+                    "y_pct": rec["y_min"] * 100,
+                    "w_pct": (rec["x_max"] - rec["x_min"]) * 100,
+                    "h_pct": (rec["y_max"] - rec["y_min"]) * 100,
                     "writing_direction": writing_dir,
+                    "confidence": round(rec["confidence"], 3),
                 })
 
             # ── レイアウトブロック (画像/テーブル/テキスト領域) ──
