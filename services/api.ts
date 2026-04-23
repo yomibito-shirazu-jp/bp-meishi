@@ -29,9 +29,14 @@ export const EXTRACT_ENGINE_LABELS: Record<ExtractEngine, string> = {
   docling: 'docling (IBM)',
 };
 
+export type DocumentProfile = 'business_card' | 'magazine' | 'poster';
+
 export interface AnalyzeOptions {
   /** プライマリ検出エンジンを明示指定 (指定時は他の use* フラグより優先) */
   engine?: ExtractEngine;
+  /** ドキュメント種別。未指定時は business_card。magazine は縦書き/多段組想定で
+   *  Vision/Gemini の画像bbox検出をスキップし、既定エンジンを yomitoku に寄せる。 */
+  profile?: DocumentProfile;
   useDocumentAI?: boolean;
   useYomitoku?: boolean;
   yomitokuLite?: boolean;
@@ -78,6 +83,16 @@ export const analyzePdf = async (
     : (opts ?? {});
 
   const headers: Record<string, string> = {};
+
+  // Document profile (magazine/poster 時は雑誌向け挙動にスイッチ)
+  if (options.profile) {
+    headers['X-Document-Profile'] = options.profile;
+    // magazine の既定エンジンは yomitoku (縦書き/多段組に強い)。
+    // 明示指定(engine)があればそちらが勝つ。
+    if (options.profile === 'magazine' && (!options.engine || options.engine === 'auto')) {
+      options.engine = 'yomitoku';
+    }
+  }
 
   // engine 明示指定がある場合はそれを優先 (use* フラグへマッピング)
   if (options.engine && options.engine !== 'auto') {

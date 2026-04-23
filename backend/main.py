@@ -1992,6 +1992,7 @@ async def analyze_pdf(
     x_yomitoku_device: Optional[str] = Header(None),
     x_use_vision_ocr: Optional[str] = Header(None),
     x_extract_engine: Optional[str] = Header(None),
+    x_document_profile: Optional[str] = Header(None),
 ):
     """PDF → Gemini / Document AI / YomiToku / Vision OCR / docling のいずれかでSpan抽出"""
     ct = (file.content_type or "").lower()
@@ -2014,8 +2015,17 @@ async def analyze_pdf(
                 has_text = True
                 break
 
+        # Document profile (magazine/poster 時は画像誤検出を抑える)
+        doc_profile = (x_document_profile or "business_card").strip().lower()
+        is_magazine = doc_profile in ("magazine", "newspaper", "poster")
+        print(f"/analyze: document_profile={doc_profile} (is_magazine={is_magazine})")
+
         # モード選択: X-Extract-Engine > 個別フラグ > 自動
         engine = (x_extract_engine or "").strip().lower()
+        # magazine プロファイルで engine 未指定なら YomiToku 既定
+        if is_magazine and not engine:
+            engine = "yomitoku"
+            print("  magazine profile: defaulting to yomitoku engine")
         use_yomitoku = (x_use_yomitoku or "").lower() == "true" or engine == "yomitoku"
         use_vision_ocr = (x_use_vision_ocr or "").lower() == "true" or engine == "vision_ocr"
         use_docling = engine == "docling"
@@ -2291,9 +2301,16 @@ async def analyze_pdf(
                     y_pct = by0 / pt_h * 100
                     w_pct = bw / pt_w * 100
                     h_pct = bh / pt_h * 100
-                    # 極小ノイズ除去
-                    if w_pct < 0.5 and h_pct < 0.5:
+                    # 極小ノイズ除去 (雑誌では罫線を画像扱いしやすいので閾値を強化)
+                    min_wh = 2.0 if is_magazine else 0.5
+                    if w_pct < min_wh or h_pct < min_wh:
                         continue
+                    # 雑誌で極端に細長い(罫線)ものは除外
+                    if is_magazine:
+                        aspect = max(w_pct / max(h_pct, 0.01), h_pct / max(w_pct, 0.01))
+                        if aspect > 20:
+                            print(f"  filter: drop thin-line img {w_pct:.1f}x{h_pct:.1f}% aspect={aspect:.1f}")
+                            continue
 
                     # 画像データ: ページの該当領域をクロップして PNG 化（確実）
                     # xref 経由の extract_image は形式依存で失敗することがあるため、
@@ -2382,8 +2399,9 @@ async def analyze_pdf(
                 except Exception as docai_img_err:
                     print(f"DocAI image extraction error: {docai_img_err}")
 
-            # ── Vision API での画像検出（印鑑・ロゴ・スタンプ等 — 常に実行） ──
-            if PILImage:
+            # ── Vision API での画像検出（印鑑・ロゴ・スタンプ等） ──
+            # magazine プロファイルでは罫線を logo/face と誤検出しやすいのでスキップ
+            if PILImage and not is_magazine:
                 pre_vis_count = len(images_data)
                 try:
                     import os
@@ -2579,7 +2597,8 @@ async def analyze_pdf(
             # ── Gemini Vision による非テキスト画像領域の検出（ロゴ・写真・認証マーク等） ──
             # Vision API の LOGO_DETECTION は著名ブランドしか検出できないため、
             # Gemini に「テキスト以外の視覚要素のバウンディングボックス」を列挙させる。
-            if PILImage and GEMINI_API_KEY:
+            # magazine プロファイルではスキップ (テキスト領域を巨大画像と誤判定するため)
+            if PILImage and GEMINI_API_KEY and not is_magazine:
                 pre_gem_count = len(images_data)
                 try:
                     gemini_regions = _detect_image_regions_gemini(png_bytes)
@@ -2637,6 +2656,13 @@ async def analyze_pdf(
 
             if images_data:
                 print(f"Page {i}: Total {len(images_data)} images extracted (PyMuPDF+DocAI+Vision+Gemini)")
+
+            # ── 画像領域の最終フィルタ: テキスト大幅重複 + ページ面積の大半を占める box を除外 ──
+            if images_data:
+                before = len(images_data)
+                images_data = _filter_image_regions(images_data, spans)
+                if len(images_data) != before:
+                    print(f"Page {i}: filtered images {before} → {len(images_data)}")
 
             # ── 描画要素(罫線・背景色)抽出 ──
             drawings_data = []

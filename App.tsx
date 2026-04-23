@@ -580,12 +580,23 @@ const App: React.FC = () => {
       return;
     }
     setLoading(true);
-    flash('PDF分析中（Document AI）...', 'info');
+    // 現在の view から document profile を決定
+    // KUMIHAN_NEWSPAPER (経営計画) / KUMIHAN_COMMERCIAL (定期出版) は雑誌向け(縦書き/多段組)
+    // 名刺とその他は business_card 扱い (既定)
+    const profile: 'business_card' | 'magazine' =
+      view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL
+        ? 'magazine' : 'business_card';
+    flash(
+      profile === 'magazine'
+        ? 'PDF分析中（雑誌向け: YomiToku + 画像検出スキップ）...'
+        : 'PDF分析中（Document AI）...',
+      'info',
+    );
     try {
-      // Document AI をデフォルトで使用
+      // Document AI をデフォルトで使用 (business_card の場合)
       const useDocAI = getConfig('VITE_USE_DOCUMENT_AI') !== 'false';
-      console.log('[handleUpload] useDocAI:', useDocAI, 'API URL:', getConfig('VITE_API_URL'));
-      const data = await analyzePdf(file, useDocAI);
+      console.log('[handleUpload] profile:', profile, 'useDocAI:', useDocAI, 'API URL:', getConfig('VITE_API_URL'));
+      const data = await analyzePdf(file, { profile, useDocumentAI: useDocAI });
       console.log('[handleUpload] analyzePdf returned:', data?.pages?.length, 'pages');
       const pages = data?.pages;
       if (!pages || !Array.isArray(pages) || pages.length === 0) {
