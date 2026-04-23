@@ -19,6 +19,7 @@ import VerifyScreen from './components/VerifyScreen';
 import { AIDtpAgentWorkspace } from './components/AIDtpAgentWorkspace';
 import { MeishiExtractPage } from './components/MeishiExtractPage';
 import { MeishiBuildPage } from './components/MeishiBuildPage';
+import CommercialPublishing from './components/CommercialPublishing';
 import { SpanState, createSpanState, applySpanEdit } from './services/spanStore';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
@@ -1100,8 +1101,15 @@ const App: React.FC = () => {
           { icon: CreditCard, label: '名刺', badge: 0, state: AppState.KUMIHAN_MEISHI },
           { icon: ScanText, label: '  └ コンテンツ抽出', badge: 0, state: AppState.MEISHI_EXTRACT },
           { icon: Wand2, label: '  └ PDF生成・比較', badge: 0, state: AppState.MEISHI_BUILD },
+          { icon: PenTool, label: '  └ 赤ペン指示書', badge: 0, state: AppState.MEISHI_REDPEN },
           { icon: Newspaper, label: '経営計画', badge: 0, state: AppState.KUMIHAN_NEWSPAPER },
+          { icon: ScanText, label: '  └ コンテンツ抽出', badge: 0, state: AppState.KEIEI_EXTRACT },
+          { icon: Wand2, label: '  └ PDF生成・比較', badge: 0, state: AppState.KEIEI_BUILD },
+          { icon: PenTool, label: '  └ 赤ペン指示書', badge: 0, state: AppState.KEIEI_REDPEN },
           { icon: BookMarked, label: '定期出版', badge: 0, state: AppState.KUMIHAN_COMMERCIAL },
+          { icon: ScanText, label: '  └ コンテンツ抽出', badge: 0, state: AppState.TEIKI_EXTRACT },
+          { icon: Wand2, label: '  └ PDF生成・比較', badge: 0, state: AppState.TEIKI_BUILD },
+          { icon: PenTool, label: '  └ 赤ペン指示書', badge: 0, state: AppState.TEIKI_REDPEN },
         ],
       },
       {
@@ -1196,7 +1204,7 @@ const App: React.FC = () => {
                   const active = isActive(item.state);
                   return (
                     <button
-                      key={`${section.title}-${item.label}`}
+                      key={`${section.title}-${item.state}`}
                       onClick={() => {
                         if (item.state === AppState.DASHBOARD) { resetAll(); setShowChatInEditor(false); }
                         else if (item.state === AppState.AI_CHAT) { setView(AppState.AI_CHAT); setShowChatInEditor(false); }
@@ -5072,6 +5080,43 @@ JSONのみ返してください。` },
         {view === AppState.TOOL_AI_DTP_AGENT && <AIDtpAgentWorkspace />}
         {view === AppState.MEISHI_EXTRACT && <MeishiExtractPage />}
         {view === AppState.MEISHI_BUILD && <MeishiBuildPage />}
+        {/* 赤ペン指示書 (名刺/経営計画/定期出版 共通) */}
+        {(view === AppState.MEISHI_REDPEN
+          || view === AppState.KEIEI_REDPEN
+          || view === AppState.TEIKI_REDPEN) && (
+          <CommercialPublishing
+            onBack={() => setView(AppState.DASHBOARD)}
+            flash={flash}
+            colors={C as unknown as Record<string, string>}
+          />
+        )}
+        {/* 経営計画 / 定期出版 サブタスク (暫定: KUMIHAN_* 既存ページを流用) */}
+        {(view === AppState.KEIEI_EXTRACT || view === AppState.TEIKI_EXTRACT) && (
+          <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
+            <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
+              style={{ background: C.card, borderColor: C.border }}>
+              <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
+                {view === AppState.KEIEI_EXTRACT ? '経営計画' : '定期出版'} 〜 コンテンツ抽出
+              </h2>
+              <p className="text-sm" style={{ color: C.textSec }}>
+                PDF入稿からAI構造解析までのフローを準備中です。上位の「{view === AppState.KEIEI_EXTRACT ? '経営計画' : '定期出版'}」画面を先にご利用ください。
+              </p>
+            </div>
+          </div>
+        )}
+        {(view === AppState.KEIEI_BUILD || view === AppState.TEIKI_BUILD) && (
+          <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
+            <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
+              style={{ background: C.card, borderColor: C.border }}>
+              <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
+                {view === AppState.KEIEI_BUILD ? '経営計画' : '定期出版'} 〜 PDF生成・比較
+              </h2>
+              <p className="text-sm" style={{ color: C.textSec }}>
+                組版エンジン連携は準備中です。
+              </p>
+            </div>
+          </div>
+        )}
         {view === AppState.AI_INDESIGN && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-4xl mx-auto space-y-6">

@@ -181,8 +181,15 @@ export enum AppState {
   KUMIHAN_MEISHI = 'KUMIHAN_MEISHI',       // 名刺
   MEISHI_EXTRACT = 'MEISHI_EXTRACT',       // 名刺コンテンツ抽出
   MEISHI_BUILD = 'MEISHI_BUILD',           // 名刺PDF生成
+  MEISHI_REDPEN = 'MEISHI_REDPEN',         // 名刺 赤ペン指示書
   KUMIHAN_NEWSPAPER = 'KUMIHAN_NEWSPAPER', // 経営計画 (旧: 新聞)
+  KEIEI_EXTRACT = 'KEIEI_EXTRACT',         // 経営計画 コンテンツ抽出
+  KEIEI_BUILD = 'KEIEI_BUILD',             // 経営計画 PDF生成・比較
+  KEIEI_REDPEN = 'KEIEI_REDPEN',           // 経営計画 赤ペン指示書
   KUMIHAN_COMMERCIAL = 'KUMIHAN_COMMERCIAL', // 定期出版 (旧: 商業出版)
+  TEIKI_EXTRACT = 'TEIKI_EXTRACT',         // 定期出版 コンテンツ抽出
+  TEIKI_BUILD = 'TEIKI_BUILD',             // 定期出版 PDF生成・比較
+  TEIKI_REDPEN = 'TEIKI_REDPEN',           // 定期出版 赤ペン指示書
   // 文字起こし
   TRANSCRIBE_LIST = 'TRANSCRIBE_LIST',
   TRANSCRIBE_HISTORY = 'TRANSCRIBE_HISTORY',

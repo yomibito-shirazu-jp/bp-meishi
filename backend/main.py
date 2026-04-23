@@ -4159,6 +4159,111 @@ blockquote {{ border-left: 3pt solid #ccc; padding-left: 8pt; margin: 0.3em 0; c
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+# ── /extract-corrections エンドポイント ─────────────────────────────────────
+# 赤ペン指示書PDF → Gemini Vision → タスク一覧抽出
+class ExtractCorrectionsRequest(BaseModel):
+    pdf_b64: str
+    manuscript_pdf_b64: Optional[str] = None
+
+
+@app.post("/extract-corrections")
+async def extract_corrections(
+    req: ExtractCorrectionsRequest,
+    x_gemini_api_key: Optional[str] = Header(None),
+):
+    api_key = x_gemini_api_key or GEMINI_API_KEY
+    if not api_key:
+        raise HTTPException(400, "Gemini API Key が必要です")
+    try:
+        genai.configure(api_key=api_key)
+        pdf_bytes = base64.b64decode(req.pdf_b64)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        all_tasks: list[dict] = []
+        task_counter = 0
+        for i in range(len(doc)):
+            page = doc.load_page(i)
+            rect = page.rect
+            scale = max(2, 2000 / max(rect.width, rect.height))
+            scale = min(scale, 6)
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+            png_bytes = pix.tobytes("png")
+            try:
+                model = genai.GenerativeModel("gemini-2.5-flash")
+                prompt = """この画像は印刷物の「修正指示書（赤字校正・校正刷り）」です。
+画像中の修正指示をすべて読み取り、以下のJSON配列で返してください。
+
+各修正指示について:
+- location: 修正箇所の位置（例: "3行目", "タイトル下", "右カラム2段落目"）
+- original_text: 修正前のテキスト（赤字で取り消されているもの、分かれば）
+- corrected_text: 修正後のテキスト（赤字で書き込まれているもの）
+- instruction: 修正の内容を説明（例: "誤字修正", "文言変更", "削除", "画像差替"）
+- category: "text"（文字修正）, "image"（画像関連）, "layout"（レイアウト変更）, "delete"（削除）, "add"（追加）のいずれか
+- priority: "high"（重要）, "normal"（通常）, "low"（軽微）
+
+朱書き・赤ペン・付箋・コメント・マーカーなど、あらゆる修正指示記号を解読してください。
+JSON配列のみ返してください。修正指示が見つからない場合は空配列 [] を返してください。"""
+                img_part = {"mime_type": "image/png", "data": png_bytes}
+                resp = model.generate_content(
+                    [prompt, img_part],
+                    generation_config={"temperature": 0.1, "max_output_tokens": 8192},
+                )
+                raw = resp.text.strip()
+                if "```json" in raw:
+                    raw = raw.split("```json")[1].split("```")[0].strip()
+                elif "```" in raw:
+                    raw = raw.split("```")[1].split("```")[0].strip()
+                tasks = json.loads(raw)
+                if isinstance(tasks, list):
+                    for t in tasks:
+                        task_counter += 1
+                        all_tasks.append({
+                            "id": f"task_{task_counter:03d}",
+                            "page": i + 1,
+                            "location": t.get("location", ""),
+                            "original_text": t.get("original_text", ""),
+                            "corrected_text": t.get("corrected_text", ""),
+                            "instruction": t.get("instruction", ""),
+                            "category": t.get("category", "text"),
+                            "priority": t.get("priority", "normal"),
+                            "status": "pending",
+                        })
+            except Exception as gemini_err:
+                print(f"Page {i+1}: Gemini correction extraction error: {gemini_err}")
+                page_text = page.get_text("text").strip()
+                if page_text:
+                    task_counter += 1
+                    all_tasks.append({
+                        "id": f"task_{task_counter:03d}",
+                        "page": i + 1,
+                        "location": "ページ全体",
+                        "original_text": "",
+                        "corrected_text": "",
+                        "instruction": f"テキスト抽出（Geminiエラー）: {page_text[:200]}",
+                        "category": "text",
+                        "priority": "normal",
+                        "status": "pending",
+                    })
+        page_previews = []
+        for i in range(len(doc)):
+            page = doc.load_page(i)
+            rect = page.rect
+            scale = max(1.5, 1200 / max(rect.width, rect.height))
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+            png_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+            page_previews.append({
+                "page_index": i,
+                "preview_b64": png_b64,
+                "width": pix.width,
+                "height": pix.height,
+            })
+        doc.close()
+        return {"tasks": all_tasks, "total_tasks": len(all_tasks), "pages": page_previews}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"修正指示抽出エラー: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

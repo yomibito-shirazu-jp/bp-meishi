@@ -398,3 +398,45 @@ export const generateImage = async (req: GenerateImageRequest): Promise<Generate
   }
   return res.json();
 };
+
+// ── 修正指示PDF解析 (赤ペン指示書) ──
+
+export interface CorrectionTask {
+  id: string;
+  page: number;
+  location: string;
+  original_text: string;
+  corrected_text: string;
+  instruction: string;
+  category: 'text' | 'image' | 'layout' | 'delete' | 'add';
+  priority: 'high' | 'normal' | 'low';
+  status: 'pending' | 'done' | 'skipped';
+}
+
+export interface ExtractCorrectionsResponse {
+  tasks: CorrectionTask[];
+  total_tasks: number;
+  pages: { page_index: number; preview_b64: string; width: number; height: number; }[];
+}
+
+export const extractCorrections = async (
+  correctionPdfB64: string,
+  manuscriptPdfB64?: string,
+): Promise<ExtractCorrectionsResponse> => {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const geminiKey = getConfig('VITE_GOOGLE_AI_KEY');
+  if (geminiKey) headers['X-Gemini-API-Key'] = geminiKey;
+  const res = await fetch(`${getApiUrl()}/extract-corrections`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      pdf_b64: correctionPdfB64,
+      manuscript_pdf_b64: manuscriptPdfB64 || null,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail || `修正指示抽出エラー: HTTP ${res.status}`);
+  }
+  return res.json();
+};
