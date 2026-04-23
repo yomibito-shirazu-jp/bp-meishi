@@ -20,3 +20,9 @@ markdown
 # IBM の ML ベース文書構造解析エンジン。PDF/DOCX/PPTX 等に対応。
 # ML モデルが大きいので導入は任意:  pip install docling
 # docling>=2.0.0
+
+# Optional: huridocs/pdf-document-layout-analysis (https://github.com/huridocs/pdf-document-layout-analysis)
+# VGT / LayoutLMv3 ベースの DL レイアウト解析。別コンテナで REST サービスとして起動し URL 指定:
+#   docker run -p 5060:5060 huridocs/pdf-document-layout-analysis:latest
+#   export HURIDOCS_URL=http://localhost:5060
+# (httpx は既に上で fastapi と一緒に含まれている)

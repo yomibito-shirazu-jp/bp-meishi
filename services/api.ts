@@ -17,7 +17,8 @@ export type ExtractEngine =
   | 'vision_ocr' // Google Cloud Vision DOCUMENT_TEXT_DETECTION
   | 'pymupdf'    // PyMuPDF (テキスト埋め込みPDF高速抽出)
   | 'gemini'     // Gemini Vision
-  | 'docling';   // docling (IBM, ML文書構造解析)
+  | 'docling'    // docling (IBM, ML文書構造解析)
+  | 'huridocs';  // huridocs/pdf-document-layout-analysis (VGT/LayoutLMv3)
 
 export const EXTRACT_ENGINE_LABELS: Record<ExtractEngine, string> = {
   auto: '自動 (推奨)',
@@ -27,6 +28,7 @@ export const EXTRACT_ENGINE_LABELS: Record<ExtractEngine, string> = {
   pymupdf: 'PyMuPDF (テキスト埋込)',
   gemini: 'Gemini Vision',
   docling: 'docling (IBM)',
+  huridocs: 'huridocs (VGT/LayoutLMv3)',
 };
 
 export type DocumentProfile = 'business_card' | 'magazine' | 'poster';

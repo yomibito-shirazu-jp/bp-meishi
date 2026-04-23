@@ -190,6 +190,8 @@ async def list_extract_engines():
         {"id": "gemini",     "label": "Gemini Vision",            "available": bool(GEMINI_API_KEY)},
         {"id": "docling",    "label": "docling (IBM)",            "available": _docling_available(),
          "install_hint": "pip install docling"},
+        {"id": "huridocs",   "label": "huridocs (VGT/LayoutLMv3)", "available": _huridocs_available(),
+         "install_hint": "docker run -p 5060:5060 huridocs/pdf-document-layout-analysis && export HURIDOCS_URL=http://localhost:5060"},
     ]
     return engines
 
@@ -1701,6 +1703,120 @@ def _filter_image_regions(images: list[dict], spans: list[dict]) -> list[dict]:
 
 # ── docling (https://github.com/docling-project/docling) ────────────────────
 # IBM の ML ベース文書構造解析。lazy import で未インストール時は 503 を返す。
+# ── huridocs/pdf-document-layout-analysis (REST マイクロサービス) ──────────
+# VGT / LayoutLMv3 ベースの DL レイアウト解析。別コンテナで動かし URL を指定。
+# 使い方:
+#   docker run -p 5060:5060 huridocs/pdf-document-layout-analysis:latest
+#   HURIDOCS_URL=http://localhost:5060 を main backend に設定
+HURIDOCS_URL = os.environ.get("HURIDOCS_URL", "").rstrip("/")
+
+
+def _huridocs_available() -> bool:
+    """HURIDOCS_URL が設定され、かつ疎通可能なら True。"""
+    if not HURIDOCS_URL:
+        return False
+    try:
+        import httpx  # type: ignore
+        r = httpx.get(HURIDOCS_URL + "/info", timeout=3.0)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _extract_spans_huridocs(pdf_bytes: bytes) -> list[dict[str, Any]]:
+    """huridocs サービスに POST して layout segments を span/layout_block に変換。
+
+    Response 形式 (huridocs):
+      [{ "left": 42, "top": 100, "width": 300, "height": 20,
+         "page_number": 1, "page_width": 612, "page_height": 792,
+         "text": "...", "type": "Text|Title|Picture|Table|..." }, ...]
+    """
+    if not HURIDOCS_URL:
+        raise HTTPException(503, "HURIDOCS_URL 未設定 (別コンテナで起動後 env で指定)")
+    try:
+        import httpx  # type: ignore
+    except Exception as imp_err:
+        raise HTTPException(503, f"httpx が必要: {imp_err}")
+
+    try:
+        files = {"file": ("input.pdf", pdf_bytes, "application/pdf")}
+        resp = httpx.post(HURIDOCS_URL, files=files, timeout=300.0)
+        resp.raise_for_status()
+        segments = resp.json()
+    except Exception as e:
+        raise HTTPException(502, f"huridocs 呼び出し失敗: {e}")
+
+    if not isinstance(segments, list):
+        return []
+
+    # ページ毎に集約
+    pages_map: dict[int, dict[str, Any]] = {}
+    for seg_idx, seg in enumerate(segments):
+        page_no = int(seg.get("page_number", 1)) - 1
+        pw = float(seg.get("page_width", 612)) or 612
+        ph = float(seg.get("page_height", 792)) or 792
+        left = float(seg.get("left", 0))
+        top = float(seg.get("top", 0))
+        w = float(seg.get("width", 0))
+        h = float(seg.get("height", 0))
+        if w <= 0 or h <= 0:
+            continue
+        x_pct = (left / pw) * 100
+        y_pct = (top / ph) * 100
+        w_pct = (w / pw) * 100
+        h_pct = (h / ph) * 100
+        typ = str(seg.get("type", "Text"))
+        text = str(seg.get("text", "") or "").strip()
+
+        if page_no not in pages_map:
+            pages_map[page_no] = {"spans": [], "layout_blocks": [],
+                                  "barcodes": [], "detected_languages": []}
+        entry = pages_map[page_no]
+
+        # 画像/図/表はテキストなしの layout_block 扱い
+        if typ in ("Picture", "Figure", "Table", "Formula") or not text:
+            entry["layout_blocks"].append({
+                "id": f"hd_{seg_idx}",
+                "type": "image" if typ in ("Picture", "Figure") else "table" if typ == "Table" else "text",
+                "x_pct": x_pct, "y_pct": y_pct, "w_pct": w_pct, "h_pct": h_pct,
+                "text_preview": text[:50] if text else None,
+                "confidence": float(seg.get("score", 0) or 0),
+            })
+            if text:
+                # Title 等の短いテキスト付きブロックは span でも保持
+                pass
+            continue
+
+        entry["spans"].append({
+            "id": f"hd_{seg_idx}",
+            "text": text,
+            "x_pct": x_pct,
+            "y_pct": y_pct,
+            "w_pct": w_pct,
+            "h_pct": h_pct,
+            "size_pt": max(4.0, min(200.0, h * 0.8)),
+            "font_class": "mincho" if typ in ("Text", "Title", "List") else "gothic",
+            "font_original": "",
+            "writing_direction": "horizontal",
+            "color_hex": "#000000",
+            "origin": [left, top + h],
+            "bbox": [left, top, w, h],
+            "size_source": "huridocs-bbox",
+            "needs_font_review": True,
+        })
+
+    # ページ番号の最大値+1 までの配列に展開(歯抜け埋め)
+    if not pages_map:
+        return []
+    max_page = max(pages_map.keys())
+    out: list[dict[str, Any]] = []
+    for i in range(max_page + 1):
+        out.append(pages_map.get(i, {
+            "spans": [], "layout_blocks": [], "barcodes": [], "detected_languages": []
+        }))
+    return out
+
+
 def _docling_available() -> bool:
     try:
         import docling  # noqa: F401
@@ -2023,28 +2139,37 @@ async def analyze_pdf(
         # モード選択: X-Extract-Engine > 個別フラグ > 自動
         engine = (x_extract_engine or "").strip().lower()
         # magazine プロファイルで engine 未指定 or auto → 利用可能な中で最適を選択
-        # 優先順位: yomitoku (縦書き最強) > docling (ML文書構造) > docai (フォールバック)
+        # 優先順位: yomitoku (縦書き最強) > huridocs (DL layout) > docling (ML文書構造) > docai (フォールバック)
         if is_magazine and engine in ("", "auto"):
             if _yomitoku_available():
                 engine = "yomitoku"
                 print("  magazine profile: using yomitoku (available)")
+            elif _huridocs_available():
+                engine = "huridocs"
+                print("  magazine profile: using huridocs (available)")
             elif _docling_available():
                 engine = "docling"
-                print("  magazine profile: yomitoku unavailable, using docling")
+                print("  magazine profile: yomitoku/huridocs unavailable, using docling")
             else:
                 engine = "docai"
-                print("  magazine profile: yomitoku/docling unavailable, using docai")
+                print("  magazine profile: falling back to docai")
         # 明示指定された engine が未インストールならフォールバック (503 避け)
         elif engine == "yomitoku" and not _yomitoku_available():
-            fb = "docling" if _docling_available() else "docai"
+            fb = "huridocs" if _huridocs_available() else ("docling" if _docling_available() else "docai")
             print(f"  yomitoku unavailable → falling back to {fb}")
             engine = fb
         elif engine == "docling" and not _docling_available():
-            print(f"  docling unavailable → falling back to docai")
-            engine = "docai"
+            fb = "huridocs" if _huridocs_available() else "docai"
+            print(f"  docling unavailable → falling back to {fb}")
+            engine = fb
+        elif engine == "huridocs" and not _huridocs_available():
+            fb = "docling" if _docling_available() else "docai"
+            print(f"  huridocs unavailable → falling back to {fb}")
+            engine = fb
         use_yomitoku = (x_use_yomitoku or "").lower() == "true" or engine == "yomitoku"
         use_vision_ocr = (x_use_vision_ocr or "").lower() == "true" or engine == "vision_ocr"
         use_docling = engine == "docling"
+        use_huridocs = engine == "huridocs"
         use_pymupdf_only = engine == "pymupdf"
         use_gemini_only = engine == "gemini"
         use_docai_mode = (x_use_documentai or "").lower()
@@ -2053,10 +2178,25 @@ async def analyze_pdf(
             or (
                 (use_docai_mode != "false")
                 and not use_yomitoku and not use_vision_ocr
-                and not use_docling and not use_pymupdf_only and not use_gemini_only
+                and not use_docling and not use_huridocs
+                and not use_pymupdf_only and not use_gemini_only
                 and engine in ("", "auto", "docai")
             )
         )
+
+        # huridocs 抽出 (使用時は他エンジンをスキップ)
+        huridocs_results: list[dict[str, Any]] = []
+        if use_huridocs:
+            print("Using huridocs...")
+            try:
+                huridocs_results = _extract_spans_huridocs(pdf_bytes)
+                print(f"huridocs extracted {len(huridocs_results)} pages")
+            except HTTPException:
+                raise
+            except Exception as hd_err:
+                print(f"huridocs failed: {hd_err}")
+                huridocs_results = []
+                use_huridocs = False
 
         # docling 抽出 (使用時は他エンジンをスキップ)
         docling_results: list[dict[str, Any]] = []
@@ -2148,7 +2288,23 @@ async def analyze_pdf(
             docai_barcodes = []
             docai_languages = []
 
-            if use_docling and i < len(docling_results):
+            if use_huridocs and i < len(huridocs_results):
+                hd_page = huridocs_results[i]
+                spans = hd_page["spans"]
+                docai_layout_blocks = hd_page.get("layout_blocks", [])
+                docai_languages = hd_page.get("detected_languages", [])
+                for s in spans:
+                    bx = (s["x_pct"] / 100) * rect.width
+                    by = (s["y_pct"] / 100) * rect.height
+                    bw = (s["w_pct"] / 100) * rect.width
+                    bh = (s["h_pct"] / 100) * rect.height
+                    s.update({"origin": [bx, by + bh], "bbox": [bx, by, bw, bh]})
+                if has_text:
+                    pymupdf_spans = _extract_spans_pymupdf(page)
+                    if pymupdf_spans:
+                        _merge_font_info(spans, pymupdf_spans, rect.width, rect.height)
+                print(f"Page {i}: huridocs → {len(spans)} spans")
+            elif use_docling and i < len(docling_results):
                 dl_page = docling_results[i]
                 spans = dl_page["spans"]
                 docai_layout_blocks = dl_page.get("layout_blocks", [])

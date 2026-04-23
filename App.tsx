@@ -1478,6 +1478,7 @@ const App: React.FC = () => {
                 <option value="pymupdf">PyMuPDF</option>
                 <option value="gemini">Gemini</option>
                 <option value="docling">docling</option>
+                <option value="huridocs">huridocs</option>
               </select>
               <button
                 onClick={handleReanalyze}
