@@ -31,7 +31,7 @@ import {
   FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
   PenTool, ScanText, FileEdit, FileDiff, ShieldCheck, BookType,
   Newspaper, BookMarked, Monitor,
-  Copy, Share2, RotateCcw,
+  Copy, Share2, RotateCcw, ShoppingBag,
 } from 'lucide-react';
 
 
@@ -584,7 +584,9 @@ const App: React.FC = () => {
     // KUMIHAN_NEWSPAPER (経営計画) / KUMIHAN_COMMERCIAL (定期出版) は雑誌向け(縦書き/多段組)
     // 名刺とその他は business_card 扱い (既定)
     const profile: 'business_card' | 'magazine' =
-      view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL
+      view === AppState.KUMIHAN_NEWSPAPER
+        || view === AppState.KUMIHAN_COMMERCIAL
+        || view === AppState.KUMIHAN_TSUHAN
         ? 'magazine' : 'business_card';
     flash(
       profile === 'magazine'
@@ -1183,6 +1185,10 @@ const App: React.FC = () => {
           { icon: ScanText, label: '  └ コンテンツ抽出', badge: 0, state: AppState.TEIKI_EXTRACT },
           { icon: Wand2, label: '  └ PDF生成・比較', badge: 0, state: AppState.TEIKI_BUILD },
           { icon: PenTool, label: '  └ 赤ペン指示書', badge: 0, state: AppState.TEIKI_REDPEN },
+          { icon: ShoppingBag, label: '通販カタログ', badge: 0, state: AppState.KUMIHAN_TSUHAN },
+          { icon: ScanText, label: '  └ コンテンツ抽出', badge: 0, state: AppState.TSUHAN_EXTRACT },
+          { icon: Wand2, label: '  └ PDF生成・比較', badge: 0, state: AppState.TSUHAN_BUILD },
+          { icon: PenTool, label: '  └ 赤ペン指示書', badge: 0, state: AppState.TSUHAN_REDPEN },
         ],
       },
       {
@@ -1401,6 +1407,7 @@ const App: React.FC = () => {
         {view === AppState.KUMIHAN_MEISHI && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜名刺</h2>}
         {view === AppState.KUMIHAN_NEWSPAPER && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜経営計画</h2>}
         {view === AppState.KUMIHAN_COMMERCIAL && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜定期出版</h2>}
+        {view === AppState.KUMIHAN_TSUHAN && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜通販カタログ</h2>}
         {view === AppState.AI_INDESIGN && <h2 className="text-[15px] font-bold text-gray-900">AIインデザイン</h2>}
         {view === AppState.TOOL_AI_DTP_AGENT && <h2 className="text-[15px] font-bold text-gray-900">AI DTP エージェント</h2>}
         {view === AppState.MARKDOWN_EDIT && (
@@ -5216,19 +5223,20 @@ JSONのみ返してください。` },
         {view === AppState.TOOL_DETECT_LAYOUT && renderDetectLayout()}
         {view === AppState.TOOL_VALIDATE_MS && renderValidateManuscript()}
         {/* クラウド組版カテゴリ */}
-        {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL) && (
+        {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL || view === AppState.KUMIHAN_TSUHAN) && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-5xl mx-auto">
               <div className="rounded-2xl p-1" style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : view === AppState.KUMIHAN_NEWSPAPER ? 'linear-gradient(135deg, #3b82f6, #60a5fa)' : C.gradientPrimary }}>
                 <div className="bg-white rounded-[14px] p-10">
                   <div className="text-center mb-8">
                     <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '経営計画' : '定期出版'}
+                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '経営計画' : view === AppState.KUMIHAN_COMMERCIAL ? '定期出版' : '通販カタログ'}
                     </h2>
                     <p className="text-gray-500">
                       {view === AppState.KUMIHAN_MEISHI && 'PDFを入稿してAI構造解析→自動組版→校了PDFまでワンストップ。'}
                       {view === AppState.KUMIHAN_NEWSPAPER && '経営計画書を入稿。表・グラフ・見出し構成をAIが自動レイアウト。'}
                       {view === AppState.KUMIHAN_COMMERCIAL && '定期出版物の原稿を入稿。章立て・目次・索引をAIが構造解析し自動組版。'}
+                      {view === AppState.KUMIHAN_TSUHAN && '通販カタログを入稿。商品画像・価格・キャプションを構造抽出しテンプレート組版。'}
                     </p>
                   </div>
                   <div className="flex justify-center gap-4 flex-wrap">
@@ -5279,43 +5287,52 @@ JSONのみ返してください。` },
         {view === AppState.TOOL_AI_DTP_AGENT && <AIDtpAgentWorkspace />}
         {view === AppState.MEISHI_EXTRACT && <MeishiExtractPage />}
         {view === AppState.MEISHI_BUILD && <MeishiBuildPage />}
-        {/* 赤ペン指示書 (名刺/経営計画/定期出版 共通) */}
+        {/* 赤ペン指示書 (名刺/経営計画/定期出版/通販カタログ 共通) */}
         {(view === AppState.MEISHI_REDPEN
           || view === AppState.KEIEI_REDPEN
-          || view === AppState.TEIKI_REDPEN) && (
+          || view === AppState.TEIKI_REDPEN
+          || view === AppState.TSUHAN_REDPEN) && (
           <CommercialPublishing
             onBack={() => setView(AppState.DASHBOARD)}
             flash={flash}
             colors={C as unknown as Record<string, string>}
           />
         )}
-        {/* 経営計画 / 定期出版 サブタスク (暫定: KUMIHAN_* 既存ページを流用) */}
-        {(view === AppState.KEIEI_EXTRACT || view === AppState.TEIKI_EXTRACT) && (
-          <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
-            <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
-              style={{ background: C.card, borderColor: C.border }}>
-              <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
-                {view === AppState.KEIEI_EXTRACT ? '経営計画' : '定期出版'} 〜 コンテンツ抽出
-              </h2>
-              <p className="text-sm" style={{ color: C.textSec }}>
-                PDF入稿からAI構造解析までのフローを準備中です。上位の「{view === AppState.KEIEI_EXTRACT ? '経営計画' : '定期出版'}」画面を先にご利用ください。
-              </p>
+        {/* 経営計画 / 定期出版 / 通販カタログ サブタスク (暫定プレースホルダ) */}
+        {(view === AppState.KEIEI_EXTRACT || view === AppState.TEIKI_EXTRACT || view === AppState.TSUHAN_EXTRACT) && (() => {
+          const label = view === AppState.KEIEI_EXTRACT ? '経営計画'
+            : view === AppState.TEIKI_EXTRACT ? '定期出版' : '通販カタログ';
+          return (
+            <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
+              <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
+                style={{ background: C.card, borderColor: C.border }}>
+                <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
+                  {label} 〜 コンテンツ抽出
+                </h2>
+                <p className="text-sm" style={{ color: C.textSec }}>
+                  PDF入稿からAI構造解析までのフローを準備中です。上位の「{label}」画面を先にご利用ください。
+                </p>
+              </div>
             </div>
-          </div>
-        )}
-        {(view === AppState.KEIEI_BUILD || view === AppState.TEIKI_BUILD) && (
-          <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
-            <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
-              style={{ background: C.card, borderColor: C.border }}>
-              <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
-                {view === AppState.KEIEI_BUILD ? '経営計画' : '定期出版'} 〜 PDF生成・比較
-              </h2>
-              <p className="text-sm" style={{ color: C.textSec }}>
-                組版エンジン連携は準備中です。
-              </p>
+          );
+        })()}
+        {(view === AppState.KEIEI_BUILD || view === AppState.TEIKI_BUILD || view === AppState.TSUHAN_BUILD) && (() => {
+          const label = view === AppState.KEIEI_BUILD ? '経営計画'
+            : view === AppState.TEIKI_BUILD ? '定期出版' : '通販カタログ';
+          return (
+            <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
+              <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
+                style={{ background: C.card, borderColor: C.border }}>
+                <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
+                  {label} 〜 PDF生成・比較
+                </h2>
+                <p className="text-sm" style={{ color: C.textSec }}>
+                  組版エンジン連携は準備中です。
+                </p>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
         {view === AppState.AI_INDESIGN && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-4xl mx-auto space-y-6">

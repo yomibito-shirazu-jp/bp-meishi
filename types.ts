@@ -190,6 +190,10 @@ export enum AppState {
   TEIKI_EXTRACT = 'TEIKI_EXTRACT',         // 定期出版 コンテンツ抽出
   TEIKI_BUILD = 'TEIKI_BUILD',             // 定期出版 PDF生成・比較
   TEIKI_REDPEN = 'TEIKI_REDPEN',           // 定期出版 赤ペン指示書
+  KUMIHAN_TSUHAN = 'KUMIHAN_TSUHAN',       // 通販カタログ
+  TSUHAN_EXTRACT = 'TSUHAN_EXTRACT',       // 通販カタログ コンテンツ抽出
+  TSUHAN_BUILD = 'TSUHAN_BUILD',           // 通販カタログ PDF生成・比較
+  TSUHAN_REDPEN = 'TSUHAN_REDPEN',         // 通販カタログ 赤ペン指示書
   // 文字起こし
   TRANSCRIBE_LIST = 'TRANSCRIBE_LIST',
   TRANSCRIBE_HISTORY = 'TRANSCRIBE_HISTORY',
