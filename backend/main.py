@@ -1673,7 +1673,7 @@ def _iou_pct(a: dict, b: dict) -> float:
 
 
 def _filter_image_regions(images: list[dict], spans: list[dict]) -> list[dict]:
-    """画像領域から、(a)テキストと大幅重複、(b)ページ面積の大半を占めるもの、を除外。"""
+    """画像領域から、(a)テキストと大幅重複、(b)ページ面積の大半、(c)重複画像、を除外。"""
     filtered: list[dict] = []
     for img in images:
         w = float(img.get("w_pct", 0))
@@ -1696,6 +1696,33 @@ def _filter_image_regions(images: list[dict], spans: list[dict]) -> list[dict]:
                 break
         if text_overlap > 0.55:
             print(f"  filter: drop text-overlap image {img.get('id','?')} overlap={text_overlap:.2f}")
+            continue
+        # 既存画像との重複 (同一ロゴ多重検出対策)
+        # 位置 or データが ~同一 (bbox 中心の距離 < 3%pt かつ サイズ比 0.8-1.2) は重複扱い
+        is_dup = False
+        for kept in filtered:
+            kx_c = float(kept.get("x_pct", 0)) + float(kept.get("w_pct", 0)) / 2
+            ky_c = float(kept.get("y_pct", 0)) + float(kept.get("h_pct", 0)) / 2
+            ix_c = float(img.get("x_pct", 0)) + w / 2
+            iy_c = float(img.get("y_pct", 0)) + h / 2
+            dist = ((kx_c - ix_c) ** 2 + (ky_c - iy_c) ** 2) ** 0.5
+            kw = float(kept.get("w_pct", 0)) or 0.01
+            kh = float(kept.get("h_pct", 0)) or 0.01
+            w_ratio = (w / kw) if kw > 0 else 0
+            h_ratio = (h / kh) if kh > 0 else 0
+            # 位置近接 (中心距離 < 4%) + サイズ近似 (比率 0.7-1.4)
+            if dist < 4 and 0.7 <= w_ratio <= 1.4 and 0.7 <= h_ratio <= 1.4:
+                is_dup = True
+                print(f"  filter: drop dup image {img.get('id','?')} dist={dist:.1f}% (keep {kept.get('id','?')})")
+                break
+            # データ同一 (同じ data_b64 の先頭 64 文字が一致)
+            kd = str(kept.get("data_b64", ""))[:64]
+            id_ = str(img.get("data_b64", ""))[:64]
+            if kd and id_ and kd == id_:
+                is_dup = True
+                print(f"  filter: drop byte-dup image {img.get('id','?')} (same as {kept.get('id','?')})")
+                break
+        if is_dup:
             continue
         filtered.append(img)
     return filtered
