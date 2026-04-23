@@ -14,6 +14,12 @@ export interface AnalyzeOptions {
   useYomitoku?: boolean;
   yomitokuLite?: boolean;
   yomitokuDevice?: 'cpu' | 'cuda';
+  /**
+   * 手書き日本語スキャンに強い Cloud Vision DOCUMENT_TEXT_DETECTION を
+   * プライマリ抽出エンジンに指定する。明示しない場合でもバックエンドは
+   * DocAI が空を返したら自動で Vision OCR にフォールバックする。
+   */
+  useVisionOcr?: boolean;
 }
 
 export const analyzePdf = async (
@@ -29,10 +35,6 @@ export const analyzePdf = async (
     : (opts ?? {});
 
   const headers: Record<string, string> = {};
-  const geminiKey = getConfig('VITE_GOOGLE_AI_KEY');
-  if (geminiKey) {
-    headers['X-Gemini-API-Key'] = geminiKey;
-  }
 
   const useYomitoku = options.useYomitoku
     ?? (getConfig('VITE_USE_YOMITOKU').toLowerCase() === 'true');
@@ -46,8 +48,16 @@ export const analyzePdf = async (
     headers['X-Yomitoku-Device'] = device;
   }
 
-  // YomiToku 使用時は Document AI はスキップ(バックエンド側でも排他)
-  const useDocAI = !useYomitoku && (
+  // Vision OCR プライマリ指定 (手書き日本語スキャン用、YomiToku 未使用時のみ)
+  const useVisionOcr = !useYomitoku && (
+    options.useVisionOcr ?? (getConfig('VITE_USE_VISION_OCR').toLowerCase() === 'true')
+  );
+  if (useVisionOcr) {
+    headers['X-Use-Vision-OCR'] = 'true';
+  }
+
+  // YomiToku / Vision OCR 使用時は Document AI プライマリはスキップ
+  const useDocAI = !useYomitoku && !useVisionOcr && (
     options.useDocumentAI ?? (getConfig('VITE_USE_DOCUMENT_AI') !== 'false')
   );
   if (useDocAI) {
@@ -165,6 +175,10 @@ export const vivliostyleBuild = async (
   pageMM: [number, number],
   title: string = '名刺',
   bgImageB64?: string,
+  rawHtml?: string,
+  rawCss?: string,
+  saveDirName?: string,
+  images?: { id: string; b64: string }[],
 ): Promise<VivliostyleBuildResponse> => {
   const res = await fetch(`${getApiUrl()}/vivliostyle-build`, {
     method: 'POST',
@@ -182,11 +196,35 @@ export const vivliostyleBuild = async (
       page_mm: pageMM,
       title,
       bg_image_b64: bgImageB64,
+      raw_html: rawHtml,
+      raw_css: rawCss,
+      save_dir_name: saveDirName,
+      images: images || [],
     }),
   });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throw new Error(e.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
+export interface ExtractInstructionRequest {
+  content_text: string;
+  analyze_data?: any;
+}
+
+export const extractInstruction = async (req: ExtractInstructionRequest): Promise<any> => {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  
+  const res = await fetch(`${getApiUrl()}/agent/extract-instruction`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail || `Extract Instruction API Error: HTTP ${res.status}`);
   }
   return res.json();
 };
@@ -255,10 +293,6 @@ export interface AnalyzeMarkdownResponse {
 
 export const analyzeMarkdown = async (pdfB64: string): Promise<AnalyzeMarkdownResponse> => {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const geminiKey = getConfig('VITE_GOOGLE_AI_KEY');
-  if (geminiKey) {
-    headers['X-Gemini-API-Key'] = geminiKey;
-  }
   const res = await fetch(`${getApiUrl()}/analyze-markdown`, {
     method: 'POST',
     headers,
@@ -309,6 +343,58 @@ export const markdownToPdf = async (
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throw new Error(e.detail || `PDF生成エラー: HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
+// ── DTP Agent & Imagen API ──────────────────────────────────────────────────
+
+export interface DtpAgentRequest {
+  instruction_manual: any;
+  content_text: string;
+}
+
+export interface DtpAgentResponse {
+  html: string;
+  css: string;
+}
+
+export const dtpAgentLayout = async (req: DtpAgentRequest): Promise<DtpAgentResponse> => {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  
+  const res = await fetch(`${getApiUrl()}/agent/dtp-layout`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail || `DTP Agent API Error: HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
+export interface GenerateImageRequest {
+  prompt: string;
+  aspect_ratio?: string;
+  model?: string;
+}
+
+export interface GenerateImageResponse {
+  images: { data_b64: string; saved_path?: string }[];
+}
+
+export const generateImage = async (req: GenerateImageRequest): Promise<GenerateImageResponse> => {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  
+  const res = await fetch(`${getApiUrl()}/generate-image`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail || `Image Generation API Error: HTTP ${res.status}`);
   }
   return res.json();
 };

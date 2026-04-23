@@ -58,16 +58,26 @@ export const buildAllFontFaceCss = (origin?: string): string => {
 
 const normalizeMorisawaName = (src: string): string | null => {
   if (!src) return null;
-  // 小文字化+ノイズ除去(空白・ハイフン・アンダースコア)で一致検索
-  const canon = src.replace(/[\s_\-]/g, '').toLowerCase();
+  // 入力の前処理:
+  //  - PDF サブセット接頭辞 'ABCDEF+' を除去
+  //  - 小文字化+ノイズ除去(空白・ハイフン・アンダースコア・プラス)で一致検索
+  const stripped = src.replace(/^[A-Z]{6}\+/, '');
+  const canonize = (s: string) => s.replace(/[\s_\-+]/g, '').toLowerCase();
+  const canon = canonize(stripped);
+  if (!canon) return null;
+
   const registry: Record<string, string> = {};
   REGISTERED_FONT_FAMILIES.forEach(name => {
-    registry[name.replace(/[\s_\-]/g, '').toLowerCase()] = name;
+    registry[canonize(name)] = name;
   });
 
+  // 1) 完全一致
   if (registry[canon]) return registry[canon];
-  // 部分一致: "RyuminPro-Light" が含まれる等
-  for (const key of Object.keys(registry)) {
+
+  // 2) 部分一致: 入力が登録名を含む / 登録名が入力を含む
+  //    登録名が長い順に評価して最長マッチを優先
+  const keys = Object.keys(registry).sort((a, b) => b.length - a.length);
+  for (const key of keys) {
     if (canon.includes(key) || key.includes(canon)) return registry[key];
   }
   return null;

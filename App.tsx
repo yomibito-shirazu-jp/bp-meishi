@@ -11,9 +11,14 @@ import { extractPagesFromPdf, detectPageLayout, detectAllPages } from './service
 import { chunkManuscript, validateManuscript, submitFeedback } from './services/validate';
 import { getFontRenderStyle, printCardAsPdf, REGISTERED_FONT_FAMILIES } from './utils';
 import { exportCardAsPdfBytes, downloadPdfBytes } from './services/pdfExport';
+import JSZip from 'jszip';
 import ProgressOverlay from './components/ProgressOverlay';
 import DetectionReview from './components/DetectionReview';
+import AutoFitText from './components/AutoFitText';
 import VerifyScreen from './components/VerifyScreen';
+import { AIDtpAgentWorkspace } from './components/AIDtpAgentWorkspace';
+import { MeishiExtractPage } from './components/MeishiExtractPage';
+import { MeishiBuildPage } from './components/MeishiBuildPage';
 import { SpanState, createSpanState, applySpanEdit } from './services/spanStore';
 import {
   Upload, ArrowLeft, Plus, Trash2, Save, FileText, Eye, EyeOff,
@@ -175,6 +180,11 @@ const App: React.FC = () => {
   const imgFileRef = useRef<HTMLInputElement>(null);
   const [replacingImageId, setReplacingImageId] = useState<string | null>(null);
 
+  // ── Human-in-the-loop: Rejected (excluded) items ──
+  // ユーザが抽出結果から除外したスパン/画像のID。出力・オーバーレイから除外される。
+  const [hiddenSpanIds, setHiddenSpanIds] = useState<Set<string>>(new Set());
+  const [hiddenImageIds, setHiddenImageIds] = useState<Set<string>>(new Set());
+
   // ── Document AI Layout ──
   const [layoutBlocks, setLayoutBlocks] = useState<LayoutBlock[]>([]);
   const [barcodes, setBarcodes] = useState<BarcodeInfo[]>([]);
@@ -302,8 +312,14 @@ const App: React.FC = () => {
     (s.w_pct * s.h_pct) > 2500 && s.size_pt > 30;
 
   const visibleSpans = useMemo(
-    () => spans.filter(s => !isDecorationSpan(s)),
-    [spans],
+    () => spans.filter(s => !isDecorationSpan(s) && !hiddenSpanIds.has(s.id)),
+    [spans, hiddenSpanIds],
+  );
+
+  // HITL: 除外されていない画像のみ出力対象
+  const visiblePageImages = useMemo(
+    () => pageImages.filter(img => !hiddenImageIds.has(img.id)),
+    [pageImages, hiddenImageIds],
   );
 
   // 検出要素の総数と未確認数（loss-prevention 用の安全ゲート）
@@ -354,7 +370,12 @@ const App: React.FC = () => {
 
   const updateSpan = (id: string, updates: Partial<Span>) => {
     setSpans(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
-    if ('text' in updates || 'origin' in updates || 'font_class' in updates || 'size_pt' in updates) {
+    // 見た目に影響するプロパティが変わったら再ビルド済PNGを破棄し edit タブへ戻す
+    // (rebuilt タブのまま古い画像を見てると font_original を切替えても変化しないため必須)
+    const visualKeys = ['text', 'origin', 'font_class', 'font_original', 'size_pt',
+                        'x_pct', 'y_pct', 'w_pct', 'h_pct', 'writing_direction',
+                        'color_hex'] as const;
+    if (visualKeys.some(k => k in updates)) {
       setRebuiltPng(null);
       setPreviewTab('edit');
     }
@@ -365,15 +386,47 @@ const App: React.FC = () => {
   const zoomOut = () => setZoom(z => Math.max(z - 0.25, 0.25));
   const zoomReset = () => setZoom(1);
 
-  // ── Drag-to-move ──
+  // ── Inline text editing ──
+  const [editingSpanId, setEditingSpanId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState('');
+
+  const handleSpanDoubleClick = useCallback((e: React.MouseEvent, spanId: string) => {
+    e.stopPropagation();
+    const span = spans.find(s => s.id === spanId);
+    if (!span) return;
+    setEditingSpanId(spanId);
+    setEditingText(span.text);
+    setSelectedId(spanId);
+  }, [spans]);
+
+  const handleTextEditBlur = useCallback(() => {
+    if (editingSpanId && editingText) {
+      updateSpan(editingSpanId, { text: editingText });
+    }
+    setEditingSpanId(null);
+    setEditingText('');
+  }, [editingSpanId, editingText]);
+
+  const handleTextEditKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleTextEditBlur();
+    } else if (e.key === 'Escape') {
+      setEditingSpanId(null);
+      setEditingText('');
+    }
+  }, [handleTextEditBlur]);
+
+  // ── Drag-to-move (disabled for text, only for images) ──
   const handleOverlayMouseDown = useCallback((e: React.MouseEvent, spanId: string) => {
     e.stopPropagation();
     e.preventDefault();
     const span = spans.find(s => s.id === spanId);
     if (!span) return;
     setSelectedId(spanId);
-    setDraggingId(spanId);
-    setDragStart({ x: e.clientX, y: e.clientY, origX: span.x_pct, origY: span.y_pct });
+    // Disable drag for text spans - only select
+    // setDraggingId(spanId);
+    // setDragStart({ x: e.clientX, y: e.clientY, origX: span.x_pct, origY: span.y_pct });
   }, [spans]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
@@ -458,6 +511,11 @@ const App: React.FC = () => {
     setLayoutBlocks(page.layout_blocks || []);
     setBarcodes(page.barcodes || []);
     setDetectedLanguages(page.detected_languages || []);
+    // Clear vision results when switching pages to avoid showing results from previous page
+    setVisionResults({});
+    // Reset HITL exclusions on page change
+    setHiddenSpanIds(new Set());
+    setHiddenImageIds(new Set());
 
     if (!skipAI && page.original_png_b64) {
       flash('AI補正中 (Gemini Vision)...', 'info');
@@ -554,6 +612,10 @@ const App: React.FC = () => {
       raw_id_map: spanMapping,
       page_index: currentPageIndex,
       clip_rect: currentClipRect,
+      page_images: pageImages,
+      layout_blocks: layoutBlocks,
+      barcodes: barcodes,
+      detected_languages: detectedLanguages,
       created_at: editingProjectId
         ? projects.find(p => p.id === editingProjectId)?.created_at || new Date().toISOString()
         : new Date().toISOString(),
@@ -646,6 +708,92 @@ const App: React.FC = () => {
     }
   };
 
+  // ── 組版指示書エクスポート ──
+  // job_instruction + spans + images + 元PDF を ZIP に固めてダウンロード。
+  // 他ツール (InDesign スクリプト / Vivliostyle / AI DTPエージェント等) から
+  // import して再利用可能な形にする。
+  // フォントが CSS @font-face で解決済みのため、指示書は参照情報として残す。
+  const handleInstructionExport = async () => {
+    try {
+      if (!spans.length && !jobInstruction) {
+        flash('エクスポートできる指示書がまだありません', 'error');
+        return;
+      }
+      const zip = new JSZip();
+      const titleBase = (spans.find(s => s.font_class === 'mincho')?.text
+                        || spans[0]?.text || 'document').slice(0, 24).trim() || 'document';
+      const safeTitle = titleBase.replace(/[\\/:*?"<>|]/g, '_');
+      const pageIndex = currentPageIndex ?? 0;
+      const manifest = {
+        exported_at: new Date().toISOString(),
+        app: 'bp-meishi',
+        schema_version: 2,
+        project_id: editingProjectId || null,
+        page_index: pageIndex,
+        total_pages: allPages.length,
+        page_mm: pageMM,
+        title: titleBase,
+      };
+      zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+
+      // 組版指示書本体 (なければ空オブジェクト)
+      zip.file('instruction.json', JSON.stringify(jobInstruction || {
+        note: 'job_instruction は生成されていません。spans.json からフィールド情報を参照してください。'
+      }, null, 2));
+
+      // spans (フォント候補・位置・書体確定情報すべて含む)
+      zip.file('spans.json', JSON.stringify(spans, null, 2));
+      zip.file('original_spans.json', JSON.stringify(originalSpans, null, 2));
+
+      // fields 分類 (UI で付けたカテゴリ)
+      if (Object.keys(fieldCategories).length) {
+        zip.file('field_categories.json', JSON.stringify(fieldCategories, null, 2));
+      }
+
+      // 画像群
+      if (pageImages.length) {
+        const imgDir = zip.folder('images');
+        if (imgDir) {
+          pageImages.forEach((img, i) => {
+            const ext = img.mime_type?.includes('jpeg') ? 'jpg' : 'png';
+            imgDir.file(`${String(i).padStart(3, '0')}_${img.id}.${ext}`, img.data_b64, { base64: true });
+          });
+          imgDir.file('index.json', JSON.stringify(pageImages.map(img => ({
+            id: img.id,
+            x_pct: img.x_pct, y_pct: img.y_pct, w_pct: img.w_pct, h_pct: img.h_pct,
+            width: img.width, height: img.height, mime_type: img.mime_type,
+            xref: img.xref,
+          })), null, 2));
+        }
+      }
+
+      // 元PDF (あれば)
+      if (pdfB64) {
+        zip.file('original.pdf', pdfB64, { base64: true });
+      }
+      // 元PNG (あれば)
+      if (originalPng) {
+        const b64 = originalPng.startsWith('data:')
+          ? originalPng.split(',')[1]
+          : originalPng;
+        zip.file('original_page.png', b64, { base64: true });
+      }
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${safeTitle}_組版指示書_p${pageIndex + 1}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      flash('組版指示書 ZIP をダウンロードしました', 'ok');
+    } catch (e: any) {
+      console.error('[handleInstructionExport]', e);
+      flash(`エクスポートエラー: ${e?.message || e}`, 'error');
+    }
+  };
+
   // ── 再現PDF出力（クライアント側で完結） ──
   // 元PDFや PyMuPDF に依存せず、フロントエンドで選んだフォント・位置・色で
   // 新規PDFを生成する。出力は埋め込みフォント・ベクターテキストの正しいPDF。
@@ -726,6 +874,10 @@ const App: React.FC = () => {
     setCurrentPageIdx(0);
     setCurrentPageIndex(p.page_index ?? 0);
     setCurrentClipRect(p.clip_rect);
+    setPageImages(p.page_images || []);
+    setLayoutBlocks(p.layout_blocks || []);
+    setBarcodes(p.barcodes || []);
+    setDetectedLanguages(p.detected_languages || []);
     setView(AppState.EDIT);
   };
 
@@ -756,6 +908,12 @@ const App: React.FC = () => {
     setCurrentPageIdx(0);
     setCurrentPageIndex(0);
     setCurrentClipRect(undefined);
+    setPageImages([]);
+    setLayoutBlocks([]);
+    setBarcodes([]);
+    setDetectedLanguages([]);
+    setHiddenSpanIds(new Set());
+    setHiddenImageIds(new Set());
     loadProjects();
   };
 
@@ -940,8 +1098,10 @@ const App: React.FC = () => {
         title: 'クラウド組版',
         items: [
           { icon: CreditCard, label: '名刺', badge: 0, state: AppState.KUMIHAN_MEISHI },
-          { icon: Newspaper, label: '新聞', badge: 0, state: AppState.KUMIHAN_NEWSPAPER },
-          { icon: BookMarked, label: '商業出版', badge: 0, state: AppState.KUMIHAN_COMMERCIAL },
+          { icon: ScanText, label: '  └ コンテンツ抽出', badge: 0, state: AppState.MEISHI_EXTRACT },
+          { icon: Wand2, label: '  └ PDF生成・比較', badge: 0, state: AppState.MEISHI_BUILD },
+          { icon: Newspaper, label: '経営計画', badge: 0, state: AppState.KUMIHAN_NEWSPAPER },
+          { icon: BookMarked, label: '定期出版', badge: 0, state: AppState.KUMIHAN_COMMERCIAL },
         ],
       },
       {
@@ -961,6 +1121,7 @@ const App: React.FC = () => {
         title: 'AIインデザイン',
         items: [
           { icon: Monitor, label: 'InDesign連携', badge: 0, state: AppState.AI_INDESIGN },
+          { icon: Wand2, label: 'DTP エージェント', badge: 0, state: AppState.TOOL_AI_DTP_AGENT },
         ],
       },
       {
@@ -1157,9 +1318,10 @@ const App: React.FC = () => {
           </div>
         )}
         {view === AppState.KUMIHAN_MEISHI && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜名刺</h2>}
-        {view === AppState.KUMIHAN_NEWSPAPER && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜新聞</h2>}
-        {view === AppState.KUMIHAN_COMMERCIAL && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜商業出版</h2>}
+        {view === AppState.KUMIHAN_NEWSPAPER && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜経営計画</h2>}
+        {view === AppState.KUMIHAN_COMMERCIAL && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜定期出版</h2>}
         {view === AppState.AI_INDESIGN && <h2 className="text-[15px] font-bold text-gray-900">AIインデザイン</h2>}
+        {view === AppState.TOOL_AI_DTP_AGENT && <h2 className="text-[15px] font-bold text-gray-900">AI DTP エージェント</h2>}
         {view === AppState.MARKDOWN_EDIT && (
           <div className="flex items-center gap-2">
             <FileEdit size={15} style={{ color: C.accent }} />
@@ -1228,6 +1390,15 @@ const App: React.FC = () => {
               style={{ borderColor: C.border, color: C.textSec }}
             >
               <Save size={14} /> 保存
+            </button>
+            <button
+              onClick={handleInstructionExport}
+              disabled={spans.length === 0 && !jobInstruction}
+              className="flex items-center gap-1.5 text-[13px] font-medium px-3 py-2 rounded-xl border transition-all hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ borderColor: C.border, color: C.textSec }}
+              title="組版指示書 + spans + 画像 + 元PDF を ZIP でエクスポート (InDesign/Vivliostyle等への受け渡し用)"
+            >
+              <FileText size={14} /> 指示書エクスポート
             </button>
             <button
               onClick={() => handleClientPdfExport(false)}
@@ -1614,13 +1785,23 @@ const App: React.FC = () => {
       <div className="flex-1 flex overflow-hidden">
       {/* Left: Field list */}
       <div className="w-80 flex flex-col shrink-0 border-r" style={{ background: '#16162a', borderColor: '#2a2a4a' }}>
-        <div className="px-3 py-2.5 border-b flex items-center justify-between" style={{ borderColor: '#2a2a4a' }}>
+        <div className="px-3 py-2.5 border-b flex items-center justify-between gap-2" style={{ borderColor: '#2a2a4a' }}>
           <span className="text-xs font-medium" style={{ color: '#8888aa' }}>
-            フィールド ({visibleSpans.length}{spans.length !== visibleSpans.length ? ` / 装飾除外 ${spans.length - visibleSpans.length}` : ''})
+            フィールド ({visibleSpans.length}{spans.length !== visibleSpans.length ? ` / 除外 ${spans.length - visibleSpans.length}` : ''})
           </span>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ background: '#12122a', color: '#6b6b8a' }}>
-            {pageMM[0]}x{pageMM[1]}mm{pageMM[0] < pageMM[1] ? ' 縦' : ''}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {hiddenSpanIds.size > 0 && (
+              <button
+                onClick={() => { setHiddenSpanIds(new Set()); flash('除外を全て復元', 'ok'); }}
+                className="text-[9px] px-1.5 py-0.5 rounded"
+                style={{ background: 'rgba(16,185,129,0.12)', color: '#10b981' }}
+                title="除外したスパンを全て復元"
+              >復元 ({hiddenSpanIds.size})</button>
+            )}
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ background: '#12122a', color: '#6b6b8a' }}>
+              {pageMM[0]}x{pageMM[1]}mm{pageMM[0] < pageMM[1] ? ' 縦' : ''}
+            </span>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto">
@@ -1657,10 +1838,24 @@ const App: React.FC = () => {
                     </span>
                   )}
                   {changed && (
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full ml-auto" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
                       変更済
                     </span>
                   )}
+                  {/* HITL: 除外ボタン */}
+                  <button
+                    onClick={e => {
+                      e.stopPropagation();
+                      setHiddenSpanIds(prev => { const n = new Set(prev); n.add(s.id); return n; });
+                      if (selectedId === s.id) setSelectedId(null);
+                      flash('スパンを除外しました (復元: 復元ボタン)', 'info');
+                    }}
+                    title="このスパンを出力から除外"
+                    className="text-[10px] font-medium px-1.5 py-0.5 rounded-full ml-auto transition-colors"
+                    style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}
+                  >
+                    ×
+                  </button>
                 </div>
                 <input
                   type="text"
@@ -1693,7 +1888,7 @@ const App: React.FC = () => {
               <label className="text-[10px] block mb-1" style={{ color: '#6b6b8a' }}>フォント</label>
               <select
                 value={sel.font_class}
-                onChange={e => updateSpan(sel.id, { font_class: e.target.value as Span['font_class'] })}
+                onChange={e => updateSpan(sel.id, { font_class: e.target.value as Span['font_class'], font_original: '', needs_font_review: false })}
                 className="w-full px-2.5 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
                 style={{ background: '#1a1a2e', border: '1px solid #2a2a4a', color: '#e0e0f0' }}
               >
@@ -1748,6 +1943,47 @@ const App: React.FC = () => {
                 title="0.1pt 刻みで微調整"
               />
             </div>
+            {/* フォント候補（各抽出エンジンが推定した上位候補を並べて選ばせる） */}
+            {sel.font_candidates && sel.font_candidates.length > 0 && (
+              <div>
+                <label className="text-[10px] block mb-1" style={{ color: '#6b6b8a' }}>
+                  候補 ({sel.font_candidates.length}件)
+                </label>
+                <div className="flex flex-col gap-1">
+                  {sel.font_candidates.map((c, idx) => {
+                    const active = (sel.font_original || '') === c.name;
+                    const sourceColor =
+                      c.source === 'pymupdf' ? '#10b981' :
+                      c.source === 'docai' ? '#3b82f6' :
+                      c.source === 'gemini' ? '#a855f7' :
+                      '#6b7280';
+                    return (
+                      <button
+                        key={`${c.source}-${c.name}-${idx}`}
+                        onClick={() => updateSpan(sel.id, { font_original: c.name, needs_font_review: false })}
+                        className="text-left px-2 py-1.5 rounded text-[11px] font-mono transition-colors flex items-center justify-between gap-2"
+                        style={{
+                          background: active ? 'rgba(16,185,129,0.12)' : '#1a1a2e',
+                          border: `1px solid ${active ? '#10b981' : '#2a2a4a'}`,
+                          color: active ? '#10b981' : '#e0e0f0',
+                        }}
+                        title={`source=${c.source} / confidence=${c.confidence.toFixed(2)}`}
+                      >
+                        <span className="truncate">{c.name}</span>
+                        <span className="flex items-center gap-1 shrink-0">
+                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: `${sourceColor}22`, color: sourceColor }}>
+                            {c.source}
+                          </span>
+                          <span className="text-[9px]" style={{ color: '#6b6b8a' }}>
+                            {(c.confidence * 100).toFixed(0)}%
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {/* フォントファミリー（A-OTF 148種からの明示指定） */}
             <div>
               <label className="text-[10px] block mb-1 flex items-center gap-1.5" style={{ color: '#6b6b8a' }}>
@@ -1888,15 +2124,26 @@ const App: React.FC = () => {
             )}
           </div>
         </div>
+      </div>
 
-        {/* ── 画像パネル ── */}
-        {pageImages.length > 0 && (
-          <div className="border-t px-3 py-2.5 shrink-0" style={{ borderColor: '#2a2a4a', background: '#0f0f20' }}>
-            <h4 className="text-[11px] font-medium mb-2 flex items-center gap-1.5" style={{ color: '#8888aa' }}>
-              📷 画像 ({pageImages.length})
+      {/* Right: Image panel (HITL) — order:2 で DOM 順に関係なく右端に配置 */}
+      {pageImages.length > 0 && (
+        <div className="w-96 flex flex-col shrink-0 border-l overflow-hidden" style={{ background: '#0f0f20', borderColor: '#2a2a4a', order: 2 }}>
+            <h4 className="text-[11px] font-medium px-3 pt-2.5 pb-2 flex items-center justify-between shrink-0" style={{ color: '#8888aa', borderBottom: '1px solid #2a2a4a' }}>
+              <span className="flex items-center gap-1.5">📷 画像 ({visiblePageImages.length}/{pageImages.length})</span>
+              <div className="flex items-center gap-2">
+                {hiddenImageIds.size > 0 && (
+                  <button
+                    onClick={() => { setHiddenImageIds(new Set()); flash('除外を全て復元', 'ok'); }}
+                    className="text-[9px] px-1.5 py-0.5 rounded"
+                    style={{ background: 'rgba(16,185,129,0.12)', color: '#10b981' }}
+                  >復元 ({hiddenImageIds.size})</button>
+                )}
+                <span className="text-[9px] font-normal" style={{ color: '#6b6b8a' }}>HITL</span>
+              </div>
             </h4>
-            <div className="space-y-2 max-h-[400px] overflow-y-auto">
-              {pageImages.map(img => {
+            <div className="space-y-2 flex-1 overflow-y-auto p-3">
+              {visiblePageImages.map(img => {
                 const replaced = imageReplacements[img.id];
                 const vr = visionResults[img.id];
                 const isAnalyzing = analyzingImageId === img.id;
@@ -1945,6 +2192,18 @@ const App: React.FC = () => {
                           style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}
                         >
                           差替
+                        </button>
+                        {/* HITL: 除外ボタン */}
+                        <button
+                          onClick={() => {
+                            setHiddenImageIds(prev => { const n = new Set(prev); n.add(img.id); return n; });
+                            flash('画像を除外しました', 'info');
+                          }}
+                          title="この画像を出力から除外"
+                          className="text-[10px] font-medium px-2 py-0.5 rounded transition-colors"
+                          style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}
+                        >
+                          ×
                         </button>
                       </div>
                     </div>
@@ -2121,9 +2380,8 @@ const App: React.FC = () => {
                 e.target.value = '';
               }}
             />
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Center: Preview */}
       <div className="flex-1 flex flex-col overflow-hidden">
@@ -2160,7 +2418,10 @@ const App: React.FC = () => {
               >
                 <img src={originalPng} alt="プレビュー" className="w-full h-full object-contain" draggable={false} />
                 {(() => {
-                  const renderedHeightPx = previewImgRef.current?.getBoundingClientRect().height ?? 0;
+                  // offsetHeight は CSS transform (zoom) 適用前の寸法。
+                  // getBoundingClientRect() を使うと zoom で2重スケールされて
+                  // フォントサイズが zoom^2 倍に肥大化する
+                  const renderedHeightPx = previewImgRef.current?.offsetHeight ?? 0;
                   const pageH_pt = (pageMM[1] / 25.4) * 72;
                   const pxPerPt = pageH_pt > 0 ? renderedHeightPx / pageH_pt : 0;
                   return showOverlay && visibleSpans.map((s, i) => {
@@ -2175,37 +2436,43 @@ const App: React.FC = () => {
                     const origS = originalSpanById.get(s.id);
                     const changed = !!origS && s.text !== origS.text;
                     const posChanged = !!origS && (s.x_pct !== origS.x_pct || s.y_pct !== origS.y_pct);
-                    const isModified = changed || posChanged || !origS;
+                    // フォントやサイズの変更もプレビュー上で可視化する対象に含める
+                    // (含めないと字体を切り替えても原寸PNG越しに見えるだけで何も変わらないように見える)
+                    const fontChanged = !!origS && (
+                      s.font_original !== origS.font_original
+                      || s.font_class !== origS.font_class
+                      || s.size_pt !== origS.size_pt
+                    );
+                    const isModified = changed || posChanged || fontChanged || !origS;
                     const { fontFamily, fontWeight } = getFontRenderStyle(s.font_class, s.font_original);
+                    const isEditing = editingSpanId === s.id;
                     return (
                       <div
                         key={s.id}
-                        onMouseDown={e => handleOverlayMouseDown(e, s.id)}
-                        onClick={e => { e.stopPropagation(); if (!draggingId) setSelectedId(isActive ? null : s.id); }}
-                        title={`${s.text}\nドラッグで移動`}
+                        onDoubleClick={e => handleSpanDoubleClick(e, s.id)}
+                        onClick={e => { e.stopPropagation(); if (!isEditing) setSelectedId(isActive ? null : s.id); }}
+                        title={`${s.text}\nダブルクリックで編集`}
                         style={{
                           position: 'absolute',
                           left: `${s.x_pct}%`,
                           top: `${s.y_pct}%`,
                           width: `${s.w_pct}%`,
                           height: `${s.h_pct}%`,
-                          cursor: isDragging ? 'grabbing' : 'grab',
+                          cursor: isEditing ? 'text' : 'pointer',
                           border: isActive
                             ? '2px solid #10b981'
                             : isModified
                               ? '2px dashed #10b981'
                               : '1px solid rgba(255,255,255,0.15)',
-                          background: isDragging
-                            ? 'rgba(16,185,129,0.25)'
+                          background: isEditing
+                            ? 'rgba(16,185,129,0.2)'
                             : isActive
                               ? 'rgba(16,185,129,0.1)'
-                              : isModified
-                                ? 'rgba(255,255,255,0.92)'
-                                : 'transparent',
+                              : 'transparent',
                           borderRadius: '2px',
-                          transition: isDragging ? 'none' : 'all 0.15s',
-                          zIndex: isDragging ? 30 : isActive ? 20 : 10,
-                          userSelect: 'none',
+                          transition: 'all 0.15s',
+                          zIndex: isActive || isEditing ? 20 : 10,
+                          userSelect: isEditing ? 'text' : 'none',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: isVertical ? 'center' : 'flex-start',
@@ -2215,22 +2482,48 @@ const App: React.FC = () => {
                           fontSize: `${fontSizePx}px`,
                           lineHeight,
                           letterSpacing,
-                          color: isModified ? (s.color_hex || '#1e293b') : 'transparent',
+                          color: isModified || isEditing ? (s.color_hex || '#1e293b') : 'transparent',
                           whiteSpace: isVertical ? 'normal' : 'nowrap',
                           padding: isVertical ? '2px 0' : '0 2px',
                         }}
                       >
-                        {isModified && (
-                          <span style={{ writingMode, textOrientation }}>
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={editingText}
+                            onChange={e => setEditingText(e.target.value)}
+                            onBlur={handleTextEditBlur}
+                            onKeyDown={handleTextEditKeyDown}
+                            autoFocus
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              outline: 'none',
+                              fontFamily,
+                              fontWeight,
+                              fontSize: `${fontSizePx}px`,
+                              lineHeight,
+                              letterSpacing,
+                              color: s.color_hex || '#1e293b',
+                              width: '100%',
+                              padding: 0,
+                              margin: 0,
+                            }}
+                          />
+                        ) : isModified && (
+                          <AutoFitText
+                            writingMode={writingMode as 'horizontal-tb' | 'vertical-rl'}
+                            textOrientation={textOrientation as 'mixed' | 'upright'}
+                          >
                             {s.text}
-                          </span>
+                          </AutoFitText>
                         )}
                       </div>
                     );
                   });
                 })()}
                 {/* 画像オーバーレイ(ロゴ・写真・アイコン・印鑑など) */}
-                {showOverlay && pageImages.map(img => {
+                {showOverlay && visiblePageImages.map(img => {
                   const replaced = !!imageReplacements[img.id];
                   return (
                     <div
@@ -4723,12 +5016,12 @@ JSONのみ返してください。` },
                 <div className="bg-white rounded-[14px] p-10">
                   <div className="text-center mb-8">
                     <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '新聞' : '商業出版'}
+                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '経営計画' : '定期出版'}
                     </h2>
                     <p className="text-gray-500">
                       {view === AppState.KUMIHAN_MEISHI && 'PDFを入稿してAI構造解析→自動組版→校了PDFまでワンストップ。'}
-                      {view === AppState.KUMIHAN_NEWSPAPER && '新聞原稿を入稿。段組み・見出し・写真配置をAIが自動レイアウト。'}
-                      {view === AppState.KUMIHAN_COMMERCIAL && '書籍原稿を入稿。章立て・目次・索引をAIが構造解析し自動組版。'}
+                      {view === AppState.KUMIHAN_NEWSPAPER && '経営計画書を入稿。表・グラフ・見出し構成をAIが自動レイアウト。'}
+                      {view === AppState.KUMIHAN_COMMERCIAL && '定期出版物の原稿を入稿。章立て・目次・索引をAIが構造解析し自動組版。'}
                     </p>
                   </div>
                   <div className="flex justify-center gap-4 flex-wrap">
@@ -4776,6 +5069,9 @@ JSONのみ返してください。` },
           </div>
         )}
         {/* AIインデザイン */}
+        {view === AppState.TOOL_AI_DTP_AGENT && <AIDtpAgentWorkspace />}
+        {view === AppState.MEISHI_EXTRACT && <MeishiExtractPage />}
+        {view === AppState.MEISHI_BUILD && <MeishiBuildPage />}
         {view === AppState.AI_INDESIGN && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-4xl mx-auto space-y-6">
@@ -5350,19 +5646,7 @@ JSONのみ返してください。` },
         </div>
       )}
 
-      {/* Global loading overlay */}
-      {loading && (
-        <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-white rounded-2xl p-8 shadow-2xl text-center">
-            <div
-              className="animate-spin w-10 h-10 border-3 border-slate-200 rounded-full mx-auto mb-4"
-              style={{ borderTopColor: C.accent }}
-            />
-            <p className="text-base font-bold text-slate-700">PDF分析中...</p>
-            <p className="text-xs mt-1" style={{ color: C.muted }}>テキスト要素を抽出しています</p>
-          </div>
-        </div>
-      )}
+      {/* 旧: グローバルローダーは ProgressOverlay と重複するため削除 */}
     </div>
   );
 };

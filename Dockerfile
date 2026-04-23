@@ -29,7 +29,8 @@ RUN mkdir -p /usr/share/fonts/google \
 
 WORKDIR /app
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements.txt
 
 # モリサワ等の商用フォントをコンテナにコピー
 COPY fonts/ /app/fonts/
