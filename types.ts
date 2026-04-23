@@ -19,8 +19,17 @@ export interface Span {
   status?: 'inferred' | 'verified' | 'manual';
   confidence?: number; // 0-1、AIが自己申告した信頼度
   // ── フォント・サイズのメタ情報 (HITL判定に使う) ──
-  size_source?: 'docai' | 'pymupdf' | 'gemini' | 'bbox-estimated' | 'manual';
+  size_source?: 'docai' | 'pymupdf' | 'gemini' | 'vision' | 'bbox-estimated' | 'manual';
   needs_font_review?: boolean; // フォント一致失敗時、ユーザーに選択を促すフラグ
+  // ── 複数エンジンが出したフォント候補（UIで並べて選ばせる） ──
+  // Gemini は最大3件 + PyMuPDF は埋込名1件 + DocAI は1件 など、source 付きで保持
+  font_candidates?: FontCandidate[];
+}
+
+export interface FontCandidate {
+  source: 'gemini' | 'docai' | 'pymupdf' | 'yomitoku' | 'manual';
+  name: string;       // CSS @font-face 登録済みの書体名 (enum 制約済)
+  confidence: number; // 0.0〜1.0
 }
 
 export interface ImageInfo {
@@ -153,6 +162,10 @@ export interface CardProject {
   raw_id_map?: Record<string, string[]>;
   page_index?: number;
   clip_rect?: [number, number, number, number];
+  page_images?: ImageInfo[];
+  layout_blocks?: LayoutBlock[];
+  barcodes?: BarcodeInfo[];
+  detected_languages?: DetectedLanguage[];
   created_at: string;
   updated_at: string;
 }
@@ -166,8 +179,17 @@ export enum AppState {
   SETTINGS = 'SETTINGS',
   // クラウド組版
   KUMIHAN_MEISHI = 'KUMIHAN_MEISHI',       // 名刺
-  KUMIHAN_NEWSPAPER = 'KUMIHAN_NEWSPAPER', // 新聞
-  KUMIHAN_COMMERCIAL = 'KUMIHAN_COMMERCIAL', // 商業出版
+  MEISHI_EXTRACT = 'MEISHI_EXTRACT',       // 名刺コンテンツ抽出
+  MEISHI_BUILD = 'MEISHI_BUILD',           // 名刺PDF生成
+  MEISHI_REDPEN = 'MEISHI_REDPEN',         // 名刺 赤ペン指示書
+  KUMIHAN_NEWSPAPER = 'KUMIHAN_NEWSPAPER', // 経営計画 (旧: 新聞)
+  KEIEI_EXTRACT = 'KEIEI_EXTRACT',         // 経営計画 コンテンツ抽出
+  KEIEI_BUILD = 'KEIEI_BUILD',             // 経営計画 PDF生成・比較
+  KEIEI_REDPEN = 'KEIEI_REDPEN',           // 経営計画 赤ペン指示書
+  KUMIHAN_COMMERCIAL = 'KUMIHAN_COMMERCIAL', // 定期出版 (旧: 商業出版)
+  TEIKI_EXTRACT = 'TEIKI_EXTRACT',         // 定期出版 コンテンツ抽出
+  TEIKI_BUILD = 'TEIKI_BUILD',             // 定期出版 PDF生成・比較
+  TEIKI_REDPEN = 'TEIKI_REDPEN',           // 定期出版 赤ペン指示書
   // 文字起こし
   TRANSCRIBE_LIST = 'TRANSCRIBE_LIST',
   TRANSCRIBE_HISTORY = 'TRANSCRIBE_HISTORY',
@@ -183,6 +205,8 @@ export enum AppState {
   TOOL_VALIDATE_MS = 'TOOL_VALIDATE_MS',
   // AIインデザイン
   AI_INDESIGN = 'AI_INDESIGN',
+  // AI DTP エージェント
+  TOOL_AI_DTP_AGENT = 'TOOL_AI_DTP_AGENT',
   // Markdown 修正
   MARKDOWN_EDIT = 'MARKDOWN_EDIT',
 }

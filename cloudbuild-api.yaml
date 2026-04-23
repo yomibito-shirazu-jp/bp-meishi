@@ -15,7 +15,20 @@ steps:
       - 'push'
       - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/meishi-api:$BUILD_ID'
 
-  # Cloud Runにデプロイ（GOOGLE_AI_KEY環境変数付き）
+  # Cloud Runにデプロイ (GOOGLE_AI_KEY は Secret Manager から注入)
+  # 事前に以下を1回だけ実行してシークレットを作成しておくこと:
+  #   echo -n "<NEW_API_KEY>" | gcloud secrets create GOOGLE_AI_KEY --data-file=-
+  #   cat service-account-key.json | gcloud secrets create VISION_CREDENTIALS --data-file=-
+  # ローテーション時:
+  #   echo -n "<NEW_API_KEY>" | gcloud secrets versions add GOOGLE_AI_KEY --data-file=-
+  #   cat service-account-key.json | gcloud secrets versions add VISION_CREDENTIALS --data-file=-
+  # Cloud Build / Cloud Run のサービスアカウントに roles/secretmanager.secretAccessor を付与:
+  #   gcloud secrets add-iam-policy-binding GOOGLE_AI_KEY \
+  #     --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  #     --role="roles/secretmanager.secretAccessor"
+  #   gcloud secrets add-iam-policy-binding VISION_CREDENTIALS \
+  #     --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  #     --role="roles/secretmanager.secretAccessor"
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:
@@ -27,8 +40,10 @@ steps:
       - '--region'
       - 'asia-northeast1'
       - '--allow-unauthenticated'
-      - '--set-env-vars'
-      - 'GOOGLE_AI_KEY=${_GOOGLE_AI_KEY}'
+      - '--set-secrets'
+      - 'GOOGLE_AI_KEY=GOOGLE_AI_KEY:latest'
+      - '--set-secrets'
+      - '/secrets/service-account-key.json=VISION_CREDENTIALS:latest'
       - '--memory'
       - '2Gi'
       - '--timeout'
@@ -36,6 +51,3 @@ steps:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-
-substitutions:
-  _GOOGLE_AI_KEY: 'AIzaSyCO9_oK-VZ6eWPZcO4SHLvhkR5hAv69gbg'

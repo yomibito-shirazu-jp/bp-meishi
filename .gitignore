@@ -40,3 +40,13 @@ __pycache__/
 # Python virtual environment
 backend/venv/
 venv/
+
+# Secrets / credentials
+backend/service-account-key.json
+*service-account*.json
+
+# Local logs & temporary artifacts
+backend/deploy_log.txt
+tmp_proof/
+marker_output/
+md2pdf-ja/

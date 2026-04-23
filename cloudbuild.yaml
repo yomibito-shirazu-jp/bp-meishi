@@ -1,39 +1,36 @@
 steps:
+  # フロントエンドビルド: VITE_GOOGLE_API_KEY は Secret Manager から取得
+  # 事前セットアップ(1回のみ):
+  #   echo -n "<NEW_API_KEY>" | gcloud secrets create VITE_GOOGLE_API_KEY --data-file=-
+  #   gcloud secrets add-iam-policy-binding VITE_GOOGLE_API_KEY \
+  #     --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+  #     --role="roles/secretmanager.secretAccessor"
+  # ⚠ このキーは Vite によってフロントエンド JS バンドルに埋め込まれ公開される。
+  #    必ず GCP コンソールで HTTP リファラ制限 (本番ドメインのみ) を掛けること。
   - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    secretEnv: ['VITE_GOOGLE_API_KEY', 'VITE_GOOGLE_AI_KEY']
     args:
-      - 'build'
-      - '-f'
-      - 'Dockerfile.web'
-      - '--build-arg'
-      - 'VITE_API_URL=${_VITE_API_URL}'
-      - '--build-arg'
-      - 'VITE_SUPABASE_URL=${_VITE_SUPABASE_URL}'
-      - '--build-arg'
-      - 'VITE_SUPABASE_ANON_KEY=${_VITE_SUPABASE_ANON_KEY}'
-      - '--build-arg'
-      - 'VITE_GOOGLE_AI_KEY=${_VITE_GOOGLE_AI_KEY}'
-      - '--build-arg'
-      - 'VITE_GOOGLE_CLIENT_ID=${_VITE_GOOGLE_CLIENT_ID}'
-      - '--build-arg'
-      - 'VITE_GOOGLE_API_KEY=${_VITE_GOOGLE_API_KEY}'
-      - '--build-arg'
-      - 'VITE_GOOGLE_PROJECT_ID=${_VITE_GOOGLE_PROJECT_ID}'
-      - '--build-arg'
-      - 'VITE_GOOGLE_PROJECT_NUMBER=${_VITE_GOOGLE_PROJECT_NUMBER}'
-      - '--build-arg'
-      - 'VITE_DOCUMENT_AI_LOCATION=${_VITE_DOCUMENT_AI_LOCATION}'
-      - '--build-arg'
-      - 'VITE_DOCUMENT_AI_PROCESSOR_ID=${_VITE_DOCUMENT_AI_PROCESSOR_ID}'
-      - '--build-arg'
-      - 'VITE_DOCUMENT_AI_VERSION_ID=${_VITE_DOCUMENT_AI_VERSION_ID}'
-      - '--build-arg'
-      - 'VITE_USE_DOCUMENT_AI=${_VITE_USE_DOCUMENT_AI}'
-      - '--build-arg'
-      - 'CACHEBUST=$BUILD_ID'
-      - '--no-cache'
-      - '-t'
-      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/meishi:$BUILD_ID'
-      - '.'
+      - '-c'
+      - |
+        docker build \
+          -f Dockerfile.web \
+          --build-arg VITE_API_URL="${_VITE_API_URL}" \
+          --build-arg VITE_SUPABASE_URL="${_VITE_SUPABASE_URL}" \
+          --build-arg VITE_SUPABASE_ANON_KEY="${_VITE_SUPABASE_ANON_KEY}" \
+          --build-arg VITE_GOOGLE_CLIENT_ID="${_VITE_GOOGLE_CLIENT_ID}" \
+          --build-arg VITE_GOOGLE_API_KEY="$$VITE_GOOGLE_API_KEY" \
+          --build-arg VITE_GOOGLE_AI_KEY="$$VITE_GOOGLE_AI_KEY" \
+          --build-arg VITE_GOOGLE_PROJECT_ID="${_VITE_GOOGLE_PROJECT_ID}" \
+          --build-arg VITE_GOOGLE_PROJECT_NUMBER="${_VITE_GOOGLE_PROJECT_NUMBER}" \
+          --build-arg VITE_DOCUMENT_AI_LOCATION="${_VITE_DOCUMENT_AI_LOCATION}" \
+          --build-arg VITE_DOCUMENT_AI_PROCESSOR_ID="${_VITE_DOCUMENT_AI_PROCESSOR_ID}" \
+          --build-arg VITE_DOCUMENT_AI_VERSION_ID="${_VITE_DOCUMENT_AI_VERSION_ID}" \
+          --build-arg VITE_USE_DOCUMENT_AI="${_VITE_USE_DOCUMENT_AI}" \
+          --build-arg CACHEBUST=$BUILD_ID \
+          --no-cache \
+          -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/meishi:$BUILD_ID \
+          .
 
   - name: 'gcr.io/cloud-builders/docker'
     args:
@@ -55,13 +52,22 @@ steps:
 options:
   logging: CLOUD_LOGGING_ONLY
 
+availableSecrets:
+  secretManager:
+    # Maps / Drive など Google API キー (HTTP リファラ制限必須)
+    - versionName: projects/$PROJECT_ID/secrets/GOOGLE_API_KEY_2/versions/latest
+      env: 'VITE_GOOGLE_API_KEY'
+    # Gemini API キー (専用シークレット。バックエンドは GOOGLE_AI_KEY を使用)
+    - versionName: projects/$PROJECT_ID/secrets/VITE_GOOGLE_AI_KEY/versions/latest
+      env: 'VITE_GOOGLE_AI_KEY'
+
 substitutions:
   _VITE_API_URL: 'https://meishi-api-270124753853.asia-northeast1.run.app'
   _VITE_SUPABASE_URL: 'https://avakiygdyafqjrhlvbjg.supabase.co'
+  # Supabase anon key は RLS 前提の公開キー (フロント配信想定のため substitution に残してよい)
   _VITE_SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF2YWtpeWdkeWFmcWpyaGx2YmpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODAzOTIsImV4cCI6MjA4OTU1NjM5Mn0.6X_9qlsrQSXx9eSKZQ3k0bqT2CM083L_NDsiSLaolOI'
-  _VITE_GOOGLE_AI_KEY: 'AIzaSyCO9_oK-VZ6eWPZcO4SHLvhkR5hAv69gbg'
   _VITE_GOOGLE_CLIENT_ID: '270124753853-u1hjecajdni1e0t1s5dpr5hqo7eah9oa.apps.googleusercontent.com'
-  _VITE_GOOGLE_API_KEY: 'AIzaSyCjjLXhUo0bl1EALyYAq5PZS8DiQw14X88'
+  # _VITE_GOOGLE_API_KEY は secretEnv 経由で取得するため substitution には書かない
   _VITE_GOOGLE_PROJECT_ID: 'aidriven-mastering-fyqu'
   _VITE_GOOGLE_PROJECT_NUMBER: '270124753853'
   _VITE_DOCUMENT_AI_LOCATION: 'us'
