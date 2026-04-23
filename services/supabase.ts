@@ -69,19 +69,34 @@ const setLocal = (projects: CardProject[]): void => {
 
 // ── CRUD ──
 
+// raw_id_map._meta に畳んである magazine フィールド等を各プロパティに復元
+const hydrateProject = (p: any): CardProject => {
+  if (!p || !p.raw_id_map || !p.raw_id_map._meta) return p as CardProject;
+  const meta = p.raw_id_map._meta;
+  return {
+    ...p,
+    document_type: p.document_type ?? meta.document_type ?? 'business_card',
+    markdown: p.markdown ?? meta.markdown ?? undefined,
+    original_markdown: p.original_markdown ?? meta.original_markdown ?? undefined,
+    category: p.category ?? meta.category ?? undefined,
+    page_index: p.page_index ?? meta.page_index ?? 0,
+    clip_rect: p.clip_rect ?? meta.clip_rect ?? undefined,
+  };
+};
+
 export const listProjects = async (): Promise<CardProject[]> => {
   const supabase = getSupabaseClient();
-  if (!supabase) return getLocal();
+  if (!supabase) return getLocal().map(hydrateProject);
   try {
     const { data, error } = await supabase
       .from('card_projects')
       .select('*')
       .order('created_at', { ascending: false });
     if (error) throw error;
-    return data ?? [];
+    return (data ?? []).map(hydrateProject);
   } catch (err) {
     console.warn('Supabase listProjects failed, falling back to localStorage:', err);
-    return getLocal();
+    return getLocal().map(hydrateProject);
   }
 };
 
@@ -128,12 +143,20 @@ export const saveProject = async (project: CardProject): Promise<CardProject> =>
   if (project.rebuilt_pdf_b64) row.rebuilt_pdf_b64 = project.rebuilt_pdf_b64;
   if (project.rebuilt_png_b64) row.rebuilt_png_b64 = project.rebuilt_png_b64;
 
-  // Store page_index / clip_rect inside raw_id_map as _meta
+  // Store page_index / clip_rect / magazine fields inside raw_id_map._meta
   // (avoids 400 errors when these columns don't exist in DB)
-  if (project.raw_id_map || project.page_index !== undefined || project.clip_rect) {
+  if (project.raw_id_map || project.page_index !== undefined || project.clip_rect
+      || project.document_type || project.markdown || project.category) {
     row.raw_id_map = {
       ...(project.raw_id_map || {}),
-      _meta: { page_index: project.page_index ?? 0, clip_rect: project.clip_rect ?? null },
+      _meta: {
+        page_index: project.page_index ?? 0,
+        clip_rect: project.clip_rect ?? null,
+        document_type: project.document_type ?? 'business_card',
+        markdown: project.markdown ?? null,
+        original_markdown: project.original_markdown ?? null,
+        category: project.category ?? null,
+      },
     };
   }
 

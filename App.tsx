@@ -605,17 +605,53 @@ const App: React.FC = () => {
         const data = await analyzeMarkdown(b64);
         setMdMarkdown(data.markdown);
         setMdOriginalMarkdown(data.markdown);
+        const firstPng = data.pages?.[0]?.preview_b64 || null;
+        const pMM: [number, number] = data.pages?.[0]
+          ? [data.pages[0].width_mm, data.pages[0].height_mm]
+          : [210, 297];
         if (data.pages.length > 0) {
-          setMdPageMM([data.pages[0].width_mm, data.pages[0].height_mm]);
+          setMdPageMM(pMM);
           setMdPreviewPngs(data.pages.map((p: any) => p.preview_b64));
         }
         setMdAccuracy(data.accuracy_score || 0);
         setMdSourcesAvail(data.sources_available || []);
         if (data.docai_md) setMdDocaiMd(data.docai_md);
         setView(AppState.MARKDOWN_EDIT);
+
+        // ── ダッシュボード一覧に保存 (名刺と同じテーブル、document_type='magazine') ──
+        const category = view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KEIEI_EXTRACT || view === AppState.KEIEI_BUILD
+          ? '経営計画'
+          : view === AppState.KUMIHAN_COMMERCIAL || view === AppState.TEIKI_EXTRACT || view === AppState.TEIKI_BUILD
+          ? '定期出版'
+          : '通販カタログ';
+        const name = (data.markdown || '').split('\n').find((l: string) => l.trim())?.replace(/^#+\s*/, '').slice(0, 30)
+                   || `${category} ${new Date().toLocaleDateString('ja-JP')}`;
+        const proj: CardProject = {
+          id: crypto.randomUUID(),
+          name,
+          document_type: 'magazine',
+          category,
+          markdown: data.markdown,
+          original_markdown: data.markdown,
+          spans: [],
+          original_spans: [],
+          pdf_b64: b64,
+          page_mm: pMM,
+          original_png_b64: firstPng,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        try {
+          await saveProject(proj);
+          setEditingProjectId(proj.id);
+          await loadProjects();
+        } catch (saveErr) {
+          console.warn('magazine project save failed:', saveErr);
+        }
+
         const scoreEmoji = (data.accuracy_score || 0) >= 95 ? '🟢'
                          : (data.accuracy_score || 0) >= 80 ? '🟡' : '🔴';
-        flash(`${scoreEmoji} Markdown 変換完了 (精度 ${data.accuracy_score || '?'}%)`, 'ok');
+        flash(`${scoreEmoji} ${category} を一覧に保存 (精度 ${data.accuracy_score || '?'}%)`, 'ok');
       } catch (err: any) {
         flash(`Markdown 変換エラー: ${err.message}`, 'error');
       } finally {
@@ -963,6 +999,17 @@ const App: React.FC = () => {
 
   // ── Open project ──
   const openProject = (p: CardProject) => {
+    setEditingProjectId(p.id);
+    // magazine プロジェクトは Markdown エディタへ
+    if (p.document_type === 'magazine' && p.markdown !== undefined) {
+      setMdPdfB64(p.pdf_b64 || null);
+      setMdMarkdown(p.markdown || '');
+      setMdOriginalMarkdown(p.original_markdown ?? p.markdown ?? '');
+      setMdPageMM(p.page_mm || [210, 297]);
+      setMdPreviewPngs(p.original_png_b64 ? [p.original_png_b64] : []);
+      setView(AppState.MARKDOWN_EDIT);
+      return;
+    }
     setSpans(p.spans || []);
     setOriginalSpans(p.original_spans || p.spans || []);
     setSpanMapping({});
@@ -971,7 +1018,6 @@ const App: React.FC = () => {
     setOriginalPng(p.original_png_b64 ? `data:image/png;base64,${p.original_png_b64}` : null);
     setRebuiltPng(null);
     setSelectedId(null);
-    setEditingProjectId(p.id);
     setAllPages([]);
     setCurrentPageIdx(0);
     setCurrentPageIndex(p.page_index ?? 0);
@@ -1596,12 +1642,22 @@ const App: React.FC = () => {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h4 className="font-bold text-slate-800 text-base truncate">{p.name || '(無名)'}</h4>
-            <span
-              className="text-[11px] font-medium px-2 py-0.5 rounded-full border shrink-0"
-              style={{ color: C.accent, background: C.accentBg, borderColor: C.accentBorder }}
-            >
-              {p.spans?.length || 0}要素
-            </span>
+            {p.document_type === 'magazine' ? (
+              <span
+                className="text-[11px] font-medium px-2 py-0.5 rounded-full border shrink-0"
+                style={{ color: '#1e40af', background: '#dbeafe', borderColor: '#93c5fd' }}
+                title="Markdown編集で開きます"
+              >
+                {p.category || '雑誌'}
+              </span>
+            ) : (
+              <span
+                className="text-[11px] font-medium px-2 py-0.5 rounded-full border shrink-0"
+                style={{ color: C.accent, background: C.accentBg, borderColor: C.accentBorder }}
+              >
+                {p.spans?.length || 0}要素
+              </span>
+            )}
             {isUnprocessed(p) && (
               <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 shrink-0">
                 未処理
@@ -5640,6 +5696,44 @@ JSONのみ返してください。` },
                     >
                       <Upload size={14} /> 別のPDF
                     </button>
+                    {/* 一覧に保存 (magazine project) */}
+                    {editingProjectId && (
+                      <button
+                        onClick={async () => {
+                          const existing = projects.find(p => p.id === editingProjectId);
+                          const category = existing?.category
+                            || (mdOriginalMarkdown === mdMarkdown ? '経営計画' : existing?.category || '経営計画');
+                          const name = mdMarkdown.split('\n').find(l => l.trim())?.replace(/^#+\s*/, '').slice(0, 30)
+                                     || `${category} ${new Date().toLocaleDateString('ja-JP')}`;
+                          const proj: CardProject = {
+                            id: editingProjectId,
+                            name,
+                            document_type: 'magazine',
+                            category,
+                            markdown: mdMarkdown,
+                            original_markdown: mdOriginalMarkdown,
+                            spans: [],
+                            original_spans: [],
+                            pdf_b64: mdPdfB64 || '',
+                            page_mm: mdPageMM,
+                            original_png_b64: mdPreviewPngs[0] || null,
+                            created_at: existing?.created_at || new Date().toISOString(),
+                            updated_at: new Date().toISOString(),
+                          };
+                          try {
+                            await saveProject(proj);
+                            await loadProjects();
+                            flash('一覧に保存しました', 'ok');
+                          } catch (e: any) {
+                            flash(`保存失敗: ${e.message}`, 'error');
+                          }
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border"
+                        style={{ borderColor: C.accentBorder, color: C.accent }}
+                      >
+                        <Save size={14} /> 一覧に保存
+                      </button>
+                    )}
                     <input ref={mdFileRef} type="file" accept=".pdf" className="hidden"
                       onChange={async (e) => {
                         const file = e.target.files?.[0];

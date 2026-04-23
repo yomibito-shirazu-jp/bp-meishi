@@ -152,6 +152,13 @@ export interface RebuildResponse {
 export interface CardProject {
   id: string;
   name: string;
+  /** 'business_card'(名刺 span編集) | 'magazine'(経営計画/定期出版/通販カタログ: Markdown編集) */
+  document_type?: 'business_card' | 'magazine';
+  /** magazine プロジェクト用: PDF → Markdown 変換結果 (md2pdf で再生成可) */
+  markdown?: string;
+  original_markdown?: string;
+  /** magazine プロジェクト用: カテゴリ表示名 (経営計画 / 定期出版 / 通販カタログ) */
+  category?: string;
   spans: Span[];
   original_spans: Span[];
   pdf_b64: string;
