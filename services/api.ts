@@ -9,7 +9,29 @@ export const healthCheck = async (): Promise<boolean> => {
   return data.status === 'ok';
 };
 
+// 利用可能な PDF 検出エンジン (プライマリ)。'auto' はサーバ側デフォルト動作。
+export type ExtractEngine =
+  | 'auto'
+  | 'docai'      // Google Document AI
+  | 'yomitoku'   // YomiToku (日本語OCR, 縦書き対応)
+  | 'vision_ocr' // Google Cloud Vision DOCUMENT_TEXT_DETECTION
+  | 'pymupdf'    // PyMuPDF (テキスト埋め込みPDF高速抽出)
+  | 'gemini'     // Gemini Vision
+  | 'docling';   // docling (IBM, ML文書構造解析)
+
+export const EXTRACT_ENGINE_LABELS: Record<ExtractEngine, string> = {
+  auto: '自動 (推奨)',
+  docai: 'Document AI',
+  yomitoku: 'YomiToku (日本語OCR)',
+  vision_ocr: 'Cloud Vision OCR (手書き)',
+  pymupdf: 'PyMuPDF (テキスト埋込)',
+  gemini: 'Gemini Vision',
+  docling: 'docling (IBM)',
+};
+
 export interface AnalyzeOptions {
+  /** プライマリ検出エンジンを明示指定 (指定時は他の use* フラグより優先) */
+  engine?: ExtractEngine;
   useDocumentAI?: boolean;
   useYomitoku?: boolean;
   yomitokuLite?: boolean;
@@ -21,6 +43,27 @@ export interface AnalyzeOptions {
    */
   useVisionOcr?: boolean;
 }
+
+export interface ExtractEngineStatus {
+  id: ExtractEngine;
+  label: string;
+  available: boolean;
+  install_hint?: string;
+}
+
+export const listExtractEngines = async (): Promise<ExtractEngineStatus[]> => {
+  try {
+    const res = await fetch(`${getApiUrl()}/extract-engines`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (Array.isArray(data) && data.length) return data;
+    throw new Error('empty');
+  } catch {
+    return (Object.keys(EXTRACT_ENGINE_LABELS) as ExtractEngine[]).map(id => ({
+      id, label: EXTRACT_ENGINE_LABELS[id], available: true,
+    }));
+  }
+};
 
 export const analyzePdf = async (
   file: File,
@@ -35,6 +78,19 @@ export const analyzePdf = async (
     : (opts ?? {});
 
   const headers: Record<string, string> = {};
+
+  // engine 明示指定がある場合はそれを優先 (use* フラグへマッピング)
+  if (options.engine && options.engine !== 'auto') {
+    headers['X-Extract-Engine'] = options.engine;
+    if (options.engine === 'yomitoku') options.useYomitoku = true;
+    else if (options.engine === 'vision_ocr') options.useVisionOcr = true;
+    else if (options.engine === 'docai') options.useDocumentAI = true;
+    else if (options.engine === 'docling' || options.engine === 'pymupdf' || options.engine === 'gemini') {
+      options.useDocumentAI = false;
+      options.useYomitoku = false;
+      options.useVisionOcr = false;
+    }
+  }
 
   const useYomitoku = options.useYomitoku
     ?? (getConfig('VITE_USE_YOMITOKU').toLowerCase() === 'true');
@@ -117,6 +173,13 @@ export interface SpanBbox {
   size_pt: number;
 }
 
+export interface RedactRect {
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
+}
+
 export const rebuildPdf = async (
   pdfB64: string,
   edits: Record<string, string>,
@@ -128,6 +191,7 @@ export const rebuildPdf = async (
   originalTexts?: Record<string, string>,
   imageReplacements?: Record<string, { xref: number; data_b64: string; mime_type?: string; rect?: [number, number, number, number] }>,
   spanBboxes?: Record<string, SpanBbox>,
+  redactRects?: RedactRect[],
 ): Promise<RebuildResponse> => {
   const res = await fetch(`${getApiUrl()}/rebuild`, {
     method: 'POST',
@@ -139,6 +203,7 @@ export const rebuildPdf = async (
       overrides: overrides || {},
       image_replacements: imageReplacements || {},
       span_bboxes: spanBboxes || {},
+      redact_rects: redactRects || [],
       raw_id_map: rawIdMap,
       dpi,
       page_index: pageIndex,

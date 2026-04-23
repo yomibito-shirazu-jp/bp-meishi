@@ -1,7 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import JSZip from 'jszip';
-import { Upload, Download, FileText, Image as Img, Database, CheckCircle } from 'lucide-react';
-import { analyzePdf, extractInstruction } from '../services/api';
+import { Upload, Download, FileText, Image as Img, Database, CheckCircle, Cpu } from 'lucide-react';
+import {
+  analyzePdf, extractInstruction, listExtractEngines,
+  type ExtractEngine, type ExtractEngineStatus,
+} from '../services/api';
 import { saveProject } from '../services/supabase';
 import type { PageData } from '../types';
 
@@ -18,7 +21,13 @@ export const MeishiExtractPage: React.FC = () => {
   const [result, setResult] = useState<ExtractResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [engine, setEngine] = useState<ExtractEngine>('auto');
+  const [engines, setEngines] = useState<ExtractEngineStatus[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    listExtractEngines().then(setEngines).catch(() => setEngines([]));
+  }, []);
 
   const handleFile = async (file: File) => {
     if (!file.name.endsWith('.pdf') && file.type !== 'application/pdf') {
@@ -27,7 +36,7 @@ export const MeishiExtractPage: React.FC = () => {
     setLoading(true); setError(null); setSaved(false); setResult(null);
     try {
       setStep('analyzing');
-      const analyzed = await analyzePdf(file, true);
+      const analyzed = await analyzePdf(file, { engine });
       const page = analyzed.pages[0];
       const text = page.spans.map(s => s.text).join('\n');
 
@@ -88,6 +97,34 @@ export const MeishiExtractPage: React.FC = () => {
         <p style={{ color: '#64748b', marginBottom: 32 }}>
           PDFから組版指示書・テキスト・画像を抽出してZIPで保存します
         </p>
+
+        {/* Engine selector */}
+        {step === 'idle' && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+            background: '#1a1a2e', border: '1px solid rgba(99,102,241,.25)',
+            borderRadius: 12, padding: '12px 16px', marginBottom: 16,
+          }}>
+            <Cpu size={18} style={{ color: '#6366f1' }} />
+            <span style={{ color: '#94a3b8', fontSize: 13, fontWeight: 600 }}>検出エンジン</span>
+            <select
+              value={engine}
+              onChange={e => setEngine(e.target.value as ExtractEngine)}
+              style={{
+                flex: 1, padding: '8px 12px', background: '#0f0f14', color: '#e2e8f0',
+                border: '1px solid rgba(255,255,255,.1)', borderRadius: 8, fontSize: 13,
+              }}
+            >
+              {(engines.length ? engines : [
+                { id: 'auto' as ExtractEngine, label: '自動 (推奨)', available: true },
+              ]).map(eng => (
+                <option key={eng.id} value={eng.id} disabled={!eng.available}>
+                  {eng.label}{!eng.available ? ' — 未インストール' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Upload Area */}
         {step === 'idle' && (

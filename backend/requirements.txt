@@ -15,3 +15,8 @@ markdown
 # DN_SuperBook_PDF_Converter と同じエンジン。GPU があれば高速。
 # 重いので導入は任意:  pip install yomitoku
 # yomitoku>=0.10.1
+
+# Optional: docling (https://github.com/docling-project/docling)
+# IBM の ML ベース文書構造解析エンジン。PDF/DOCX/PPTX 等に対応。
+# ML モデルが大きいので導入は任意:  pip install docling
+# docling>=2.0.0
