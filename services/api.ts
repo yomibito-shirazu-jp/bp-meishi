@@ -85,13 +85,10 @@ export const analyzePdf = async (
   const headers: Record<string, string> = {};
 
   // Document profile (magazine/poster 時は雑誌向け挙動にスイッチ)
+  // エンジン既定はバックエンド側で profile を見て自動選択する
+  // (yomitoku 優先 → docling → docai の順でインストール状況に応じてフォールバック)
   if (options.profile) {
     headers['X-Document-Profile'] = options.profile;
-    // magazine の既定エンジンは yomitoku (縦書き/多段組に強い)。
-    // 明示指定(engine)があればそちらが勝つ。
-    if (options.profile === 'magazine' && (!options.engine || options.engine === 'auto')) {
-      options.engine = 'yomitoku';
-    }
   }
 
   // engine 明示指定がある場合はそれを優先 (use* フラグへマッピング)

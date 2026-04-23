@@ -2022,10 +2022,26 @@ async def analyze_pdf(
 
         # モード選択: X-Extract-Engine > 個別フラグ > 自動
         engine = (x_extract_engine or "").strip().lower()
-        # magazine プロファイルで engine 未指定なら YomiToku 既定
-        if is_magazine and not engine:
-            engine = "yomitoku"
-            print("  magazine profile: defaulting to yomitoku engine")
+        # magazine プロファイルで engine 未指定 or auto → 利用可能な中で最適を選択
+        # 優先順位: yomitoku (縦書き最強) > docling (ML文書構造) > docai (フォールバック)
+        if is_magazine and engine in ("", "auto"):
+            if _yomitoku_available():
+                engine = "yomitoku"
+                print("  magazine profile: using yomitoku (available)")
+            elif _docling_available():
+                engine = "docling"
+                print("  magazine profile: yomitoku unavailable, using docling")
+            else:
+                engine = "docai"
+                print("  magazine profile: yomitoku/docling unavailable, using docai")
+        # 明示指定された engine が未インストールならフォールバック (503 避け)
+        elif engine == "yomitoku" and not _yomitoku_available():
+            fb = "docling" if _docling_available() else "docai"
+            print(f"  yomitoku unavailable → falling back to {fb}")
+            engine = fb
+        elif engine == "docling" and not _docling_available():
+            print(f"  docling unavailable → falling back to docai")
+            engine = "docai"
         use_yomitoku = (x_use_yomitoku or "").lower() == "true" or engine == "yomitoku"
         use_vision_ocr = (x_use_vision_ocr or "").lower() == "true" or engine == "vision_ocr"
         use_docling = engine == "docling"
@@ -2071,7 +2087,19 @@ async def analyze_pdf(
                 print(f"YomiToku failed, falling back to other engines: {yt_err}")
                 yomitoku_results = []
                 use_yomitoku = False
-                use_docai = (use_docai_mode != "false")
+                # magazine プロファイルでは docling を優先フォールバック
+                if is_magazine and _docling_available():
+                    use_docling = True
+                    print("  falling back to docling (magazine profile)")
+                    try:
+                        docling_results = _extract_spans_docling(pdf_bytes)
+                        print(f"docling extracted {len(docling_results)} pages")
+                    except Exception as dl_err:
+                        print(f"docling fallback failed: {dl_err}; using DocAI")
+                        use_docling = False
+                        use_docai = (use_docai_mode != "false")
+                else:
+                    use_docai = (use_docai_mode != "false")
 
         docai_results: list[dict[str, Any]] = []
         if use_docai:
