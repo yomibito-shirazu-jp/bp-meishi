@@ -5286,7 +5286,10 @@ JSONのみ返してください。` },
         )}
         {/* AIインデザイン */}
         {view === AppState.TOOL_AI_DTP_AGENT && <AIDtpAgentWorkspace />}
-        {view === AppState.MEISHI_EXTRACT && <MeishiExtractPage />}
+        {view === AppState.MEISHI_EXTRACT && <MeishiExtractPage category="名刺" profile="business_card" />}
+        {view === AppState.KEIEI_EXTRACT && <MeishiExtractPage category="経営計画" profile="magazine" />}
+        {view === AppState.TEIKI_EXTRACT && <MeishiExtractPage category="定期出版" profile="magazine" />}
+        {view === AppState.TSUHAN_EXTRACT && <MeishiExtractPage category="通販カタログ" profile="magazine" />}
         {view === AppState.MEISHI_BUILD && <MeishiBuildPage />}
         {/* 赤ペン指示書 (名刺/経営計画/定期出版/通販カタログ 共通) */}
         {(view === AppState.MEISHI_REDPEN
@@ -5299,24 +5302,7 @@ JSONのみ返してください。` },
             colors={C as unknown as Record<string, string>}
           />
         )}
-        {/* 経営計画 / 定期出版 / 通販カタログ サブタスク (暫定プレースホルダ) */}
-        {(view === AppState.KEIEI_EXTRACT || view === AppState.TEIKI_EXTRACT || view === AppState.TSUHAN_EXTRACT) && (() => {
-          const label = view === AppState.KEIEI_EXTRACT ? '経営計画'
-            : view === AppState.TEIKI_EXTRACT ? '定期出版' : '通販カタログ';
-          return (
-            <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
-              <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
-                style={{ background: C.card, borderColor: C.border }}>
-                <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
-                  {label} 〜 コンテンツ抽出
-                </h2>
-                <p className="text-sm" style={{ color: C.textSec }}>
-                  PDF入稿からAI構造解析までのフローを準備中です。上位の「{label}」画面を先にご利用ください。
-                </p>
-              </div>
-            </div>
-          );
-        })()}
+        {/* PDF生成・比較サブタスク (暫定プレースホルダ — 後日 MeishiBuildPage 拡張で置換) */}
         {(view === AppState.KEIEI_BUILD || view === AppState.TEIKI_BUILD || view === AppState.TSUHAN_BUILD) && (() => {
           const label = view === AppState.KEIEI_BUILD ? '経営計画'
             : view === AppState.TEIKI_BUILD ? '定期出版' : '通販カタログ';

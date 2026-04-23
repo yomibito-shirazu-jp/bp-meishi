@@ -3,7 +3,7 @@ import JSZip from 'jszip';
 import { Upload, Download, FileText, Image as Img, Database, CheckCircle, Cpu } from 'lucide-react';
 import {
   analyzePdf, extractInstruction, listExtractEngines,
-  type ExtractEngine, type ExtractEngineStatus,
+  type ExtractEngine, type ExtractEngineStatus, type DocumentProfile,
 } from '../services/api';
 import { saveProject } from '../services/supabase';
 import type { PageData } from '../types';
@@ -15,7 +15,20 @@ interface ExtractResult {
   text: string;
 }
 
-export const MeishiExtractPage: React.FC = () => {
+export interface ExtractPageProps {
+  /** カテゴリ表示名 (例: '名刺' / '経営計画' / '定期出版' / '通販カタログ') */
+  category?: string;
+  /** ドキュメントプロファイル。magazine は雑誌向け挙動 (画像検出スキップ等) */
+  profile?: DocumentProfile;
+  /** 保存時のデフォルト名 */
+  defaultName?: string;
+}
+
+export const MeishiExtractPage: React.FC<ExtractPageProps> = ({
+  category = '名刺',
+  profile = 'business_card',
+  defaultName,
+}) => {
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState<'idle'|'analyzing'|'extracting'|'saving'|'done'>('idle');
   const [result, setResult] = useState<ExtractResult | null>(null);
@@ -36,7 +49,7 @@ export const MeishiExtractPage: React.FC = () => {
     setLoading(true); setError(null); setSaved(false); setResult(null);
     try {
       setStep('analyzing');
-      const analyzed = await analyzePdf(file, { engine });
+      const analyzed = await analyzePdf(file, { engine, profile });
       const page = analyzed.pages[0];
       const text = page.spans.map(s => s.text).join('\n');
 
@@ -49,7 +62,7 @@ export const MeishiExtractPage: React.FC = () => {
       setStep('saving');
       const proj = {
         id: crypto.randomUUID(),
-        name: text.split('\n')[0]?.slice(0, 30) || '名刺',
+        name: text.split('\n')[0]?.slice(0, 30) || defaultName || category,
         spans: page.spans,
         original_spans: page.spans,
         pdf_b64: analyzed.pdf_b64,
@@ -81,7 +94,8 @@ export const MeishiExtractPage: React.FC = () => {
     });
     const blob = await zip.generateAsync({ type: 'blob' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = 'meishi_assets.zip'; a.click();
+    const safeCategory = category.replace(/[^\w一-龥ぁ-んァ-ヶー]/g, '_');
+    a.download = `${safeCategory}_assets.zip`; a.click();
   };
 
   const stepLabel: Record<string, string> = {
@@ -92,7 +106,7 @@ export const MeishiExtractPage: React.FC = () => {
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#0f0f14 0%,#1a1a2e 100%)', padding: 32 }}>
       <div style={{ maxWidth: 900, margin: '0 auto' }}>
         <h1 style={{ color: '#e2e8f0', fontSize: 28, fontWeight: 800, marginBottom: 8 }}>
-          📋 名刺コンテンツ抽出
+          📋 {category}コンテンツ抽出
         </h1>
         <p style={{ color: '#64748b', marginBottom: 32 }}>
           PDFから組版指示書・テキスト・画像を抽出してZIPで保存します
@@ -140,7 +154,7 @@ export const MeishiExtractPage: React.FC = () => {
           >
             <Upload size={48} style={{ color: '#6366f1', margin: '0 auto 16px' }} />
             <p style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 700 }}>PDFをドロップまたはクリック</p>
-            <p style={{ color: '#64748b', marginTop: 8 }}>名刺PDFから組版指示書を自動生成します</p>
+            <p style={{ color: '#64748b', marginTop: 8 }}>{category}PDFから組版指示書を自動生成します</p>
             <input ref={fileRef} type="file" accept=".pdf" style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
           </div>
