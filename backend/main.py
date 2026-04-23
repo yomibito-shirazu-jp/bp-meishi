@@ -171,6 +171,31 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/extract-engines")
+async def list_extract_engines():
+    """利用可能な PDF 検出エンジンの一覧とインストール状態を返す。"""
+    def _has(mod: str) -> bool:
+        try:
+            __import__(mod); return True
+        except Exception:
+            return False
+    engines = [
+        {"id": "auto",       "label": "自動 (推奨)",              "available": True},
+        {"id": "docai",      "label": "Document AI",              "available": True,
+         "install_hint": "google-cloud-documentai"},
+        {"id": "yomitoku",   "label": "YomiToku (日本語OCR)",     "available": _yomitoku_available(),
+         "install_hint": "pip install yomitoku"},
+        {"id": "vision_ocr", "label": "Cloud Vision OCR (手書き)", "available": _has("google.cloud.vision")},
+        {"id": "pymupdf",    "label": "PyMuPDF (テキスト埋込)",   "available": _has("fitz")},
+        {"id": "gemini",     "label": "Gemini Vision",            "available": bool(GEMINI_API_KEY)},
+        {"id": "docling",    "label": "docling (IBM)",            "available": _docling_available(),
+         "install_hint": "pip install docling"},
+        {"id": "huridocs",   "label": "huridocs (VGT/LayoutLMv3)", "available": _huridocs_available(),
+         "install_hint": "docker run -p 5060:5060 huridocs/pdf-document-layout-analysis && export HURIDOCS_URL=http://localhost:5060"},
+    ]
+    return engines
+
+
 @app.get("/yomitoku-status")
 async def yomitoku_status():
     """YomiToku が利用可能かを返す(フロントエンドが UI 表示切替に使用)"""
@@ -190,39 +215,46 @@ async def yomitoku_status():
 # ── Gemini Vision による非テキスト画像領域の検出 ────────────────────────────
 
 IMAGE_REGION_DETECTION_PROMPT = """
-この名刺画像を分析して、すべての「非テキスト」視覚要素（画像領域）を特定してください。
+この画像に含まれる「実画像(ラスタ/ベクタ図版)」領域のバウンディングボックスを抽出してください。
 
-## 検出対象：
-- 会社ロゴ（例: 「武蔵野」のロゴマーク、企業のシンボル）
-- 人物写真・ポートレート
-- 認証マーク・受賞マーク（例: 健康経営優良法人、ISO認証、ホワイト500 等の丸いアイコン）
-- QRコード・バーコード
-- アイコン、イラスト、装飾画像
+## 検出対象
+- 会社ロゴ / シンボル / アイコン
+- 人物写真 / ポートレート
+- 認証マーク・受賞マーク (ISO, ホワイト500, プライバシーマーク 等)
+- QRコード / バーコード / 二次元コード
+- イラスト / 図版
 
-## 検出しないもの：
-- 単なるテキスト（文字だけの領域）
-- 罫線、枠線
-- 背景色のみの領域
+## 検出しないもの (重要)
+- 文字・テキスト(本文、見出し、住所、電話番号などすべて)
+- **半透明の装飾透かし / 巨大な背景装飾文字 (例: 画像背景に薄く入った "Support" のような装飾)**
+- 罫線・区切り線
+- 単色背景 / グラデーション
+- 影 / 反射
+- 既に他の実画像に完全に内包される領域(重複しない)
 
-## 座標系：
-画像の左上が (0, 0)、右下が (100, 100) の百分率で指定します。
-各領域には画像要素全体をぴったり囲むタイトなバウンディングボックスを返してください。
+## 出力形式 (Gemini 公式 bounding box 形式)
+各検出対象を、画像サイズを **1000 x 1000 に正規化した座標系** で
+`[ymin, xmin, ymax, xmax]` (4 整数、左上原点) として返してください。
 
-## 出力形式（JSON配列のみ、他のテキスト不要）：
+JSON のみ、下記スキーマ:
+```
 [
-  {"x_pct": 5.0, "y_pct": 8.0, "w_pct": 15.0, "h_pct": 12.0, "label": "会社ロゴ"},
-  {"x_pct": 70.0, "y_pct": 5.0, "w_pct": 25.0, "h_pct": 90.0, "label": "人物写真"},
-  {"x_pct": 40.0, "y_pct": 75.0, "w_pct": 8.0, "h_pct": 15.0, "label": "認証マーク"}
+  {"box_2d": [y0, x0, y1, x1], "label": "logo"},
+  {"box_2d": [y0, x0, y1, x1], "label": "portrait"}
 ]
+```
 
-画像要素が無い場合は空配列 [] を返してください。
+ラベルは英小文字で: `logo` / `portrait` / `cert_mark` / `qr_code` / `icon` / `illustration` / `image`
+バウンディングボックスは**対象にぴったり沿うタイトな矩形**にしてください(余白を含めない)。
+画像要素が無い場合は `[]` を返してください。他のテキストは一切不要。
 """
 
 
 def _detect_image_regions_gemini(png_bytes: bytes, api_key: Optional[str] = None) -> list[dict]:
-    """Gemini Vision で画像（非テキスト）領域のバウンディングボックスを検出。
+    """Gemini Vision で画像(非テキスト)領域のバウンディングボックスを検出。
 
-    戻り値: [{x_pct, y_pct, w_pct, h_pct, label}, ...] (百分率)
+    Gemini 公式の `[ymin, xmin, ymax, xmax]` / 1000 正規化形式で受けて
+    `{x_pct, y_pct, w_pct, h_pct, label}` に変換して返す。
     """
     active_key = api_key or GEMINI_API_KEY
     if not active_key:
@@ -246,9 +278,47 @@ def _detect_image_regions_gemini(png_bytes: bytes, api_key: Optional[str] = None
         if not raw:
             return []
         data = json.loads(raw)
-        if isinstance(data, list):
-            return data
-        return []
+        if not isinstance(data, list):
+            return []
+        out: list[dict] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            box = item.get("box_2d") or item.get("bbox") or item.get("box")
+            label = str(item.get("label", "image"))
+            # 新形式: box_2d = [ymin, xmin, ymax, xmax] / 0-1000
+            if isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box):
+                y0, x0, y1, x1 = [float(v) for v in box]
+                # 一部のモデルは 0-1 や 0-100 を返すケースもあるので補正
+                max_v = max(y0, x0, y1, x1)
+                if max_v <= 1.5:
+                    scale = 100.0
+                elif max_v <= 100.5:
+                    scale = 1.0
+                else:
+                    scale = 100.0 / 1000.0  # 0-1000 → 0-100
+                y0, x0, y1, x1 = y0 * scale, x0 * scale, y1 * scale, x1 * scale
+                x_pct = min(x0, x1)
+                y_pct = min(y0, y1)
+                w_pct = abs(x1 - x0)
+                h_pct = abs(y1 - y0)
+                if w_pct <= 1 or h_pct <= 1:
+                    continue
+                out.append({
+                    "x_pct": x_pct, "y_pct": y_pct, "w_pct": w_pct, "h_pct": h_pct,
+                    "label": label,
+                })
+                continue
+            # 旧形式フォールバック (x_pct/y_pct/w_pct/h_pct)
+            if all(k in item for k in ("x_pct", "y_pct", "w_pct", "h_pct")):
+                out.append({
+                    "x_pct": float(item["x_pct"]),
+                    "y_pct": float(item["y_pct"]),
+                    "w_pct": float(item["w_pct"]),
+                    "h_pct": float(item["h_pct"]),
+                    "label": label,
+                })
+        return out
     except Exception as e:
         print(f"_detect_image_regions_gemini error: {e}")
         return []
@@ -1584,6 +1654,292 @@ def _extract_spans_documentai(pdf_bytes: bytes,
     return all_pages_data
 
 
+# ── 画像領域のポストフィルタ ────────────────────────────────────────────────
+# - テキスト span と高オーバーラップ (= 透かし/装飾文字を誤検出) を除外
+# - ページ面積の大半を占める box を除外 (= 背景装飾の巨大枠)
+def _iou_pct(a: dict, b: dict) -> float:
+    """a,b は {x_pct,y_pct,w_pct,h_pct}。交差面積 / a の面積 を返す(0-1)。"""
+    ax0, ay0 = a["x_pct"], a["y_pct"]
+    ax1, ay1 = ax0 + a["w_pct"], ay0 + a["h_pct"]
+    bx0, by0 = b["x_pct"], b["y_pct"]
+    bx1, by1 = bx0 + b["w_pct"], by0 + b["h_pct"]
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    inter = (ix1 - ix0) * (iy1 - iy0)
+    area_a = max(1e-6, (ax1 - ax0) * (ay1 - ay0))
+    return inter / area_a
+
+
+def _filter_image_regions(images: list[dict], spans: list[dict]) -> list[dict]:
+    """画像領域から、(a)テキストと大幅重複、(b)ページ面積の大半を占めるもの、を除外。"""
+    filtered: list[dict] = []
+    for img in images:
+        w = float(img.get("w_pct", 0))
+        h = float(img.get("h_pct", 0))
+        area_pct = (w * h) / 100.0  # 0-100 の概算
+        # 背景装飾の巨大枠 (ページの 55% 以上) は除外
+        if area_pct > 55:
+            print(f"  filter: drop oversized image {img.get('id','?')} area={area_pct:.1f}%")
+            continue
+        # テキスト span との累積オーバーラップ
+        text_overlap = 0.0
+        for s in spans:
+            if not s.get("text", "").strip():
+                continue
+            text_overlap += _iou_pct(img, {
+                "x_pct": s.get("x_pct", 0), "y_pct": s.get("y_pct", 0),
+                "w_pct": s.get("w_pct", 0), "h_pct": s.get("h_pct", 0),
+            })
+            if text_overlap > 0.55:
+                break
+        if text_overlap > 0.55:
+            print(f"  filter: drop text-overlap image {img.get('id','?')} overlap={text_overlap:.2f}")
+            continue
+        filtered.append(img)
+    return filtered
+
+
+# ── docling (https://github.com/docling-project/docling) ────────────────────
+# IBM の ML ベース文書構造解析。lazy import で未インストール時は 503 を返す。
+# ── huridocs/pdf-document-layout-analysis (REST マイクロサービス) ──────────
+# VGT / LayoutLMv3 ベースの DL レイアウト解析。別コンテナで動かし URL を指定。
+# 使い方:
+#   docker run -p 5060:5060 huridocs/pdf-document-layout-analysis:latest
+#   HURIDOCS_URL=http://localhost:5060 を main backend に設定
+HURIDOCS_URL = os.environ.get("HURIDOCS_URL", "").rstrip("/")
+
+
+def _huridocs_available() -> bool:
+    """HURIDOCS_URL が設定され、かつ疎通可能なら True。"""
+    if not HURIDOCS_URL:
+        return False
+    try:
+        import httpx  # type: ignore
+        r = httpx.get(HURIDOCS_URL + "/info", timeout=3.0)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _extract_spans_huridocs(pdf_bytes: bytes) -> list[dict[str, Any]]:
+    """huridocs サービスに POST して layout segments を span/layout_block に変換。
+
+    Response 形式 (huridocs):
+      [{ "left": 42, "top": 100, "width": 300, "height": 20,
+         "page_number": 1, "page_width": 612, "page_height": 792,
+         "text": "...", "type": "Text|Title|Picture|Table|..." }, ...]
+    """
+    if not HURIDOCS_URL:
+        raise HTTPException(503, "HURIDOCS_URL 未設定 (別コンテナで起動後 env で指定)")
+    try:
+        import httpx  # type: ignore
+    except Exception as imp_err:
+        raise HTTPException(503, f"httpx が必要: {imp_err}")
+
+    try:
+        files = {"file": ("input.pdf", pdf_bytes, "application/pdf")}
+        resp = httpx.post(HURIDOCS_URL, files=files, timeout=300.0)
+        resp.raise_for_status()
+        segments = resp.json()
+    except Exception as e:
+        raise HTTPException(502, f"huridocs 呼び出し失敗: {e}")
+
+    if not isinstance(segments, list):
+        return []
+
+    # ページ毎に集約
+    pages_map: dict[int, dict[str, Any]] = {}
+    for seg_idx, seg in enumerate(segments):
+        page_no = int(seg.get("page_number", 1)) - 1
+        pw = float(seg.get("page_width", 612)) or 612
+        ph = float(seg.get("page_height", 792)) or 792
+        left = float(seg.get("left", 0))
+        top = float(seg.get("top", 0))
+        w = float(seg.get("width", 0))
+        h = float(seg.get("height", 0))
+        if w <= 0 or h <= 0:
+            continue
+        x_pct = (left / pw) * 100
+        y_pct = (top / ph) * 100
+        w_pct = (w / pw) * 100
+        h_pct = (h / ph) * 100
+        typ = str(seg.get("type", "Text"))
+        text = str(seg.get("text", "") or "").strip()
+
+        if page_no not in pages_map:
+            pages_map[page_no] = {"spans": [], "layout_blocks": [],
+                                  "barcodes": [], "detected_languages": []}
+        entry = pages_map[page_no]
+
+        # 画像/図/表はテキストなしの layout_block 扱い
+        if typ in ("Picture", "Figure", "Table", "Formula") or not text:
+            entry["layout_blocks"].append({
+                "id": f"hd_{seg_idx}",
+                "type": "image" if typ in ("Picture", "Figure") else "table" if typ == "Table" else "text",
+                "x_pct": x_pct, "y_pct": y_pct, "w_pct": w_pct, "h_pct": h_pct,
+                "text_preview": text[:50] if text else None,
+                "confidence": float(seg.get("score", 0) or 0),
+            })
+            if text:
+                # Title 等の短いテキスト付きブロックは span でも保持
+                pass
+            continue
+
+        entry["spans"].append({
+            "id": f"hd_{seg_idx}",
+            "text": text,
+            "x_pct": x_pct,
+            "y_pct": y_pct,
+            "w_pct": w_pct,
+            "h_pct": h_pct,
+            "size_pt": max(4.0, min(200.0, h * 0.8)),
+            "font_class": "mincho" if typ in ("Text", "Title", "List") else "gothic",
+            "font_original": "",
+            "writing_direction": "horizontal",
+            "color_hex": "#000000",
+            "origin": [left, top + h],
+            "bbox": [left, top, w, h],
+            "size_source": "huridocs-bbox",
+            "needs_font_review": True,
+        })
+
+    # ページ番号の最大値+1 までの配列に展開(歯抜け埋め)
+    if not pages_map:
+        return []
+    max_page = max(pages_map.keys())
+    out: list[dict[str, Any]] = []
+    for i in range(max_page + 1):
+        out.append(pages_map.get(i, {
+            "spans": [], "layout_blocks": [], "barcodes": [], "detected_languages": []
+        }))
+    return out
+
+
+def _docling_available() -> bool:
+    try:
+        import docling  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _extract_spans_docling(pdf_bytes: bytes) -> list[dict[str, Any]]:
+    """docling で PDF → Span + layout_blocks を抽出。
+    戻り値: [{"spans":[...], "layout_blocks":[...], "detected_languages":[...]}, ...]
+    座標は各ページの画像(PNG=eff_rect=回転後)を基準とした pct。
+    """
+    if not _docling_available():
+        raise HTTPException(
+            503, "docling 未インストール (pip install docling)"
+        )
+    try:
+        from docling.document_converter import DocumentConverter  # type: ignore
+    except Exception as imp_err:
+        raise HTTPException(503, f"docling import 失敗: {imp_err}")
+
+    # 一時ファイルに書き出して DocumentConverter に渡す
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    try:
+        tmp.write(pdf_bytes)
+        tmp.flush()
+        tmp.close()
+        converter = DocumentConverter()
+        result = converter.convert(tmp.name)
+        dl_doc = result.document
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+
+    # PyMuPDF でページサイズを取る (docling API は実装差があるため pct 変換は PyMuPDF 寸法を基準に)
+    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pages_out: list[dict[str, Any]] = []
+    num_pages = len(pdf_doc)
+    for pi in range(num_pages):
+        page = pdf_doc.load_page(pi)
+        pw, ph = page.rect.width, page.rect.height
+        spans: list[dict[str, Any]] = []
+        layout_blocks: list[dict[str, Any]] = []
+
+        # docling の DoclingDocument はバージョンで属性差がある。
+        # テキストアイテムを走査して bbox + text を取り出す(best-effort)。
+        try:
+            items = []
+            if hasattr(dl_doc, "texts"):
+                items = list(getattr(dl_doc, "texts", []) or [])
+            elif hasattr(dl_doc, "iterate_items"):
+                items = [it for it in dl_doc.iterate_items() if getattr(it, "text", None)]
+            for idx, it in enumerate(items):
+                # ページ番号取得 (prov.page / page_no / page など様々)
+                prov_list = getattr(it, "prov", None) or []
+                prov = prov_list[0] if prov_list else None
+                page_no = getattr(prov, "page_no", None) if prov else getattr(it, "page_no", None)
+                if page_no is None:
+                    page_no = getattr(it, "page", 1)
+                if int(page_no) - 1 != pi:
+                    continue
+                bbox = getattr(prov, "bbox", None) if prov else getattr(it, "bbox", None)
+                if bbox is None:
+                    continue
+                # bbox は BoundingBox(l, t, r, b) 形式 (bottom-left origin の場合あり)
+                l = getattr(bbox, "l", None) or getattr(bbox, "left", None) or 0
+                t = getattr(bbox, "t", None) or getattr(bbox, "top", None) or 0
+                r = getattr(bbox, "r", None) or getattr(bbox, "right", None) or 0
+                b = getattr(bbox, "b", None) or getattr(bbox, "bottom", None) or 0
+                # 座標系判定 (bottom-left の場合は top を反転)
+                coord_origin = str(getattr(bbox, "coord_origin", "")).lower()
+                if "bottom" in coord_origin:
+                    t_px, b_px = ph - t, ph - b
+                    top, bot = min(t_px, b_px), max(t_px, b_px)
+                else:
+                    top, bot = min(t, b), max(t, b)
+                left, right = min(l, r), max(l, r)
+                x_pct = (left / pw) * 100 if pw else 0
+                y_pct = (top / ph) * 100 if ph else 0
+                w_pct = ((right - left) / pw) * 100 if pw else 0
+                h_pct = ((bot - top) / ph) * 100 if ph else 0
+                text = getattr(it, "text", "") or ""
+                if not text.strip():
+                    continue
+                spans.append({
+                    "id": f"docling_{pi}_{idx}",
+                    "text": text,
+                    "x_pct": x_pct,
+                    "y_pct": y_pct,
+                    "w_pct": w_pct,
+                    "h_pct": h_pct,
+                    "size_pt": max(4.0, min(200.0, (bot - top) * 0.8)),
+                    "font_class": "mincho",
+                    "font_original": "",
+                    "writing_direction": "horizontal",
+                    "color_hex": "#000000",
+                    "origin": [left, bot],
+                    "bbox": [left, top, right - left, bot - top],
+                    "size_source": "docling-bbox",
+                    "needs_font_review": True,
+                })
+                label = getattr(it, "label", None) or type(it).__name__
+                layout_blocks.append({
+                    "type": str(label),
+                    "x_pct": x_pct, "y_pct": y_pct, "w_pct": w_pct, "h_pct": h_pct,
+                    "text": text,
+                })
+        except Exception as walk_err:
+            print(f"docling walk error page {pi}: {walk_err}")
+
+        pages_out.append({
+            "spans": spans,
+            "layout_blocks": layout_blocks,
+            "barcodes": [],
+            "detected_languages": [],
+        })
+    pdf_doc.close()
+    return pages_out
+
+
 # ── YomiToku による Span 抽出 ─────────────────────────
 # DN_SuperBook_PDF_Converter が内部採用する高精度日本語OCRエンジン。
 # 縦書き・手書き・7000+文字対応、レイアウト解析・表構造・読み順推定付き。
@@ -1751,8 +2107,10 @@ async def analyze_pdf(
     x_yomitoku_lite: Optional[str] = Header(None),
     x_yomitoku_device: Optional[str] = Header(None),
     x_use_vision_ocr: Optional[str] = Header(None),
+    x_extract_engine: Optional[str] = Header(None),
+    x_document_profile: Optional[str] = Header(None),
 ):
-    """PDF → Gemini / Document AI / YomiToku / Vision OCR のいずれかでSpan抽出"""
+    """PDF → Gemini / Document AI / YomiToku / Vision OCR / docling のいずれかでSpan抽出"""
     ct = (file.content_type or "").lower()
     fn = (file.filename or "").lower()
     is_pdf = ("pdf" in ct) or fn.endswith(".pdf")
@@ -1773,12 +2131,86 @@ async def analyze_pdf(
                 has_text = True
                 break
 
-        # モード選択: YomiToku > Vision OCR > Document AI > Gemini
-        # Vision OCR は手書き日本語に強いので、明示指定 or DocAI が空返却時の自動フォールバックに使う
-        use_yomitoku = (x_use_yomitoku or "").lower() == "true"
-        use_vision_ocr = (x_use_vision_ocr or "").lower() == "true"
+        # Document profile (magazine/poster 時は画像誤検出を抑える)
+        doc_profile = (x_document_profile or "business_card").strip().lower()
+        is_magazine = doc_profile in ("magazine", "newspaper", "poster")
+        print(f"/analyze: document_profile={doc_profile} (is_magazine={is_magazine})")
+
+        # モード選択: X-Extract-Engine > 個別フラグ > 自動
+        engine = (x_extract_engine or "").strip().lower()
+        # magazine プロファイルで engine 未指定 or auto → 利用可能な中で最適を選択
+        # 優先順位: yomitoku (縦書き最強) > huridocs (DL layout) > docling (ML文書構造) > docai (フォールバック)
+        if is_magazine and engine in ("", "auto"):
+            if _yomitoku_available():
+                engine = "yomitoku"
+                print("  magazine profile: using yomitoku (available)")
+            elif _huridocs_available():
+                engine = "huridocs"
+                print("  magazine profile: using huridocs (available)")
+            elif _docling_available():
+                engine = "docling"
+                print("  magazine profile: yomitoku/huridocs unavailable, using docling")
+            else:
+                engine = "docai"
+                print("  magazine profile: falling back to docai")
+        # 明示指定された engine が未インストールならフォールバック (503 避け)
+        elif engine == "yomitoku" and not _yomitoku_available():
+            fb = "huridocs" if _huridocs_available() else ("docling" if _docling_available() else "docai")
+            print(f"  yomitoku unavailable → falling back to {fb}")
+            engine = fb
+        elif engine == "docling" and not _docling_available():
+            fb = "huridocs" if _huridocs_available() else "docai"
+            print(f"  docling unavailable → falling back to {fb}")
+            engine = fb
+        elif engine == "huridocs" and not _huridocs_available():
+            fb = "docling" if _docling_available() else "docai"
+            print(f"  huridocs unavailable → falling back to {fb}")
+            engine = fb
+        use_yomitoku = (x_use_yomitoku or "").lower() == "true" or engine == "yomitoku"
+        use_vision_ocr = (x_use_vision_ocr or "").lower() == "true" or engine == "vision_ocr"
+        use_docling = engine == "docling"
+        use_huridocs = engine == "huridocs"
+        use_pymupdf_only = engine == "pymupdf"
+        use_gemini_only = engine == "gemini"
         use_docai_mode = (x_use_documentai or "").lower()
-        use_docai = (use_docai_mode != "false") and not use_yomitoku and not use_vision_ocr
+        use_docai = (
+            engine == "docai"
+            or (
+                (use_docai_mode != "false")
+                and not use_yomitoku and not use_vision_ocr
+                and not use_docling and not use_huridocs
+                and not use_pymupdf_only and not use_gemini_only
+                and engine in ("", "auto", "docai")
+            )
+        )
+
+        # huridocs 抽出 (使用時は他エンジンをスキップ)
+        huridocs_results: list[dict[str, Any]] = []
+        if use_huridocs:
+            print("Using huridocs...")
+            try:
+                huridocs_results = _extract_spans_huridocs(pdf_bytes)
+                print(f"huridocs extracted {len(huridocs_results)} pages")
+            except HTTPException:
+                raise
+            except Exception as hd_err:
+                print(f"huridocs failed: {hd_err}")
+                huridocs_results = []
+                use_huridocs = False
+
+        # docling 抽出 (使用時は他エンジンをスキップ)
+        docling_results: list[dict[str, Any]] = []
+        if use_docling:
+            print("Using docling...")
+            try:
+                docling_results = _extract_spans_docling(pdf_bytes)
+                print(f"docling extracted {len(docling_results)} pages")
+            except HTTPException:
+                raise
+            except Exception as dl_err:
+                print(f"docling failed: {dl_err}")
+                docling_results = []
+                use_docling = False
 
         # YomiToku 抽出（使用時は他エンジンをスキップ）
         yomitoku_results: list[dict[str, Any]] = []
@@ -1795,7 +2227,19 @@ async def analyze_pdf(
                 print(f"YomiToku failed, falling back to other engines: {yt_err}")
                 yomitoku_results = []
                 use_yomitoku = False
-                use_docai = (use_docai_mode != "false")
+                # magazine プロファイルでは docling を優先フォールバック
+                if is_magazine and _docling_available():
+                    use_docling = True
+                    print("  falling back to docling (magazine profile)")
+                    try:
+                        docling_results = _extract_spans_docling(pdf_bytes)
+                        print(f"docling extracted {len(docling_results)} pages")
+                    except Exception as dl_err:
+                        print(f"docling fallback failed: {dl_err}; using DocAI")
+                        use_docling = False
+                        use_docai = (use_docai_mode != "false")
+                else:
+                    use_docai = (use_docai_mode != "false")
 
         docai_results: list[dict[str, Any]] = []
         if use_docai:
@@ -1844,7 +2288,39 @@ async def analyze_pdf(
             docai_barcodes = []
             docai_languages = []
 
-            if use_yomitoku and i < len(yomitoku_results):
+            if use_huridocs and i < len(huridocs_results):
+                hd_page = huridocs_results[i]
+                spans = hd_page["spans"]
+                docai_layout_blocks = hd_page.get("layout_blocks", [])
+                docai_languages = hd_page.get("detected_languages", [])
+                for s in spans:
+                    bx = (s["x_pct"] / 100) * rect.width
+                    by = (s["y_pct"] / 100) * rect.height
+                    bw = (s["w_pct"] / 100) * rect.width
+                    bh = (s["h_pct"] / 100) * rect.height
+                    s.update({"origin": [bx, by + bh], "bbox": [bx, by, bw, bh]})
+                if has_text:
+                    pymupdf_spans = _extract_spans_pymupdf(page)
+                    if pymupdf_spans:
+                        _merge_font_info(spans, pymupdf_spans, rect.width, rect.height)
+                print(f"Page {i}: huridocs → {len(spans)} spans")
+            elif use_docling and i < len(docling_results):
+                dl_page = docling_results[i]
+                spans = dl_page["spans"]
+                docai_layout_blocks = dl_page.get("layout_blocks", [])
+                docai_languages = dl_page.get("detected_languages", [])
+                for s in spans:
+                    bx = (s["x_pct"] / 100) * rect.width
+                    by = (s["y_pct"] / 100) * rect.height
+                    bw = (s["w_pct"] / 100) * rect.width
+                    bh = (s["h_pct"] / 100) * rect.height
+                    s.update({"origin": [bx, by + bh], "bbox": [bx, by, bw, bh]})
+                if has_text:
+                    pymupdf_spans = _extract_spans_pymupdf(page)
+                    if pymupdf_spans:
+                        _merge_font_info(spans, pymupdf_spans, rect.width, rect.height)
+                print(f"Page {i}: docling → {len(spans)} spans")
+            elif use_yomitoku and i < len(yomitoku_results):
                 # YomiToku 結果を主軸に使用（座標は画像=回転後基準のため回転補正不要）
                 yt_page = yomitoku_results[i]
                 spans = yt_page["spans"]
@@ -2009,9 +2485,16 @@ async def analyze_pdf(
                     y_pct = by0 / pt_h * 100
                     w_pct = bw / pt_w * 100
                     h_pct = bh / pt_h * 100
-                    # 極小ノイズ除去
-                    if w_pct < 0.5 and h_pct < 0.5:
+                    # 極小ノイズ除去 (雑誌では罫線を画像扱いしやすいので閾値を強化)
+                    min_wh = 2.0 if is_magazine else 0.5
+                    if w_pct < min_wh or h_pct < min_wh:
                         continue
+                    # 雑誌で極端に細長い(罫線)ものは除外
+                    if is_magazine:
+                        aspect = max(w_pct / max(h_pct, 0.01), h_pct / max(w_pct, 0.01))
+                        if aspect > 20:
+                            print(f"  filter: drop thin-line img {w_pct:.1f}x{h_pct:.1f}% aspect={aspect:.1f}")
+                            continue
 
                     # 画像データ: ページの該当領域をクロップして PNG 化（確実）
                     # xref 経由の extract_image は形式依存で失敗することがあるため、
@@ -2100,8 +2583,9 @@ async def analyze_pdf(
                 except Exception as docai_img_err:
                     print(f"DocAI image extraction error: {docai_img_err}")
 
-            # ── Vision API での画像検出（印鑑・ロゴ・スタンプ等 — 常に実行） ──
-            if PILImage:
+            # ── Vision API での画像検出（印鑑・ロゴ・スタンプ等） ──
+            # magazine プロファイルでは罫線を logo/face と誤検出しやすいのでスキップ
+            if PILImage and not is_magazine:
                 pre_vis_count = len(images_data)
                 try:
                     import os
@@ -2297,7 +2781,8 @@ async def analyze_pdf(
             # ── Gemini Vision による非テキスト画像領域の検出（ロゴ・写真・認証マーク等） ──
             # Vision API の LOGO_DETECTION は著名ブランドしか検出できないため、
             # Gemini に「テキスト以外の視覚要素のバウンディングボックス」を列挙させる。
-            if PILImage and GEMINI_API_KEY:
+            # magazine プロファイルではスキップ (テキスト領域を巨大画像と誤判定するため)
+            if PILImage and GEMINI_API_KEY and not is_magazine:
                 pre_gem_count = len(images_data)
                 try:
                     gemini_regions = _detect_image_regions_gemini(png_bytes)
@@ -2355,6 +2840,13 @@ async def analyze_pdf(
 
             if images_data:
                 print(f"Page {i}: Total {len(images_data)} images extracted (PyMuPDF+DocAI+Vision+Gemini)")
+
+            # ── 画像領域の最終フィルタ: テキスト大幅重複 + ページ面積の大半を占める box を除外 ──
+            if images_data:
+                before = len(images_data)
+                images_data = _filter_image_regions(images_data, spans)
+                if len(images_data) != before:
+                    print(f"Page {i}: filtered images {before} → {len(images_data)}")
 
             # ── 描画要素(罫線・背景色)抽出 ──
             drawings_data = []
@@ -2821,6 +3313,7 @@ async def rebuild_pdf(req: dict[str, Any]):
     overrides = req.get("overrides", {})
     image_replacements = req.get("image_replacements", {})
     span_bboxes = req.get("span_bboxes", {})  # Phase 2: bbox直接指定
+    redact_rects = req.get("redact_rects", [])  # HITL: 除外された drawings を白塗り
     page_index = req.get("page_index", 0)
     dpi = req.get("dpi", 300)
 
@@ -2995,13 +3488,29 @@ async def rebuild_pdf(req: dict[str, Any]):
             )
             edit_plan.append((span_id, new_text, expanded, rect, size_pt, writing_dir, font_class, font_original))
 
+        # ── HITL: 除外された drawings の領域を白塗り(背景色) ──
+        # テンプレ装飾の●●●等、ユーザが「誤検出/不要」と判断したもの
+        for rr in redact_rects:
+            try:
+                rx = float(rr.get("x_pct", 0)) / 100.0 * eff_rect.width
+                ry = float(rr.get("y_pct", 0)) / 100.0 * eff_rect.height
+                rw = float(rr.get("w_pct", 0)) / 100.0 * eff_rect.width
+                rh = float(rr.get("h_pct", 0)) / 100.0 * eff_rect.height
+                if rw <= 0 or rh <= 0:
+                    continue
+                redact_r = fitz.Rect(rx, ry, rx + rw, ry + rh)
+                bg = _sample_bg_color(page, redact_r)
+                page.add_redact_annot(redact_r, fill=bg)
+            except Exception as red_err:
+                print(f"redact_rect error: {red_err}")
+
         # ── 全 redact annotation を一括追加 → apply ──
         for span_id, new_text, expanded, orig_rect, size_pt, writing_dir, font_class, font_original in edit_plan:
             # Phase 3: 背景色サンプリング
             bg_color = _sample_bg_color(page, expanded)
             page.add_redact_annot(expanded, fill=bg_color)
 
-        if edit_plan:
+        if edit_plan or redact_rects:
             page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
         # ── 新テキストを元の位置に挿入 ──

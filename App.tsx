@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent, ManuscriptChunk, ValidationReportResponse, ChunkDetail, FeedbackInput, FeedbackResponse, FeedbackActionType, ImageInfo, LayoutBlock, BarcodeInfo, DetectedLanguage } from './types';
+import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent, ManuscriptChunk, ValidationReportResponse, ChunkDetail, FeedbackInput, FeedbackResponse, FeedbackActionType, ImageInfo, LayoutBlock, BarcodeInfo, DetectedLanguage, DrawingInfo } from './types';
+import type { ExtractEngine, ExtractEngineStatus } from './services/api';
 import { analyzePdf, rebuildPdf, SpanOverride, SpanBbox, vivliostyleBuild, visionAnalyze, VisionAnalyzeResult, analyzeMarkdown, markdownToPdf } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
@@ -30,7 +31,7 @@ import {
   FileAudio, Clock, List, LayoutTemplate, BookOpen, MonitorPlay,
   PenTool, ScanText, FileEdit, FileDiff, ShieldCheck, BookType,
   Newspaper, BookMarked, Monitor,
-  Copy, Share2,
+  Copy, Share2, RotateCcw, ShoppingBag,
 } from 'lucide-react';
 
 
@@ -182,9 +183,17 @@ const App: React.FC = () => {
   const [replacingImageId, setReplacingImageId] = useState<string | null>(null);
 
   // ── Human-in-the-loop: Rejected (excluded) items ──
-  // ユーザが抽出結果から除外したスパン/画像のID。出力・オーバーレイから除外される。
+  // ユーザが抽出結果から除外したスパン/画像/drawingのID。出力・オーバーレイから除外される。
   const [hiddenSpanIds, setHiddenSpanIds] = useState<Set<string>>(new Set());
   const [hiddenImageIds, setHiddenImageIds] = useState<Set<string>>(new Set());
+  const [hiddenDrawingIds, setHiddenDrawingIds] = useState<Set<string>>(new Set());
+
+  // ── Drawings (罫線・塗り図形 = ●●●等の装飾要素) ──
+  const [pageDrawings, setPageDrawings] = useState<DrawingInfo[]>([]);
+
+  // ── 再検出: エンジンセレクタ + 再analyze中フラグ ──
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [reanalyzeEngine, setReanalyzeEngine] = useState<ExtractEngine>('auto');
 
   // ── Document AI Layout ──
   const [layoutBlocks, setLayoutBlocks] = useState<LayoutBlock[]>([]);
@@ -321,6 +330,16 @@ const App: React.FC = () => {
   const visiblePageImages = useMemo(
     () => pageImages.filter(img => !hiddenImageIds.has(img.id)),
     [pageImages, hiddenImageIds],
+  );
+
+  // HITL: 除外されていない drawings のみ表示。除外済は redact 対象(PDF出力時に白塗り)。
+  const visibleDrawings = useMemo(
+    () => pageDrawings.filter(d => !hiddenDrawingIds.has(d.id)),
+    [pageDrawings, hiddenDrawingIds],
+  );
+  const redactedDrawings = useMemo(
+    () => pageDrawings.filter(d => hiddenDrawingIds.has(d.id)),
+    [pageDrawings, hiddenDrawingIds],
   );
 
   // 検出要素の総数と未確認数（loss-prevention 用の安全ゲート）
@@ -508,6 +527,7 @@ const App: React.FC = () => {
     setSelectedId(null);
     setZoom(1);
     setPageImages(page.images || []);
+    setPageDrawings(page.drawings || []);
     setImageReplacements({});
     setLayoutBlocks(page.layout_blocks || []);
     setBarcodes(page.barcodes || []);
@@ -517,6 +537,7 @@ const App: React.FC = () => {
     // Reset HITL exclusions on page change
     setHiddenSpanIds(new Set());
     setHiddenImageIds(new Set());
+    setHiddenDrawingIds(new Set());
 
     if (!skipAI && page.original_png_b64) {
       flash('AI補正中 (Gemini Vision)...', 'info');
@@ -559,12 +580,25 @@ const App: React.FC = () => {
       return;
     }
     setLoading(true);
-    flash('PDF分析中（Document AI）...', 'info');
+    // 現在の view から document profile を決定
+    // KUMIHAN_NEWSPAPER (経営計画) / KUMIHAN_COMMERCIAL (定期出版) は雑誌向け(縦書き/多段組)
+    // 名刺とその他は business_card 扱い (既定)
+    const profile: 'business_card' | 'magazine' =
+      view === AppState.KUMIHAN_NEWSPAPER
+        || view === AppState.KUMIHAN_COMMERCIAL
+        || view === AppState.KUMIHAN_TSUHAN
+        ? 'magazine' : 'business_card';
+    flash(
+      profile === 'magazine'
+        ? 'PDF分析中（雑誌向け: YomiToku + 画像検出スキップ）...'
+        : 'PDF分析中（Document AI）...',
+      'info',
+    );
     try {
-      // Document AI をデフォルトで使用
+      // Document AI をデフォルトで使用 (business_card の場合)
       const useDocAI = getConfig('VITE_USE_DOCUMENT_AI') !== 'false';
-      console.log('[handleUpload] useDocAI:', useDocAI, 'API URL:', getConfig('VITE_API_URL'));
-      const data = await analyzePdf(file, useDocAI);
+      console.log('[handleUpload] profile:', profile, 'useDocAI:', useDocAI, 'API URL:', getConfig('VITE_API_URL'));
+      const data = await analyzePdf(file, { profile, useDocumentAI: useDocAI });
       console.log('[handleUpload] analyzePdf returned:', data?.pages?.length, 'pages');
       const pages = data?.pages;
       if (!pages || !Array.isArray(pages) || pages.length === 0) {
@@ -679,7 +713,10 @@ const App: React.FC = () => {
     if (!totalChanges) { flash('変更がありません', 'info'); return; }
     flash(`再構築中 (テキスト${Object.keys(edits).length}件 + 画像${Object.keys(imageReplacements).length}件)...`, 'info');
     try {
-      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect, ovMap, originalTexts, imageReplacements, spanBboxes);
+      const redactRects = redactedDrawings.map(d => ({
+        x_pct: d.x_pct, y_pct: d.y_pct, w_pct: d.w_pct, h_pct: d.h_pct,
+      }));
+      const data = await rebuildPdf(pdfB64, edits, spanMapping, 300, currentPageIndex, currentClipRect, ovMap, originalTexts, imageReplacements, spanBboxes, redactRects);
       if (data.png_b64) { setRebuiltPng(`data:image/png;base64,${data.png_b64}`); setPreviewTab('rebuilt'); }
 
       // Auto-save to DB with rebuilt PDF
@@ -860,6 +897,40 @@ const App: React.FC = () => {
     }
   };
 
+  // ── 再検出: 現在のPDFを選択エンジンで再analyzeし、spans/images/drawings を差し替え ──
+  // HITL 除外済み ID は意図的に保持 (ユーザの判断を尊重)
+  const handleReanalyze = async () => {
+    if (!pdfB64) { flash('再検出する PDF がありません', 'error'); return; }
+    setReanalyzing(true);
+    flash(`${reanalyzeEngine} で再検出中...`, 'info');
+    try {
+      // pdfB64 → File に戻して analyzePdf を叩く
+      const bin = atob(pdfB64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const file = new File([arr], 'current.pdf', { type: 'application/pdf' });
+      const analyzed = await analyzePdf(file, { engine: reanalyzeEngine });
+      const page = analyzed.pages[currentPageIndex] || analyzed.pages[0];
+      if (!page) throw new Error('再検出結果にページが含まれていません');
+      setSpans(page.spans || []);
+      setOriginalSpans(page.spans || []);
+      setSpanMapping(page.raw_id_map || {});
+      setPageImages(page.images || []);
+      setPageDrawings(page.drawings || []);
+      setLayoutBlocks(page.layout_blocks || []);
+      setBarcodes(page.barcodes || []);
+      setDetectedLanguages(page.detected_languages || []);
+      setOriginalPng(page.original_png_b64 ? `data:image/png;base64,${page.original_png_b64}` : null);
+      setRebuiltPng(null);
+      setSelectedId(null);
+      flash(`再検出完了: ${page.spans?.length || 0}件のフィールド / ${page.images?.length || 0}件の画像`, 'ok');
+    } catch (e: any) {
+      flash(`再検出エラー: ${e.message}`, 'error');
+    } finally {
+      setReanalyzing(false);
+    }
+  };
+
   // ── Open project ──
   const openProject = (p: CardProject) => {
     setSpans(p.spans || []);
@@ -876,9 +947,11 @@ const App: React.FC = () => {
     setCurrentPageIndex(p.page_index ?? 0);
     setCurrentClipRect(p.clip_rect);
     setPageImages(p.page_images || []);
+    setPageDrawings((p as any).page_drawings || []);
     setLayoutBlocks(p.layout_blocks || []);
     setBarcodes(p.barcodes || []);
     setDetectedLanguages(p.detected_languages || []);
+    setHiddenDrawingIds(new Set());
     setView(AppState.EDIT);
   };
 
@@ -910,11 +983,13 @@ const App: React.FC = () => {
     setCurrentPageIndex(0);
     setCurrentClipRect(undefined);
     setPageImages([]);
+    setPageDrawings([]);
     setLayoutBlocks([]);
     setBarcodes([]);
     setDetectedLanguages([]);
     setHiddenSpanIds(new Set());
     setHiddenImageIds(new Set());
+    setHiddenDrawingIds(new Set());
     loadProjects();
   };
 
@@ -1110,6 +1185,10 @@ const App: React.FC = () => {
           { icon: ScanText, label: '  └ コンテンツ抽出', badge: 0, state: AppState.TEIKI_EXTRACT },
           { icon: Wand2, label: '  └ PDF生成・比較', badge: 0, state: AppState.TEIKI_BUILD },
           { icon: PenTool, label: '  └ 赤ペン指示書', badge: 0, state: AppState.TEIKI_REDPEN },
+          { icon: ShoppingBag, label: '通販カタログ', badge: 0, state: AppState.KUMIHAN_TSUHAN },
+          { icon: ScanText, label: '  └ コンテンツ抽出', badge: 0, state: AppState.TSUHAN_EXTRACT },
+          { icon: Wand2, label: '  └ PDF生成・比較', badge: 0, state: AppState.TSUHAN_BUILD },
+          { icon: PenTool, label: '  └ 赤ペン指示書', badge: 0, state: AppState.TSUHAN_REDPEN },
         ],
       },
       {
@@ -1328,6 +1407,7 @@ const App: React.FC = () => {
         {view === AppState.KUMIHAN_MEISHI && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜名刺</h2>}
         {view === AppState.KUMIHAN_NEWSPAPER && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜経営計画</h2>}
         {view === AppState.KUMIHAN_COMMERCIAL && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜定期出版</h2>}
+        {view === AppState.KUMIHAN_TSUHAN && <h2 className="text-[15px] font-bold text-gray-900">AIクラウド組版〜通販カタログ</h2>}
         {view === AppState.AI_INDESIGN && <h2 className="text-[15px] font-bold text-gray-900">AIインデザイン</h2>}
         {view === AppState.TOOL_AI_DTP_AGENT && <h2 className="text-[15px] font-bold text-gray-900">AI DTP エージェント</h2>}
         {view === AppState.MARKDOWN_EDIT && (
@@ -1381,6 +1461,35 @@ const App: React.FC = () => {
         )}
         {view === AppState.EDIT && (
           <>
+            {/* 再検出 (エンジン切替 + 再analyze) */}
+            <div className="flex items-center gap-1 border rounded-xl overflow-hidden" style={{ borderColor: C.border }}>
+              <select
+                value={reanalyzeEngine}
+                onChange={(e) => setReanalyzeEngine(e.target.value as ExtractEngine)}
+                disabled={reanalyzing || !pdfB64}
+                className="text-[12px] font-medium px-2 py-2 bg-transparent outline-none"
+                style={{ color: C.textSec }}
+                title="PDF検出エンジン"
+              >
+                <option value="auto">自動</option>
+                <option value="docai">Document AI</option>
+                <option value="yomitoku">YomiToku</option>
+                <option value="vision_ocr">Vision OCR</option>
+                <option value="pymupdf">PyMuPDF</option>
+                <option value="gemini">Gemini</option>
+                <option value="docling">docling</option>
+                <option value="huridocs">huridocs</option>
+              </select>
+              <button
+                onClick={handleReanalyze}
+                disabled={reanalyzing || !pdfB64}
+                className="flex items-center gap-1.5 text-[13px] font-medium px-3 py-2 border-l transition-all hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ borderColor: C.border, color: C.textSec }}
+                title="現在のPDFを選択エンジンで再解析 (HITL除外は保持)"
+              >
+                <RotateCcw size={14} /> {reanalyzing ? '再検出中...' : '再検出'}
+              </button>
+            </div>
             <button
               onClick={() => setShowChatInEditor(!showChatInEditor)}
               className="flex items-center gap-1.5 text-[13px] font-medium px-3 py-2 rounded-xl border transition-all"
@@ -2391,6 +2500,78 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Right: Drawings panel (HITL) — 塗り/罫線 等テンプレ装飾を削除するためのパネル */}
+      {pageDrawings.length > 0 && (
+        <div className="w-96 flex flex-col shrink-0 border-l overflow-hidden" style={{ background: '#0f0f20', borderColor: '#2a2a4a', order: 3 }}>
+          <h4 className="text-[11px] font-medium px-3 pt-2.5 pb-2 flex items-center justify-between shrink-0" style={{ color: '#8888aa', borderBottom: '1px solid #2a2a4a' }}>
+            <span className="flex items-center gap-1.5">🎨 図形 ({visibleDrawings.length}/{pageDrawings.length})</span>
+            <div className="flex items-center gap-2">
+              {hiddenDrawingIds.size > 0 && (
+                <button
+                  onClick={() => { setHiddenDrawingIds(new Set()); flash('図形除外を全て復元', 'ok'); }}
+                  className="text-[9px] px-1.5 py-0.5 rounded"
+                  style={{ background: 'rgba(16,185,129,0.12)', color: '#10b981' }}
+                >復元 ({hiddenDrawingIds.size})</button>
+              )}
+              <span className="text-[9px] font-normal" style={{ color: '#6b6b8a' }}>HITL</span>
+            </div>
+          </h4>
+          <div className="space-y-1 flex-1 overflow-y-auto p-2">
+            {pageDrawings.map(d => {
+              const hidden = hiddenDrawingIds.has(d.id);
+              const fillCss = d.fill ? `rgb(${d.fill.map(v => Math.round(v * 255)).join(',')})` : 'transparent';
+              const strokeCss = d.color ? `rgb(${d.color.map(v => Math.round(v * 255)).join(',')})` : '#555';
+              return (
+                <div
+                  key={d.id}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer"
+                  onClick={() => setSelectedId(d.id)}
+                  style={{
+                    background: selectedId === d.id ? 'rgba(99,102,241,0.15)' : '#16162a',
+                    border: `1px solid ${selectedId === d.id ? '#6366f1' : '#2a2a4a'}`,
+                    opacity: hidden ? 0.4 : 1,
+                  }}
+                >
+                  <div
+                    className="w-6 h-6 shrink-0 rounded"
+                    style={{
+                      background: fillCss,
+                      border: `2px solid ${strokeCss}`,
+                    }}
+                  />
+                  <div className="flex-1 text-[10px] font-mono" style={{ color: '#a8a8c0' }}>
+                    <div>{d.id}</div>
+                    <div style={{ color: '#6b6b8a', fontSize: 9 }}>
+                      {d.w_pct.toFixed(1)}×{d.h_pct.toFixed(1)}% @ ({d.x_pct.toFixed(1)},{d.y_pct.toFixed(1)})
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setHiddenDrawingIds(prev => {
+                        const n = new Set(prev);
+                        if (hidden) n.delete(d.id); else n.add(d.id);
+                        return n;
+                      });
+                      flash(hidden ? '図形を復元' : '図形を除外 (PDF出力時に白塗り)', 'info');
+                      setRebuiltPng(null);
+                    }}
+                    title={hidden ? '復元' : 'この図形を出力から除外 (白塗り redact)'}
+                    className="text-[10px] font-medium px-2 py-0.5 rounded"
+                    style={{
+                      background: hidden ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.12)',
+                      color: hidden ? '#10b981' : '#ef4444',
+                    }}
+                  >
+                    {hidden ? '復元' : '×'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Center: Preview */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div
@@ -2530,6 +2711,32 @@ const App: React.FC = () => {
                     );
                   });
                 })()}
+                {/* 図形(drawings) オーバーレイ — 除外済は赤斜線で白塗り予定を示す */}
+                {showOverlay && pageDrawings.map(d => {
+                  const hidden = hiddenDrawingIds.has(d.id);
+                  return (
+                    <div
+                      key={`draw-overlay-${d.id}`}
+                      title={hidden ? `除外済み (出力時に白塗り)` : `図形: ${d.w_pct.toFixed(1)}×${d.h_pct.toFixed(1)}%`}
+                      onClick={(e) => { e.stopPropagation(); setSelectedId(d.id); }}
+                      style={{
+                        position: 'absolute',
+                        left: `${d.x_pct}%`,
+                        top: `${d.y_pct}%`,
+                        width: `${d.w_pct}%`,
+                        height: `${d.h_pct}%`,
+                        border: hidden
+                          ? '2px solid #ef4444'
+                          : (selectedId === d.id ? '2px solid #6366f1' : '1px dashed #6b7280'),
+                        background: hidden
+                          ? 'repeating-linear-gradient(45deg, rgba(239,68,68,0.15), rgba(239,68,68,0.15) 4px, transparent 4px, transparent 8px)'
+                          : (selectedId === d.id ? 'rgba(99,102,241,0.08)' : 'rgba(107,114,128,0.03)'),
+                        cursor: 'pointer',
+                        zIndex: 4,
+                      }}
+                    />
+                  );
+                })}
                 {/* 画像オーバーレイ(ロゴ・写真・アイコン・印鑑など) */}
                 {showOverlay && visiblePageImages.map(img => {
                   const replaced = !!imageReplacements[img.id];
@@ -5017,19 +5224,20 @@ JSONのみ返してください。` },
         {view === AppState.TOOL_DETECT_LAYOUT && renderDetectLayout()}
         {view === AppState.TOOL_VALIDATE_MS && renderValidateManuscript()}
         {/* クラウド組版カテゴリ */}
-        {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL) && (
+        {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL || view === AppState.KUMIHAN_TSUHAN) && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-5xl mx-auto">
               <div className="rounded-2xl p-1" style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : view === AppState.KUMIHAN_NEWSPAPER ? 'linear-gradient(135deg, #3b82f6, #60a5fa)' : C.gradientPrimary }}>
                 <div className="bg-white rounded-[14px] p-10">
                   <div className="text-center mb-8">
                     <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '経営計画' : '定期出版'}
+                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '経営計画' : view === AppState.KUMIHAN_COMMERCIAL ? '定期出版' : '通販カタログ'}
                     </h2>
                     <p className="text-gray-500">
                       {view === AppState.KUMIHAN_MEISHI && 'PDFを入稿してAI構造解析→自動組版→校了PDFまでワンストップ。'}
                       {view === AppState.KUMIHAN_NEWSPAPER && '経営計画書を入稿。表・グラフ・見出し構成をAIが自動レイアウト。'}
                       {view === AppState.KUMIHAN_COMMERCIAL && '定期出版物の原稿を入稿。章立て・目次・索引をAIが構造解析し自動組版。'}
+                      {view === AppState.KUMIHAN_TSUHAN && '通販カタログを入稿。商品画像・価格・キャプションを構造抽出しテンプレート組版。'}
                     </p>
                   </div>
                   <div className="flex justify-center gap-4 flex-wrap">
@@ -5078,45 +5286,40 @@ JSONのみ返してください。` },
         )}
         {/* AIインデザイン */}
         {view === AppState.TOOL_AI_DTP_AGENT && <AIDtpAgentWorkspace />}
-        {view === AppState.MEISHI_EXTRACT && <MeishiExtractPage />}
+        {view === AppState.MEISHI_EXTRACT && <MeishiExtractPage category="名刺" profile="business_card" />}
+        {view === AppState.KEIEI_EXTRACT && <MeishiExtractPage category="経営計画" profile="magazine" />}
+        {view === AppState.TEIKI_EXTRACT && <MeishiExtractPage category="定期出版" profile="magazine" />}
+        {view === AppState.TSUHAN_EXTRACT && <MeishiExtractPage category="通販カタログ" profile="magazine" />}
         {view === AppState.MEISHI_BUILD && <MeishiBuildPage />}
-        {/* 赤ペン指示書 (名刺/経営計画/定期出版 共通) */}
+        {/* 赤ペン指示書 (名刺/経営計画/定期出版/通販カタログ 共通) */}
         {(view === AppState.MEISHI_REDPEN
           || view === AppState.KEIEI_REDPEN
-          || view === AppState.TEIKI_REDPEN) && (
+          || view === AppState.TEIKI_REDPEN
+          || view === AppState.TSUHAN_REDPEN) && (
           <CommercialPublishing
             onBack={() => setView(AppState.DASHBOARD)}
             flash={flash}
             colors={C as unknown as Record<string, string>}
           />
         )}
-        {/* 経営計画 / 定期出版 サブタスク (暫定: KUMIHAN_* 既存ページを流用) */}
-        {(view === AppState.KEIEI_EXTRACT || view === AppState.TEIKI_EXTRACT) && (
-          <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
-            <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
-              style={{ background: C.card, borderColor: C.border }}>
-              <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
-                {view === AppState.KEIEI_EXTRACT ? '経営計画' : '定期出版'} 〜 コンテンツ抽出
-              </h2>
-              <p className="text-sm" style={{ color: C.textSec }}>
-                PDF入稿からAI構造解析までのフローを準備中です。上位の「{view === AppState.KEIEI_EXTRACT ? '経営計画' : '定期出版'}」画面を先にご利用ください。
-              </p>
+        {/* PDF生成・比較サブタスク (暫定プレースホルダ — 後日 MeishiBuildPage 拡張で置換) */}
+        {(view === AppState.KEIEI_BUILD || view === AppState.TEIKI_BUILD || view === AppState.TSUHAN_BUILD) && (() => {
+          const label = view === AppState.KEIEI_BUILD ? '経営計画'
+            : view === AppState.TEIKI_BUILD ? '定期出版' : '通販カタログ';
+          return (
+            <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
+              <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
+                style={{ background: C.card, borderColor: C.border }}>
+                <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
+                  {label} 〜 PDF生成・比較
+                </h2>
+                <p className="text-sm" style={{ color: C.textSec }}>
+                  組版エンジン連携は準備中です。
+                </p>
+              </div>
             </div>
-          </div>
-        )}
-        {(view === AppState.KEIEI_BUILD || view === AppState.TEIKI_BUILD) && (
-          <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
-            <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
-              style={{ background: C.card, borderColor: C.border }}>
-              <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
-                {view === AppState.KEIEI_BUILD ? '経営計画' : '定期出版'} 〜 PDF生成・比較
-              </h2>
-              <p className="text-sm" style={{ color: C.textSec }}>
-                組版エンジン連携は準備中です。
-              </p>
-            </div>
-          </div>
-        )}
+          );
+        })()}
         {view === AppState.AI_INDESIGN && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-4xl mx-auto space-y-6">
