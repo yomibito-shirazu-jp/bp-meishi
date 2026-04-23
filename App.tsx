@@ -18,8 +18,6 @@ import DetectionReview from './components/DetectionReview';
 import AutoFitText from './components/AutoFitText';
 import VerifyScreen from './components/VerifyScreen';
 import { AIDtpAgentWorkspace } from './components/AIDtpAgentWorkspace';
-import { MeishiExtractPage } from './components/MeishiExtractPage';
-import { MeishiBuildPage } from './components/MeishiBuildPage';
 import CommercialPublishing from './components/CommercialPublishing';
 import { SpanState, createSpanState, applySpanEdit } from './services/spanStore';
 import {
@@ -580,20 +578,52 @@ const App: React.FC = () => {
       return;
     }
     setLoading(true);
-    // 現在の view から document profile を決定
-    // KUMIHAN_NEWSPAPER (経営計画) / KUMIHAN_COMMERCIAL (定期出版) は雑誌向け(縦書き/多段組)
-    // 名刺とその他は business_card 扱い (既定)
+    // view から document profile を決定。
+    // 経営計画/定期出版/通販カタログ (サブ画面含む) は雑誌向け = Markdown 経由で編集。
+    const magazineViews: AppState[] = [
+      AppState.KUMIHAN_NEWSPAPER, AppState.KUMIHAN_COMMERCIAL, AppState.KUMIHAN_TSUHAN,
+      AppState.KEIEI_EXTRACT, AppState.TEIKI_EXTRACT, AppState.TSUHAN_EXTRACT,
+      AppState.KEIEI_BUILD, AppState.TEIKI_BUILD, AppState.TSUHAN_BUILD,
+    ];
     const profile: 'business_card' | 'magazine' =
-      view === AppState.KUMIHAN_NEWSPAPER
-        || view === AppState.KUMIHAN_COMMERCIAL
-        || view === AppState.KUMIHAN_TSUHAN
-        ? 'magazine' : 'business_card';
-    flash(
-      profile === 'magazine'
-        ? 'PDF分析中（雑誌向け: YomiToku + 画像検出スキップ）...'
-        : 'PDF分析中（Document AI）...',
-      'info',
-    );
+      magazineViews.includes(view) ? 'magazine' : 'business_card';
+
+    // ── 雑誌プロファイル: PDF→Markdown→PDF パイプラインで開く ──
+    // (span-by-span editor は縦書き多段組で壊れるため、MD 経由で構造編集する)
+    if (profile === 'magazine') {
+      flash('PDF → Markdown 変換中...', 'info');
+      try {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = '';
+        const chunk = 8192;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        }
+        const b64 = btoa(binary);
+        setMdPdfB64(b64);
+        const data = await analyzeMarkdown(b64);
+        setMdMarkdown(data.markdown);
+        setMdOriginalMarkdown(data.markdown);
+        if (data.pages.length > 0) {
+          setMdPageMM([data.pages[0].width_mm, data.pages[0].height_mm]);
+          setMdPreviewPngs(data.pages.map((p: any) => p.preview_b64));
+        }
+        setMdAccuracy(data.accuracy_score || 0);
+        setMdSourcesAvail(data.sources_available || []);
+        if (data.docai_md) setMdDocaiMd(data.docai_md);
+        setView(AppState.MARKDOWN_EDIT);
+        const scoreEmoji = (data.accuracy_score || 0) >= 95 ? '🟢'
+                         : (data.accuracy_score || 0) >= 80 ? '🟡' : '🔴';
+        flash(`${scoreEmoji} Markdown 変換完了 (精度 ${data.accuracy_score || '?'}%)`, 'ok');
+      } catch (err: any) {
+        flash(`Markdown 変換エラー: ${err.message}`, 'error');
+      } finally {
+        setLoading(false);
+      }
+      return; // 雑誌パスはここで終わり (span editor には進まない)
+    }
+    flash('PDF分析中（Document AI）...', 'info');
     try {
       // Document AI をデフォルトで使用 (business_card の場合)
       const useDocAI = getConfig('VITE_USE_DOCUMENT_AI') !== 'false';
@@ -5224,20 +5254,28 @@ JSONのみ返してください。` },
         {view === AppState.TOOL_DETECT_LAYOUT && renderDetectLayout()}
         {view === AppState.TOOL_VALIDATE_MS && renderValidateManuscript()}
         {/* クラウド組版カテゴリ */}
-        {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL || view === AppState.KUMIHAN_TSUHAN) && (
+        {(view === AppState.KUMIHAN_MEISHI || view === AppState.KUMIHAN_NEWSPAPER || view === AppState.KUMIHAN_COMMERCIAL || view === AppState.KUMIHAN_TSUHAN
+          || view === AppState.MEISHI_EXTRACT || view === AppState.KEIEI_EXTRACT || view === AppState.TEIKI_EXTRACT || view === AppState.TSUHAN_EXTRACT
+          || view === AppState.MEISHI_BUILD || view === AppState.KEIEI_BUILD || view === AppState.TEIKI_BUILD || view === AppState.TSUHAN_BUILD) && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-5xl mx-auto">
               <div className="rounded-2xl p-1" style={{ background: view === AppState.KUMIHAN_MEISHI ? 'linear-gradient(135deg, #10b981, #34d399)' : view === AppState.KUMIHAN_NEWSPAPER ? 'linear-gradient(135deg, #3b82f6, #60a5fa)' : C.gradientPrimary }}>
                 <div className="bg-white rounded-[14px] p-10">
                   <div className="text-center mb-8">
                     <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                      AIクラウド組版〜{view === AppState.KUMIHAN_MEISHI ? '名刺' : view === AppState.KUMIHAN_NEWSPAPER ? '経営計画' : view === AppState.KUMIHAN_COMMERCIAL ? '定期出版' : '通販カタログ'}
+                      AIクラウド組版〜{
+                        [AppState.KUMIHAN_MEISHI, AppState.MEISHI_EXTRACT, AppState.MEISHI_BUILD].includes(view) ? '名刺'
+                        : [AppState.KUMIHAN_NEWSPAPER, AppState.KEIEI_EXTRACT, AppState.KEIEI_BUILD].includes(view) ? '経営計画'
+                        : [AppState.KUMIHAN_COMMERCIAL, AppState.TEIKI_EXTRACT, AppState.TEIKI_BUILD].includes(view) ? '定期出版'
+                        : '通販カタログ'
+                      }{
+                        [AppState.MEISHI_EXTRACT, AppState.KEIEI_EXTRACT, AppState.TEIKI_EXTRACT, AppState.TSUHAN_EXTRACT].includes(view) ? ' 〜 コンテンツ抽出'
+                        : [AppState.MEISHI_BUILD, AppState.KEIEI_BUILD, AppState.TEIKI_BUILD, AppState.TSUHAN_BUILD].includes(view) ? ' 〜 PDF生成・比較'
+                        : ''
+                      }
                     </h2>
                     <p className="text-gray-500">
-                      {view === AppState.KUMIHAN_MEISHI && 'PDFを入稿してAI構造解析→自動組版→校了PDFまでワンストップ。'}
-                      {view === AppState.KUMIHAN_NEWSPAPER && '経営計画書を入稿。表・グラフ・見出し構成をAIが自動レイアウト。'}
-                      {view === AppState.KUMIHAN_COMMERCIAL && '定期出版物の原稿を入稿。章立て・目次・索引をAIが構造解析し自動組版。'}
-                      {view === AppState.KUMIHAN_TSUHAN && '通販カタログを入稿。商品画像・価格・キャプションを構造抽出しテンプレート組版。'}
+                      PDFをアップロード → AIが構造解析 → テキスト・画像を編集 → 校了PDFを出力
                     </p>
                   </div>
                   <div className="flex justify-center gap-4 flex-wrap">
@@ -5286,11 +5324,7 @@ JSONのみ返してください。` },
         )}
         {/* AIインデザイン */}
         {view === AppState.TOOL_AI_DTP_AGENT && <AIDtpAgentWorkspace />}
-        {view === AppState.MEISHI_EXTRACT && <MeishiExtractPage category="名刺" profile="business_card" />}
-        {view === AppState.KEIEI_EXTRACT && <MeishiExtractPage category="経営計画" profile="magazine" />}
-        {view === AppState.TEIKI_EXTRACT && <MeishiExtractPage category="定期出版" profile="magazine" />}
-        {view === AppState.TSUHAN_EXTRACT && <MeishiExtractPage category="通販カタログ" profile="magazine" />}
-        {view === AppState.MEISHI_BUILD && <MeishiBuildPage />}
+        {/* XXXX_EXTRACT / XXXX_BUILD は上のカテゴリアップロード画面 (handleUpload → EDIT → PDF出力) に統合済み */}
         {/* 赤ペン指示書 (名刺/経営計画/定期出版/通販カタログ 共通) */}
         {(view === AppState.MEISHI_REDPEN
           || view === AppState.KEIEI_REDPEN
@@ -5302,24 +5336,7 @@ JSONのみ返してください。` },
             colors={C as unknown as Record<string, string>}
           />
         )}
-        {/* PDF生成・比較サブタスク (暫定プレースホルダ — 後日 MeishiBuildPage 拡張で置換) */}
-        {(view === AppState.KEIEI_BUILD || view === AppState.TEIKI_BUILD || view === AppState.TSUHAN_BUILD) && (() => {
-          const label = view === AppState.KEIEI_BUILD ? '経営計画'
-            : view === AppState.TEIKI_BUILD ? '定期出版' : '通販カタログ';
-          return (
-            <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
-              <div className="max-w-3xl mx-auto rounded-2xl border p-10 text-center"
-                style={{ background: C.card, borderColor: C.border }}>
-                <h2 className="text-xl font-bold mb-2" style={{ color: C.text }}>
-                  {label} 〜 PDF生成・比較
-                </h2>
-                <p className="text-sm" style={{ color: C.textSec }}>
-                  組版エンジン連携は準備中です。
-                </p>
-              </div>
-            </div>
-          );
-        })()}
+        {/* XXXX_BUILD はアップロード画面 → EDIT (PDF出力ボタン有り) に統合済み */}
         {view === AppState.AI_INDESIGN && (
           <div className="flex-1 overflow-auto p-8" style={{ background: C.bg }}>
             <div className="max-w-4xl mx-auto space-y-6">
