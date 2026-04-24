@@ -4122,6 +4122,31 @@ async def analyze_markdown(
         except Exception as docai_err:
             print(f"Document AI failed: {docai_err}")
 
+        # ── Step 2.5: YomiToku で抽出 (縦書き/多段組に最強) ──
+        # https://github.com/kotaro-kinoshita/yomitoku
+        yomitoku_md = ""
+        if _yomitoku_available():
+            try:
+                print("YomiToku OCR...")
+                yt_pages = _extract_spans_yomitoku(pdf_bytes, lite=True, device="cpu")
+                yt_page_texts = []
+                for yt_page in yt_pages:
+                    spans = yt_page.get("spans", [])
+                    blocks = yt_page.get("layout_blocks", [])
+                    # layout_blocks に見出し等があれば優先的に #, ##, ### に
+                    line_texts: list[str] = []
+                    # spans を y 昇順 → x 昇順に並べる
+                    sorted_spans = sorted(spans, key=lambda s: (s.get("y_pct", 0), s.get("x_pct", 0)))
+                    for s in sorted_spans:
+                        t = (s.get("text") or "").strip()
+                        if t:
+                            line_texts.append(t)
+                    yt_page_texts.append("\n".join(line_texts))
+                yomitoku_md = "\n\n---\n\n".join([t for t in yt_page_texts if t.strip()])
+                print(f"YomiToku: {len(yomitoku_md)} chars")
+            except Exception as yt_err:
+                print(f"YomiToku failed: {yt_err}")
+
         # ── Step 3: Gemini Vision OCR（各ページを画像としてOCR → Markdown） ──
         gemini_pages_md = []
         pages = []
@@ -4173,6 +4198,8 @@ async def analyze_markdown(
             candidates["markitdown"] = markitdown_md
         if docai_md and len(docai_md) > 50:
             candidates["document_ai"] = docai_md
+        if yomitoku_md and len(yomitoku_md) > 50:
+            candidates["yomitoku"] = yomitoku_md
         if gemini_combined and len(gemini_combined) > 50:
             candidates["gemini_vision_ocr"] = gemini_combined
 
@@ -4220,6 +4247,7 @@ async def analyze_markdown(
             "markitdown_md": markitdown_md,
             "gemini_md": gemini_combined,
             "docai_md": docai_md,
+            "yomitoku_md": yomitoku_md,
             "sources_available": list(candidates.keys()),
         }
 
