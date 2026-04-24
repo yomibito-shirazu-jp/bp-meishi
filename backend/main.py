@@ -1997,6 +1997,66 @@ def _extract_spans_docling(pdf_bytes: bytes) -> list[dict[str, Any]]:
 # DN_SuperBook_PDF_Converter が内部採用する高精度日本語OCRエンジン。
 # 縦書き・手書き・7000+文字対応、レイアウト解析・表構造・読み順推定付き。
 
+def _yomitoku_pdf_to_markdown(pdf_bytes: bytes,
+                              lite: bool = True,
+                              device: str = "cpu") -> str:
+    """YomiToku の公式 Markdown エクスポート (to_markdown) を使った変換。
+    https://github.com/kotaro-kinoshita/yomitoku
+    レイアウト解析・表構造・読み順推定が保たれた高品質 Markdown を返す。
+    """
+    if not _yomitoku_available():
+        return ""
+    import numpy as np
+    analyzer = _get_yomitoku_analyzer(lite=lite, device=device)
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    md_parts: list[str] = []
+    tmpdir = tempfile.mkdtemp(prefix="ytmd_")
+    try:
+        for pi in range(len(doc)):
+            page = doc.load_page(pi)
+            long_side_pt = max(page.rect.width, page.rect.height)
+            scale = max(2.0, min(6.0, 2400 / long_side_pt))
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+            img_w, img_h = pix.width, pix.height
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(img_h, img_w, pix.n)
+            if pix.n == 4:
+                arr = arr[:, :, :3]
+            bgr = arr[:, :, ::-1].copy()
+            try:
+                result, _ov, _tv = analyzer(bgr)
+            except Exception as e:
+                print(f"YomiToku MD page {pi} failed: {e}")
+                continue
+            # to_markdown で .md ファイルへ書き出し → 読み戻し
+            out_path = os.path.join(tmpdir, f"p{pi}.md")
+            try:
+                if hasattr(result, "to_markdown"):
+                    result.to_markdown(out_path, ignore_line_break=False)
+                    if os.path.exists(out_path):
+                        with open(out_path, "r", encoding="utf-8", errors="ignore") as f:
+                            md_parts.append(f.read().strip())
+                        continue
+            except Exception as ex_md:
+                print(f"YomiToku to_markdown failed page {pi}: {ex_md}")
+            # fallback: paragraphs / words を手書きで結合
+            texts: list[str] = []
+            for attr in ("paragraphs", "words"):
+                items = getattr(result, attr, None) or []
+                if items:
+                    for it in items:
+                        t = (getattr(it, "contents", None) or getattr(it, "content", None) or "").strip()
+                        if t:
+                            texts.append(t)
+                    break
+            if texts:
+                md_parts.append("\n".join(texts))
+    finally:
+        doc.close()
+        try: shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception: pass
+    return "\n\n---\n\n".join([m for m in md_parts if m.strip()])
+
+
 def _extract_spans_yomitoku(pdf_bytes: bytes,
                             lite: bool = True,
                             device: str = "cpu") -> list[dict[str, Any]]:
@@ -4122,27 +4182,14 @@ async def analyze_markdown(
         except Exception as docai_err:
             print(f"Document AI failed: {docai_err}")
 
-        # ── Step 2.5: YomiToku で抽出 (縦書き/多段組に最強) ──
+        # ── Step 2.5: YomiToku で Markdown 直接変換 (縦書き/多段組/表/読み順に最強) ──
         # https://github.com/kotaro-kinoshita/yomitoku
+        # 公式 to_markdown() を使いレイアウト解析・表構造・読み順推定を保持。
         yomitoku_md = ""
         if _yomitoku_available():
             try:
-                print("YomiToku OCR...")
-                yt_pages = _extract_spans_yomitoku(pdf_bytes, lite=True, device="cpu")
-                yt_page_texts = []
-                for yt_page in yt_pages:
-                    spans = yt_page.get("spans", [])
-                    blocks = yt_page.get("layout_blocks", [])
-                    # layout_blocks に見出し等があれば優先的に #, ##, ### に
-                    line_texts: list[str] = []
-                    # spans を y 昇順 → x 昇順に並べる
-                    sorted_spans = sorted(spans, key=lambda s: (s.get("y_pct", 0), s.get("x_pct", 0)))
-                    for s in sorted_spans:
-                        t = (s.get("text") or "").strip()
-                        if t:
-                            line_texts.append(t)
-                    yt_page_texts.append("\n".join(line_texts))
-                yomitoku_md = "\n\n---\n\n".join([t for t in yt_page_texts if t.strip()])
+                print("YomiToku to_markdown...")
+                yomitoku_md = _yomitoku_pdf_to_markdown(pdf_bytes, lite=True, device="cpu")
                 print(f"YomiToku: {len(yomitoku_md)} chars")
             except Exception as yt_err:
                 print(f"YomiToku failed: {yt_err}")
