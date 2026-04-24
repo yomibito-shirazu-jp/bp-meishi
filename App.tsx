@@ -5307,32 +5307,35 @@ JSONのみ返してください。` },
     );
   };
 
-  // ── Global upload loader (全ルート共通) ──
+  // ── Global upload loader (全ルート共通・カウントダウン付き) ──
   const renderGlobalUploadLoader = () => {
-    if (!loading || uploadStep === 'idle') return null;
-    const stepLabel: Record<string, string> = {
-      analyzing: 'PDF解析中 (Document AI)...',
-      markdown: 'PDF → Markdown 変換中 (MarkItDown + Gemini Vision)...',
-      saving: 'DB に保存中...',
+    if (!loading && uploadStep === 'idle') return null;
+    const titleMap: Record<string, string> = {
+      analyzing: 'PDF分析中',
+      markdown: 'Markdown変換中',
+      saving: 'DB保存中',
       done: '完了',
     };
+    const subtitleMap: Record<string, string> = {
+      analyzing: 'Document AI でテキスト要素と画像を抽出しています',
+      markdown: 'MarkItDown + Gemini Vision で本文と画像を抽出しています',
+      saving: '一覧に保存しています',
+      done: '完了',
+    };
+    const estMap: Record<string, number> = {
+      analyzing: 20000,
+      markdown: 25000,
+      saving: 2000,
+      done: 1000,
+      idle: 18000,
+    };
     return (
-      <div className="fixed inset-0 z-[90] flex items-center justify-center pointer-events-none">
-        <div
-          className="pointer-events-auto rounded-2xl px-8 py-6 shadow-2xl flex items-center gap-5"
-          style={{ background: 'rgba(15,15,20,0.92)', backdropFilter: 'blur(12px)', border: '1px solid rgba(99,102,241,0.4)' }}
-        >
-          {uploadStep === 'done' ? (
-            <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-lg" style={{ background: '#10b981' }}>✓</div>
-          ) : (
-            <div className="w-10 h-10 border-4 rounded-full animate-spin" style={{ borderColor: 'rgba(99,102,241,.25)', borderTopColor: '#818cf8' }} />
-          )}
-          <div>
-            <div className="text-white text-sm font-bold">{stepLabel[uploadStep]}</div>
-            <div className="text-white/60 text-xs mt-0.5">しばらくお待ちください</div>
-          </div>
-        </div>
-      </div>
+      <ProgressOverlay
+        running={loading}
+        title={titleMap[uploadStep] || 'PDF分析中'}
+        subtitle={subtitleMap[uploadStep]}
+        estimatedMs={estMap[uploadStep] || 18000}
+      />
     );
   };
 
