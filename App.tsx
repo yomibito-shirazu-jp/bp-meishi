@@ -593,6 +593,16 @@ const App: React.FC = () => {
     // ── 雑誌プロファイル: PDF→Markdown→PDF パイプラインで開く ──
     // (span-by-span editor は縦書き多段組で壊れるため、MD 経由で構造編集する)
     if (profile === 'magazine') {
+      // 前回の MD 状態を完全リセット(state leak 防止)
+      setMdMarkdown('');
+      setMdOriginalMarkdown('');
+      setMdPreviewPngs([]);
+      setMdOutputPdfB64(null);
+      setMdOutputPreviews([]);
+      setMdAccuracy(0);
+      setMdSourcesAvail([]);
+      setMdDocaiMd('');
+      setEditingProjectId(null);
       setUploadStep('markdown');
       flash('PDF → Markdown 変換中...', 'info');
       try {
