@@ -5862,6 +5862,68 @@ JSONのみ返してください。` },
                     </button>
                   </div>
 
+                  {/* 画像差替えパネル: MD 内の data:image/ URI を並べてクリックで差替え */}
+                  {(() => {
+                    const imgRegex = /!\[([^\]]*)\]\((data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+)\)/g;
+                    const matches: { alt: string; dataUri: string; index: number }[] = [];
+                    let m: RegExpExecArray | null;
+                    let idx = 0;
+                    while ((m = imgRegex.exec(mdMarkdown)) !== null) {
+                      matches.push({ alt: m[1], dataUri: m[2], index: idx++ });
+                    }
+                    if (matches.length === 0) return null;
+                    return (
+                      <div className="rounded-xl border p-3" style={{ borderColor: C.border, background: '#fafbfc' }}>
+                        <div className="text-xs font-bold text-gray-500 mb-2 flex items-center gap-2">
+                          🖼 画像 ({matches.length}) — クリックで差替え
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                          {matches.map((im) => (
+                            <label
+                              key={im.index}
+                              className="relative cursor-pointer group border rounded-lg overflow-hidden"
+                              style={{ borderColor: C.border, width: 80, height: 80, background: '#fff' }}
+                              title={im.alt || `image ${im.index + 1}`}
+                            >
+                              <img src={im.dataUri} alt={im.alt} className="w-full h-full object-contain" />
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                                <span className="text-white text-[10px] font-bold opacity-0 group-hover:opacity-100">差替</span>
+                              </div>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={async (e) => {
+                                  const f = e.target.files?.[0];
+                                  if (!f) return;
+                                  try {
+                                    const buf = await f.arrayBuffer();
+                                    const bytes = new Uint8Array(buf);
+                                    let binary = '';
+                                    const chunk = 8192;
+                                    for (let i = 0; i < bytes.length; i += chunk) {
+                                      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+                                    }
+                                    const b64 = btoa(binary);
+                                    const mime = f.type || 'image/png';
+                                    const newUri = `data:${mime};base64,${b64}`;
+                                    // MD 内の該当 data URI を 1 つだけ置換 (最初のマッチ)
+                                    const escaped = im.dataUri.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                                    setMdMarkdown(prev => prev.replace(new RegExp(escaped), newUri));
+                                    flash(`画像を差替えました (${f.name})`, 'ok');
+                                  } catch (err: any) {
+                                    flash(`画像差替エラー: ${err.message}`, 'error');
+                                  }
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* Main Editor Area */}
                   <div className="flex gap-4" style={{ minHeight: 'calc(100vh - 220px)' }}>
                     {/* Markdown Editor */}
