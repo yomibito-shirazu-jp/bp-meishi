@@ -1226,7 +1226,7 @@ const App: React.FC = () => {
     const s = styles[toast.type];
     return (
       <div
-        className="fixed top-4 right-4 z-[100] px-5 py-3 rounded-xl text-[13px] font-semibold text-white flex items-center gap-3 shadow-2xl animate-fadeIn"
+        className="fixed bottom-6 right-6 z-[100] px-5 py-3 rounded-xl text-[13px] font-semibold text-white flex items-center gap-3 shadow-2xl animate-fadeIn pointer-events-none"
         style={{ background: s.bg, backdropFilter: 'blur(12px)', border: `1px solid ${s.border}` }}
       >
         {toast.type === 'info' && <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
@@ -1430,10 +1430,10 @@ const App: React.FC = () => {
       style={{ background: 'rgba(255,255,255,.85)', backdropFilter: 'blur(12px)', borderBottom: `1px solid ${C.border}` }}
     >
       <div className="flex items-center gap-4">
-        {view === AppState.EDIT && (
+        {view !== AppState.DASHBOARD && view !== AppState.INBOX && (
           <button
             onClick={resetAll}
-            className="flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm font-medium transition-colors"
+            className="flex items-center gap-1.5 text-gray-600 hover:text-gray-900 text-sm font-medium transition-colors"
           >
             <ArrowLeft size={16} /> 一覧へ戻る
           </button>

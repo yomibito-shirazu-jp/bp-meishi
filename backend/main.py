@@ -2194,6 +2194,16 @@ async def analyze_pdf(
             print(f"  huridocs unavailable → falling back to {fb}")
             engine = fb
         use_yomitoku = (x_use_yomitoku or "").lower() == "true" or engine == "yomitoku"
+        # yomitoku が要求されていても未インストールならフォールバック (503 避け)
+        if use_yomitoku and not _yomitoku_available():
+            print("  yomitoku requested but not installed; falling back")
+            use_yomitoku = False
+            if _docling_available():
+                engine = "docling"
+            elif _huridocs_available():
+                engine = "huridocs"
+            else:
+                engine = "docai"
         use_vision_ocr = (x_use_vision_ocr or "").lower() == "true" or engine == "vision_ocr"
         use_docling = engine == "docling"
         use_huridocs = engine == "huridocs"
