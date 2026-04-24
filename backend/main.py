@@ -1672,8 +1672,26 @@ def _iou_pct(a: dict, b: dict) -> float:
     return inter / area_a
 
 
+def _bbox_iou(a: dict, b: dict) -> float:
+    """2 bbox の Intersection over Union (0-1)。{x_pct,y_pct,w_pct,h_pct} 共通キー。"""
+    ax0, ay0 = float(a.get("x_pct", 0)), float(a.get("y_pct", 0))
+    ax1, ay1 = ax0 + float(a.get("w_pct", 0)), ay0 + float(a.get("h_pct", 0))
+    bx0, by0 = float(b.get("x_pct", 0)), float(b.get("y_pct", 0))
+    bx1, by1 = bx0 + float(b.get("w_pct", 0)), by0 + float(b.get("h_pct", 0))
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    inter = (ix1 - ix0) * (iy1 - iy0)
+    area_a = max(1e-6, (ax1 - ax0) * (ay1 - ay0))
+    area_b = max(1e-6, (bx1 - bx0) * (by1 - by0))
+    return inter / (area_a + area_b - inter)
+
+
 def _filter_image_regions(images: list[dict], spans: list[dict]) -> list[dict]:
-    """画像領域から、(a)テキストと大幅重複、(b)ページ面積の大半、(c)重複画像、を除外。"""
+    """画像領域から、(a)テキストと大幅重複、(b)ページ面積の大半、(c)重複/内包画像、を除外。"""
+    # まず面積の大きい順に並べる (より大きい方を優先的に残す)
+    images = sorted(images, key=lambda im: -float(im.get("w_pct", 0)) * float(im.get("h_pct", 0)))
     filtered: list[dict] = []
     for img in images:
         w = float(img.get("w_pct", 0))
@@ -1698,26 +1716,34 @@ def _filter_image_regions(images: list[dict], spans: list[dict]) -> list[dict]:
             print(f"  filter: drop text-overlap image {img.get('id','?')} overlap={text_overlap:.2f}")
             continue
         # 既存画像との重複 (同一ロゴ多重検出対策)
-        # 位置 or データが ~同一 (bbox 中心の距離 < 3%pt かつ サイズ比 0.8-1.2) は重複扱い
+        # 1) IoU > 0.3 の空間重複 → 大きい方を残す (先に sort 済みなので filtered が大)
+        # 2) 一方が他方に 60% 以上含まれる → 同じ対象
+        # 3) data_b64 先頭 128 文字が一致 → byte-dup
         is_dup = False
         for kept in filtered:
-            kx_c = float(kept.get("x_pct", 0)) + float(kept.get("w_pct", 0)) / 2
-            ky_c = float(kept.get("y_pct", 0)) + float(kept.get("h_pct", 0)) / 2
-            ix_c = float(img.get("x_pct", 0)) + w / 2
-            iy_c = float(img.get("y_pct", 0)) + h / 2
-            dist = ((kx_c - ix_c) ** 2 + (ky_c - iy_c) ** 2) ** 0.5
-            kw = float(kept.get("w_pct", 0)) or 0.01
-            kh = float(kept.get("h_pct", 0)) or 0.01
-            w_ratio = (w / kw) if kw > 0 else 0
-            h_ratio = (h / kh) if kh > 0 else 0
-            # 位置近接 (中心距離 < 4%) + サイズ近似 (比率 0.7-1.4)
-            if dist < 4 and 0.7 <= w_ratio <= 1.4 and 0.7 <= h_ratio <= 1.4:
+            iou = _bbox_iou(img, kept)
+            if iou > 0.3:
                 is_dup = True
-                print(f"  filter: drop dup image {img.get('id','?')} dist={dist:.1f}% (keep {kept.get('id','?')})")
+                print(f"  filter: drop dup image {img.get('id','?')} iou={iou:.2f} (keep {kept.get('id','?')})")
                 break
-            # データ同一 (同じ data_b64 の先頭 64 文字が一致)
-            kd = str(kept.get("data_b64", ""))[:64]
-            id_ = str(img.get("data_b64", ""))[:64]
+            # 片方が他方に内包 (= containment > 0.6)
+            ax0, ay0 = float(img.get("x_pct",0)), float(img.get("y_pct",0))
+            ax1, ay1 = ax0 + w, ay0 + h
+            bx0, by0 = float(kept.get("x_pct",0)), float(kept.get("y_pct",0))
+            bx1, by1 = bx0 + float(kept.get("w_pct",0)), by0 + float(kept.get("h_pct",0))
+            ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+            ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+            if ix1 > ix0 and iy1 > iy0:
+                inter = (ix1 - ix0) * (iy1 - iy0)
+                area_img = max(1e-6, w * h)
+                containment = inter / area_img  # img が kept にどれだけ含まれるか
+                if containment > 0.6:
+                    is_dup = True
+                    print(f"  filter: drop contained image {img.get('id','?')} cont={containment:.2f}")
+                    break
+            # byte-dup
+            kd = str(kept.get("data_b64", ""))[:128]
+            id_ = str(img.get("data_b64", ""))[:128]
             if kd and id_ and kd == id_:
                 is_dup = True
                 print(f"  filter: drop byte-dup image {img.get('id','?')} (same as {kept.get('id','?')})")
