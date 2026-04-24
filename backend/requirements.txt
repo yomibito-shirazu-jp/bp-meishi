@@ -11,10 +11,9 @@ Pillow
 markitdown[pdf]
 markdown
 
-# Optional: YomiToku (高精度日本語OCR・レイアウト/縦書き/手書き対応)
-# DN_SuperBook_PDF_Converter と同じエンジン。GPU があれば高速。
-# 重いので導入は任意:  pip install yomitoku
-# yomitoku>=0.10.1
+# YomiToku (高精度日本語OCR・レイアウト/縦書き/手書き対応)
+# DN_SuperBook_PDF_Converter と同じエンジン。
+yomitoku>=0.10.1
 
 # docling (https://github.com/docling-project/docling)
 # IBM の ML ベース文書構造解析エンジン。PDF/DOCX/PPTX 等に対応。

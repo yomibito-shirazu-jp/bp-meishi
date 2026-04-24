@@ -144,6 +144,8 @@ const App: React.FC = () => {
   // ── Dashboard ──
   const [projects, setProjects] = useState<CardProject[]>([]);
   const [loading, setLoading] = useState(false);
+  // アップロード時のステップ(全ルート共通ローダー)
+  const [uploadStep, setUploadStep] = useState<'idle'|'analyzing'|'markdown'|'saving'|'done'>('idle');
   const [toast, setToast] = useState<{ text: string; type: 'info' | 'ok' | 'error' } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -591,6 +593,7 @@ const App: React.FC = () => {
     // ── 雑誌プロファイル: PDF→Markdown→PDF パイプラインで開く ──
     // (span-by-span editor は縦書き多段組で壊れるため、MD 経由で構造編集する)
     if (profile === 'magazine') {
+      setUploadStep('markdown');
       flash('PDF → Markdown 変換中...', 'info');
       try {
         const buf = await file.arrayBuffer();
@@ -641,6 +644,7 @@ const App: React.FC = () => {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
+        setUploadStep('saving');
         try {
           await saveProject(proj);
           setEditingProjectId(proj.id);
@@ -652,13 +656,16 @@ const App: React.FC = () => {
         const scoreEmoji = (data.accuracy_score || 0) >= 95 ? '🟢'
                          : (data.accuracy_score || 0) >= 80 ? '🟡' : '🔴';
         flash(`${scoreEmoji} ${category} を一覧に保存 (精度 ${data.accuracy_score || '?'}%)`, 'ok');
+        setUploadStep('done');
       } catch (err: any) {
         flash(`Markdown 変換エラー: ${err.message}`, 'error');
       } finally {
         setLoading(false);
+        setTimeout(() => setUploadStep('idle'), 1500);
       }
       return; // 雑誌パスはここで終わり (span editor には進まない)
     }
+    setUploadStep('analyzing');
     flash('PDF分析中（Document AI）...', 'info');
     try {
       // Document AI をデフォルトで使用 (business_card の場合)
@@ -689,11 +696,13 @@ const App: React.FC = () => {
       if (pages.length > 1) {
         flash(`${pages.length}ページ検出 (${pages.filter(p => p.page_label).map(p => p.page_label).join('・') || 'ページ切替可'})`, 'ok');
       }
+      setUploadStep('done');
     } catch (e: any) {
       console.error('[handleUpload] ERROR:', e);
       flash(`分析エラー: ${e.message}`, 'error');
     } finally {
       setLoading(false);
+      setTimeout(() => setUploadStep('idle'), 1500);
     }
   };
 
@@ -5288,9 +5297,39 @@ JSONのみ返してください。` },
     );
   };
 
+  // ── Global upload loader (全ルート共通) ──
+  const renderGlobalUploadLoader = () => {
+    if (!loading || uploadStep === 'idle') return null;
+    const stepLabel: Record<string, string> = {
+      analyzing: 'PDF解析中 (Document AI)...',
+      markdown: 'PDF → Markdown 変換中 (MarkItDown + Gemini Vision)...',
+      saving: 'DB に保存中...',
+      done: '完了',
+    };
+    return (
+      <div className="fixed inset-0 z-[90] flex items-center justify-center pointer-events-none">
+        <div
+          className="pointer-events-auto rounded-2xl px-8 py-6 shadow-2xl flex items-center gap-5"
+          style={{ background: 'rgba(15,15,20,0.92)', backdropFilter: 'blur(12px)', border: '1px solid rgba(99,102,241,0.4)' }}
+        >
+          {uploadStep === 'done' ? (
+            <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-lg" style={{ background: '#10b981' }}>✓</div>
+          ) : (
+            <div className="w-10 h-10 border-4 rounded-full animate-spin" style={{ borderColor: 'rgba(99,102,241,.25)', borderTopColor: '#818cf8' }} />
+          )}
+          <div>
+            <div className="text-white text-sm font-bold">{stepLabel[uploadStep]}</div>
+            <div className="text-white/60 text-xs mt-0.5">しばらくお待ちください</div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="h-screen flex text-slate-900 font-sans overflow-hidden" style={{ background: C.bg }}>
       {renderToast()}
+      {renderGlobalUploadLoader()}
       {renderSidebar()}
       <div className="flex-1 flex flex-col min-w-0">
         {renderHeader()}
