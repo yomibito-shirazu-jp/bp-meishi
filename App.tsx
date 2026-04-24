@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown';
 import { Span, PageData, CardProject, AppState, TranscribeProject, AiResult, JobInstruction, DetectionSessionResult, DetectedComponent, ManuscriptChunk, ValidationReportResponse, ChunkDetail, FeedbackInput, FeedbackResponse, FeedbackActionType, ImageInfo, LayoutBlock, BarcodeInfo, DetectedLanguage, DrawingInfo } from './types';
 import type { ExtractEngine, ExtractEngineStatus } from './services/api';
-import { analyzePdf, rebuildPdf, SpanOverride, SpanBbox, vivliostyleBuild, visionAnalyze, VisionAnalyzeResult, analyzeMarkdown, markdownToPdf } from './services/api';
+import { analyzePdf, rebuildPdf, SpanOverride, SpanBbox, vivliostyleBuild, visionAnalyze, VisionAnalyzeResult, analyzeMarkdown, yomitokuMarkdown, markdownToPdf } from './services/api';
 import { listProjects, saveProject, deleteProject } from './services/supabase';
 import { correctOcrWithAI } from './services/ai';
 import { runAgentInstruction, AgentMessage } from './services/agent';
@@ -604,7 +604,7 @@ const App: React.FC = () => {
       setMdDocaiMd('');
       setEditingProjectId(null);
       setUploadStep('markdown');
-      flash('PDF → Markdown 変換中...', 'info');
+      flash('PDF → YomiToku で Markdown 変換中...', 'info');
       try {
         const buf = await file.arrayBuffer();
         const bytes = new Uint8Array(buf);
@@ -615,7 +615,14 @@ const App: React.FC = () => {
         }
         const b64 = btoa(binary);
         setMdPdfB64(b64);
-        const data = await analyzeMarkdown(b64);
+        // magazine プロファイルは YomiToku を直接叩く (他エンジン介入なし)
+        let data: any;
+        try {
+          data = await yomitokuMarkdown(b64);
+        } catch (ytErr: any) {
+          console.warn('YomiToku failed, falling back to analyzeMarkdown:', ytErr);
+          data = await analyzeMarkdown(b64);
+        }
         setMdMarkdown(data.markdown);
         setMdOriginalMarkdown(data.markdown);
         const firstPng = data.pages?.[0]?.preview_b64 || null;

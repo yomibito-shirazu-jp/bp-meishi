@@ -370,6 +370,20 @@ export interface AnalyzeMarkdownResponse {
   sources_available?: string[];
 }
 
+// YomiToku 単体変換 (他エンジン介入なし、縦書き多段組に最強)
+export const yomitokuMarkdown = async (pdfB64: string): Promise<AnalyzeMarkdownResponse> => {
+  const res = await fetch(`${getApiUrl()}/yomitoku-md`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pdf_b64: pdfB64, lite: true, device: 'cpu' }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail || `YomiToku 変換エラー: HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
 export const analyzeMarkdown = async (pdfB64: string): Promise<AnalyzeMarkdownResponse> => {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const res = await fetch(`${getApiUrl()}/analyze-markdown`, {
